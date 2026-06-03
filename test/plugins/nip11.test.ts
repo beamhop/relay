@@ -27,7 +27,8 @@ describe("nip11 relay info document", () => {
     const body = (await res!.json()) as Record<string, unknown>;
     expect(body.name).toBe("info-relay");
     expect(body.supported_nips).toEqual([
-      1, 2, 3, 4, 9, 11, 12, 13, 14, 15, 16, 20, 22, 25, 28, 33, 40, 44, 45, 62, 65,
+      1, 2, 3, 4, 9, 11, 12, 13, 14, 15, 16, 17, 20, 22, 25, 28, 33, 40, 42, 45, 59,
+      62, 65,
     ]);
   });
 

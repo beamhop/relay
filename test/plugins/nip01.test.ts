@@ -89,7 +89,8 @@ describe("REQ handling", () => {
     relay.addConnection(conn);
     await relay.handleMessage(conn, JSON.stringify(["REQ", "sub", { kinds: [1, 7] }]));
 
-    const order = conn.messages;
+    // Ignore the NIP-42 AUTH challenge sent on connect; assert on the REQ reply.
+    const order = conn.messages.filter((m) => m[0] !== "AUTH");
     expect(order[0]).toEqual(["EVENT", "sub", events.reaction]);
     expect(order[1]).toEqual(["EVENT", "sub", events.note]);
     expect(order[2]).toEqual(["EOSE", "sub"]);
@@ -166,6 +167,7 @@ describe("CLOSE handling", () => {
     const conn = new FakeConnection();
     relay.addConnection(conn);
     await relay.handleMessage(conn, JSON.stringify(["CLOSE", 5]));
-    expect(conn.messages).toHaveLength(0);
+    // No reply to the bad CLOSE (the connect-time AUTH challenge aside).
+    expect(conn.messages.filter((m) => m[0] !== "AUTH")).toHaveLength(0);
   });
 });

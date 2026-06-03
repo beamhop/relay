@@ -65,16 +65,20 @@ export class Relay {
       store: this.store,
       broadcast: (event) => this.broadcast(event),
       connections: () => this.connectionsSet.values(),
-      isVisible: (event) => this.isVisible(event),
+      isVisible: (event, conn) => this.isVisible(event, conn),
       config: this.config,
     };
   }
 
-  /** Whether `event` passes every plugin visibility filter (NIP-40, etc.). */
-  isVisible(event: NostrEvent): boolean {
+  /**
+   * Whether `event` passes every plugin visibility filter for `conn` (NIP-40
+   * expiration, NIP-17 gift-wrap gating, etc.). When `conn` is omitted,
+   * connection-dependent filters see `undefined` and decide accordingly.
+   */
+  isVisible(event: NostrEvent, conn?: Connection): boolean {
     const ctx = this.ctx();
     for (const filter of this.visibility) {
-      if (!filter(event, ctx)) return false;
+      if (!filter(event, ctx, conn)) return false;
     }
     return true;
   }
@@ -135,10 +139,14 @@ export class Relay {
     return info;
   }
 
-  /** Deliver an event to every matching open subscription. */
+  /**
+   * Deliver an event to every matching open subscription. Visibility is checked
+   * per connection (a NIP-17 gift wrap is delivered only to the AUTH'd
+   * recipient, even if other connections subscribe to the same filter).
+   */
   broadcast(event: NostrEvent): void {
-    if (!this.isVisible(event)) return;
     for (const conn of this.connectionsSet) {
+      if (!this.isVisible(event, conn)) continue;
       for (const [subId, filters] of conn.subscriptions) {
         if (matchFilters(event, filters)) conn.send(["EVENT", subId, event]);
       }

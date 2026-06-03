@@ -15,8 +15,13 @@
  *   NIP-25  Reactions             kind 7 (regular)
  *   NIP-28  Public chat           kinds 40-44
  *   NIP-33  Param. replaceable     addressable (30000-39999)
- *   NIP-44  Encrypted payloads    versioned content scheme (client-side)
  *   NIP-65  Relay list metadata   kind 10002 (replaceable)
+ *
+ * NIP-44 (versioned encrypted payloads) is deliberately *not* advertised here:
+ * it is a client-side content-encryption scheme the relay neither validates nor
+ * implements, and falsely claiming it caused clients (iris) to route private
+ * DMs through a path this relay didn't support. Private DMs are handled via the
+ * NIP-17 + NIP-42 plugins instead.
  *
  * Storage-class handling for every kind above is provided by `storageClass`
  * (src/store/store.ts); generic tag querying by `matchFilter` (src/filter.ts).
@@ -24,7 +29,7 @@
 import type { NostrPlugin } from "../plugin.ts";
 
 /** NIP numbers whose relay behavior is fully covered by NIP-01 generics. */
-export const CONVENTION_NIPS = [2, 3, 4, 12, 14, 15, 16, 20, 25, 28, 33, 44, 65];
+export const CONVENTION_NIPS = [2, 3, 4, 12, 14, 15, 16, 20, 25, 28, 33, 65];
 
 export function conventions(): NostrPlugin {
   return {
