@@ -1,0 +1,41 @@
+# systemd unit for the nostr relay serving wss:// directly from Bun.
+#
+# Install (on the server):
+#   sudo cp deploy/nostr-relay.service /etc/systemd/system/
+#   # edit User, WorkingDirectory, and the bun path below to match your host
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nostr-relay
+#
+# Pairs with deploy/setup-tls.sh, which issues the Let's Encrypt cert. Because
+# Bun does not hot-reload certificates, certbot's deploy hook should
+# `systemctl restart nostr-relay` after each renewal (see setup-tls.sh).
+
+[Unit]
+Description=nostr-relay-ts (Bun, native wss://)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nostr
+WorkingDirectory=/opt/nostr-relay-ts
+ExecStart=/usr/local/bin/bun run index.ts
+Restart=on-failure
+RestartSec=2
+
+# Listen on 7000; serve wss:// natively from the Let's Encrypt cert.
+Environment=PORT=7000
+Environment=HOST=0.0.0.0
+Environment=RELAY_URL=wss://dev.beamhop.com
+Environment=RELAY_DB=/var/lib/nostr-relay/relay.db
+Environment=TLS_CERT=/etc/letsencrypt/live/dev.beamhop.com/fullchain.pem
+Environment=TLS_KEY=/etc/letsencrypt/live/dev.beamhop.com/privkey.pem
+
+# The relay needs to read the cert/key; letsencrypt dirs are root-only by
+# default. Either run as root, grant the 'nostr' user read access to
+# /etc/letsencrypt/{live,archive}, or copy certs into a readable path in the
+# renewal deploy hook.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

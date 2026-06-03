@@ -12,3 +12,8 @@ coverage/
 # Logs and OS cruft
 *.log
 .DS_Store
+
+# TLS material (never commit private keys or certs)
+*.pem
+*.key
+*.crt

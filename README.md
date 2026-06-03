@@ -75,6 +75,38 @@ Fetch the relay info document:
 curl -H "Accept: application/nostr+json" http://localhost:7000/
 ```
 
+## Deploying `wss://` (single process, no reverse proxy)
+
+Bun terminates TLS in-process, so the relay serves `wss://` directly from a
+certificate — no Caddy/nginx needed. Point `TLS_CERT`/`TLS_KEY` at a
+Let's Encrypt cert and you're done.
+
+```sh
+# 1. Issue the cert (run on the dev.beamhop.com host; needs port 80 reachable).
+sudo DOMAIN=dev.beamhop.com EMAIL=you@example.com ./deploy/setup-tls.sh
+
+# 2. Run the relay as a single process serving wss:// on :7000.
+PORT=7000 \
+RELAY_URL=wss://dev.beamhop.com \
+TLS_CERT=/etc/letsencrypt/live/dev.beamhop.com/fullchain.pem \
+TLS_KEY=/etc/letsencrypt/live/dev.beamhop.com/privkey.pem \
+bun run index.ts
+```
+
+For an always-on service, `deploy/nostr-relay.service` is a ready systemd unit
+(set `User`/paths, then `systemctl enable --now nostr-relay`). Bun does not
+hot-reload certs, so add a certbot deploy hook to restart the relay after each
+renewal — `deploy/setup-tls.sh` prints the exact commands.
+
+For local testing without a real CA, a self-signed cert works too (clients will
+warn about trust):
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout key.pem -out cert.pem -subj "/CN=dev.beamhop.com"
+TLS_CERT=cert.pem TLS_KEY=key.pem PORT=7000 bun run index.ts
+```
+
 ## Storage
 
 Storage is **in-memory by default**, with **opt-in SQLite persistence**, both behind the same `EventStore` interface (`src/store/store.ts`). Choose explicitly in code:
