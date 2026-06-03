@@ -25,6 +25,14 @@ interface SocketData {
 /** The concrete server type returned by Bun.serve. */
 export type RelayServer = ReturnType<typeof Bun.serve>;
 
+/** Options for {@link Relay.listen}. */
+export interface ListenOptions {
+  /** Bind address. Defaults to 0.0.0.0 (all interfaces). */
+  hostname?: string;
+  /** TLS config for native wss://. Pass cert/key to terminate TLS in-process. */
+  tls?: Bun.TLSOptions;
+}
+
 export class Relay {
   readonly config: RelayConfig;
   readonly store: EventStore;
@@ -204,11 +212,19 @@ export class Relay {
     };
   }
 
-  /** Start a Bun.serve listener. */
-  listen(port: number): RelayServer {
+  /**
+   * Start a Bun.serve listener.
+   *
+   * Pass `tls` to terminate TLS natively and serve `wss://` directly (no
+   * reverse proxy needed). `hostname` defaults to 0.0.0.0 so the relay is
+   * reachable from outside the host, not just localhost.
+   */
+  listen(port: number, opts: ListenOptions = {}): RelayServer {
     this.install();
     return Bun.serve({
       port,
+      hostname: opts.hostname ?? "0.0.0.0",
+      tls: opts.tls,
       fetch: (req, server) => this.fetch(req, server),
       websocket: this.websocket,
     });
