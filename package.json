@@ -1,0 +1,18 @@
+{
+  "name": "nostr-relay-ts",
+  "version": "0.1.0",
+  "type": "module",
+  "module": "index.ts",
+  "private": true,
+  "description": "Lightweight, zero-dependency NOSTR relay on BunJS with a plugin architecture (NIP-01 + NIP-11), iris.to compatible.",
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun --hot index.ts",
+    "test": "bun test",
+    "coverage": "bun test --coverage",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

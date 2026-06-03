@@ -1,0 +1,9 @@
+[test]
+coverage = true
+coverageThreshold = 0.99
+coverageReporter = ["text"]
+coverageSkipTestFiles = true
+# Measure product code only. index.ts is the thin runnable shim (re-exports +
+# the import.meta.main guard) whose logic lives in src/server.ts; the test/
+# directory is scaffolding (fixtures, fake sockets, shared suites).
+coveragePathIgnorePatterns = ["index.ts", "test/**"]

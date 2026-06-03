@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Test coverage output
+coverage/
+
+# SQLite databases (created when RELAY_DB is set)
+*.db
+*.db-wal
+*.db-shm
+
+# Logs and OS cruft
+*.log
+.DS_Store
