@@ -26,7 +26,9 @@ describe("nip11 relay info document", () => {
     expect(res!.headers.get("access-control-allow-origin")).toBe("*");
     const body = (await res!.json()) as Record<string, unknown>;
     expect(body.name).toBe("info-relay");
-    expect(body.supported_nips).toEqual([1, 11]);
+    expect(body.supported_nips).toEqual([
+      1, 2, 3, 4, 9, 11, 12, 13, 14, 15, 16, 20, 22, 25, 28, 33, 40, 44, 45, 62, 65,
+    ]);
   });
 
   test("OPTIONS preflight returns 204 with CORS headers", async () => {

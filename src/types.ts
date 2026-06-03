@@ -41,6 +41,7 @@ export interface Filter {
 export type ClientMessage =
   | ["EVENT", NostrEvent]
   | ["REQ", string, ...Filter[]]
+  | ["COUNT", string, ...Filter[]]
   | ["CLOSE", string];
 
 /** Relay -> client messages. */
@@ -48,6 +49,7 @@ export type RelayMessage =
   | ["EVENT", string, NostrEvent]
   | ["OK", string, boolean, string]
   | ["EOSE", string]
+  | ["COUNT", string, { count: number }]
   | ["CLOSED", string, string]
   | ["NOTICE", string];
 

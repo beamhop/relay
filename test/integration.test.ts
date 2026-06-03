@@ -68,7 +68,10 @@ describe("integration over real WebSocket", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.name).toBe("integration-relay");
-    expect(body.supported_nips).toEqual([1, 11]);
+    expect(body.supported_nips).toContain(1);
+    expect(body.supported_nips).toContain(11);
+    expect(body.supported_nips).toContain(9); // deletion plugin is wired in
+    expect(body.supported_nips).toContain(45); // COUNT
   });
 
   test("HTTP request without Accept gets a 426 upgrade-required", async () => {
@@ -94,6 +97,25 @@ describe("integration over real WebSocket", () => {
 
     publisher.close();
     reader.close();
+  });
+
+  test("COUNT returns the number of matching events (NIP-45)", async () => {
+    const publisher = await connect();
+    publisher.send(JSON.stringify(["EVENT", events.contacts])); // kind 3
+    await collectUntil(publisher, (m) => m[0] === "OK");
+
+    const counter = await connect();
+    counter.send(JSON.stringify(["COUNT", "c1", { kinds: [3] }]));
+    const msgs = await collectUntil(counter, (m) => m[0] === "COUNT");
+    const countMsg = msgs.find((m) => m[0] === "COUNT") as
+      | ["COUNT", string, { count: number }]
+      | undefined;
+    expect(countMsg).toBeDefined();
+    expect(countMsg![1]).toBe("c1");
+    expect(countMsg![2].count).toBeGreaterThanOrEqual(1);
+
+    publisher.close();
+    counter.close();
   });
 
   test("live event is pushed to an open matching subscription", async () => {

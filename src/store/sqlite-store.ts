@@ -115,6 +115,33 @@ export class SqliteEventStore implements EventStore {
     this.db.exec("DELETE FROM events;");
   }
 
+  delete(id: string): boolean {
+    const res = this.db.query("DELETE FROM events WHERE id = ?").run(id);
+    return res.changes > 0;
+  }
+
+  deleteByAuthor(pubkey: string, until?: number): number {
+    const res =
+      until === undefined
+        ? this.db.query("DELETE FROM events WHERE pubkey = ?").run(pubkey)
+        : this.db
+            .query("DELETE FROM events WHERE pubkey = ? AND created_at <= ?")
+            .run(pubkey, until);
+    return res.changes;
+  }
+
+  count(filters: Filter[]): number {
+    const all = this.db.query("SELECT * FROM events").all() as Row[];
+    const events = all.map(rowToEvent);
+    const seen = new Set<string>();
+    for (const filter of filters) {
+      for (const event of events) {
+        if (!seen.has(event.id) && matchFilter(event, filter)) seen.add(event.id);
+      }
+    }
+    return seen.size;
+  }
+
   /** Close the underlying database connection. */
   close(): void {
     this.db.close();

@@ -12,6 +12,7 @@ import type {
   NostrPlugin,
   PluginContext,
   RelayConfig,
+  VisibilityFilter,
 } from "./plugin.ts";
 import { MemoryEventStore } from "./store/memory-store.ts";
 import type { EventStore } from "./store/store.ts";
@@ -42,6 +43,7 @@ export class Relay {
 
   private handlerMap = new Map<string, MessageHandler[]>();
   private validators: EventValidator[] = [];
+  private visibility: VisibilityFilter[] = [];
   private routes: HttpRoute[] = [];
 
   constructor(config: RelayConfig = {}) {
@@ -63,8 +65,18 @@ export class Relay {
       store: this.store,
       broadcast: (event) => this.broadcast(event),
       connections: () => this.connectionsSet.values(),
+      isVisible: (event) => this.isVisible(event),
       config: this.config,
     };
+  }
+
+  /** Whether `event` passes every plugin visibility filter (NIP-40, etc.). */
+  isVisible(event: NostrEvent): boolean {
+    const ctx = this.ctx();
+    for (const filter of this.visibility) {
+      if (!filter(event, ctx)) return false;
+    }
+    return true;
   }
 
   /** Build dispatch tables and run plugin onInstall hooks (idempotent). */
@@ -82,6 +94,7 @@ export class Relay {
         }
       }
       if (plugin.eventValidators) this.validators.push(...plugin.eventValidators);
+      if (plugin.visibilityFilters) this.visibility.push(...plugin.visibilityFilters);
       if (plugin.httpRoutes) this.routes.push(...plugin.httpRoutes);
       plugin.onInstall?.(ctx);
     }
@@ -124,6 +137,7 @@ export class Relay {
 
   /** Deliver an event to every matching open subscription. */
   broadcast(event: NostrEvent): void {
+    if (!this.isVisible(event)) return;
     for (const conn of this.connectionsSet) {
       for (const [subId, filters] of conn.subscriptions) {
         if (matchFilters(event, filters)) conn.send(["EVENT", subId, event]);

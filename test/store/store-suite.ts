@@ -109,6 +109,69 @@ export function runStoreSuite(name: string, make: () => EventStore): void {
       expect(store.query([{}])).toHaveLength(0);
     });
 
+    test("delete removes an event and reports whether it existed", () => {
+      const store = make();
+      store.add(events.note);
+      expect(store.delete(events.note.id)).toBe(true);
+      expect(store.size()).toBe(0);
+      expect(store.getById(events.note.id)).toBeUndefined();
+      expect(store.delete(events.note.id)).toBe(false);
+    });
+
+    test("delete frees a replaceable slot so an older event can be re-added", () => {
+      const store = make();
+      store.add(events.metadataNewer);
+      // Older event normally loses, but after deleting the holder it can be stored.
+      expect(store.add(events.metadata).stored).toBe(false);
+      expect(store.delete(events.metadataNewer.id)).toBe(true);
+      expect(store.add(events.metadata).stored).toBe(true);
+      expect(store.getById(events.metadata.id)).toBeDefined();
+    });
+
+    test("delete frees an addressable slot", () => {
+      const store = make();
+      store.add(events.addressableNewer);
+      expect(store.delete(events.addressableNewer.id)).toBe(true);
+      expect(store.add(events.addressable).stored).toBe(true);
+    });
+
+    test("deleteByAuthor removes only that author's events", () => {
+      const store = make();
+      const other = clone(events.note);
+      other.id = "1".repeat(64);
+      other.pubkey = "2".repeat(64);
+      store.add(events.note);
+      store.add(other);
+      expect(store.deleteByAuthor(events.note.pubkey)).toBe(1);
+      expect(store.getById(events.note.id)).toBeUndefined();
+      expect(store.getById(other.id)).toBeDefined();
+    });
+
+    test("deleteByAuthor honors the until bound (inclusive)", () => {
+      const store = make();
+      store.add(events.note); // created_at 1700000000
+      store.add(events.reaction); // created_at 1700000004 (kind 7, same author)
+      const removed = store.deleteByAuthor(events.note.pubkey, 1700000000);
+      expect(removed).toBe(1);
+      expect(store.getById(events.note.id)).toBeUndefined();
+      expect(store.getById(events.reaction.id)).toBeDefined();
+    });
+
+    test("count returns the true match count, ignoring limit", () => {
+      const store = make();
+      store.add(events.note);
+      store.add(events.reaction);
+      expect(store.count([{}])).toBe(2);
+      expect(store.count([{ limit: 1 }])).toBe(2);
+      expect(store.count([{ kinds: [1] }])).toBe(1);
+    });
+
+    test("count dedupes across overlapping filters", () => {
+      const store = make();
+      store.add(events.note);
+      expect(store.count([{ kinds: [1] }, { authors: [events.note.pubkey] }])).toBe(1);
+    });
+
     test("tie-break: equal created_at keeps the lower id", () => {
       const store = make();
       // Two replaceable events, same pubkey/kind/created_at, different ids.
