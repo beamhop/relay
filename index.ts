@@ -26,5 +26,6 @@ export type {
 
 if (import.meta.main) {
   const server = startFromEnv();
-  console.log(`nostr-relay-ts listening on ws://${server.hostname}:${server.port}`);
+  const scheme = server.url.protocol === "https:" ? "wss" : "ws";
+  console.log(`nostr-relay-ts listening on ${scheme}://${server.hostname}:${server.port}`);
 }

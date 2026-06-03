@@ -27,9 +27,9 @@ export function startFromEnv(env: NodeJS.ProcessEnv = process.env): RelayServer 
     : new MemoryEventStore();
 
   const relay = createRelay({
-    name: env.RELAY_NAME ?? "nostr-relay-ts",
+    name: env.RELAY_NAME ?? "beamhop",
     description: "A lightweight, zero-dependency NOSTR relay on Bun.",
-    software: "https://github.com/nostr-relay-ts",
+    software: "https://github.com/beamhop/relay",
     version: "0.1.0",
     store,
     limitation: {
@@ -40,5 +40,15 @@ export function startFromEnv(env: NodeJS.ProcessEnv = process.env): RelayServer 
   });
 
   const port = env.PORT !== undefined ? Number(env.PORT) : 7000;
-  return relay.listen(port);
+
+  // Native TLS: set TLS_CERT and TLS_KEY to file paths to serve wss:// directly.
+  const tls =
+    env.TLS_CERT && env.TLS_KEY
+      ? {
+          cert: Bun.file(env.TLS_CERT),
+          key: Bun.file(env.TLS_KEY),
+        }
+      : undefined;
+
+  return relay.listen(port, { hostname: env.HOST, tls });
 }
