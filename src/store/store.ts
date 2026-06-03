@@ -25,6 +25,18 @@ export interface EventStore {
   size(): number;
   /** Remove all events. */
   clear(): void;
+  /** Remove the event with this id, if present. Returns whether one was removed. */
+  delete(id: string): boolean;
+  /**
+   * Remove every event by `pubkey`, optionally only those created at or before
+   * `until` (inclusive). Returns the number removed. Used by NIP-62.
+   */
+  deleteByAuthor(pubkey: string, until?: number): number;
+  /**
+   * Count distinct events matching the filters (NIP-45). Unlike {@link query},
+   * per-filter `limit` is ignored — this is the true match count.
+   */
+  count(filters: Filter[]): number;
 }
 
 /** Classify an event kind into its storage behavior. */

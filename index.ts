@@ -11,11 +11,24 @@ import { startFromEnv } from "./src/server.ts";
 
 export { Relay } from "./src/relay.ts";
 export { nip01 } from "./src/plugins/nip01.ts";
+export { nip05 } from "./src/plugins/nip05.ts";
+export { nip09 } from "./src/plugins/nip09.ts";
 export { nip11 } from "./src/plugins/nip11.ts";
+export { nip13 } from "./src/plugins/nip13.ts";
+export { nip22 } from "./src/plugins/nip22.ts";
+export { nip40 } from "./src/plugins/nip40.ts";
+export { nip45 } from "./src/plugins/nip45.ts";
+export { conventions } from "./src/plugins/conventions.ts";
 export { MemoryEventStore } from "./src/store/memory-store.ts";
 export { SqliteEventStore } from "./src/store/sqlite-store.ts";
 export { createRelay, startFromEnv } from "./src/server.ts";
-export type { NostrPlugin, PluginContext, RelayConfig } from "./src/plugin.ts";
+export type { RelayPlugins } from "./src/server.ts";
+export type {
+  NostrPlugin,
+  PluginContext,
+  RelayConfig,
+  VisibilityFilter,
+} from "./src/plugin.ts";
 export type {
   ClientMessage,
   Filter,

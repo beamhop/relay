@@ -8,10 +8,35 @@ A lightweight, **zero-dependency** [NOSTR](https://github.com/nostr-protocol/nip
 
 ## Supported NIPs
 
-| NIP | What | Why iris needs it |
-| --- | ---- | ----------------- |
-| [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | `EVENT`/`REQ`/`CLOSE`, `EVENT`/`OK`/`EOSE`/`CLOSED`/`NOTICE`, event id + Schnorr verification, filters, replaceable/ephemeral/addressable storage | The core protocol. iris subscribes with `REQ` for kinds `[0,1,3,6,7]`. |
-| [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay info document over HTTP (`Accept: application/nostr+json`) with CORS | Lets browser clients introspect the relay. |
+Each NIP below is wired in by `createRelay` (`src/server.ts`). NIPs that impose
+active relay behavior live in their own plugin (`src/plugins/nipNN.ts`); the
+client-side convention NIPs are handled generically by NIP-01 and advertised via
+a single `conventions` plugin.
+
+| NIP | What the relay does |
+| --- | ------------------- |
+| [01](https://github.com/nostr-protocol/nips/blob/master/01.md) | `EVENT`/`REQ`/`CLOSE`, `EVENT`/`OK`/`EOSE`/`CLOSED`/`NOTICE`, event id + Schnorr verification, filters, replaceable/ephemeral/addressable storage. |
+| [02](https://github.com/nostr-protocol/nips/blob/master/02.md) | Follow lists (kind 3) stored as replaceable events. |
+| [03](https://github.com/nostr-protocol/nips/blob/master/03.md) | OpenTimestamps attestations (kind 1040) stored as regular events. |
+| [04](https://github.com/nostr-protocol/nips/blob/master/04.md) | Encrypted DMs (kind 4); content is client-encrypted, queryable by `#p`. |
+| [05](https://github.com/nostr-protocol/nips/blob/master/05.md) | Serves `/.well-known/nostr.json?name=…` from a configurable name→pubkey map (with CORS). Opt-in. |
+| [09](https://github.com/nostr-protocol/nips/blob/master/09.md) | Event deletion (kind 5): deletes the author's own events referenced by `e`/`a` tags. |
+| [11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay info document over HTTP (`Accept: application/nostr+json`) with CORS. |
+| [12](https://github.com/nostr-protocol/nips/blob/master/12.md) | Generic single-letter tag queries (`#e`, `#p`, `#t`, …). |
+| [13](https://github.com/nostr-protocol/nips/blob/master/13.md) | Proof-of-Work: rejects events below a configurable minimum difficulty (off by default). |
+| [14](https://github.com/nostr-protocol/nips/blob/master/14.md) | `subject` tag on text notes — stored and served. |
+| [15](https://github.com/nostr-protocol/nips/blob/master/15.md) | End-of-stored-events `EOSE` after a `REQ`'s stored batch. |
+| [16](https://github.com/nostr-protocol/nips/blob/master/16.md) | Replaceable (10000–19999) and ephemeral (20000–29999) event treatment. |
+| [20](https://github.com/nostr-protocol/nips/blob/master/20.md) | Command results via `OK` messages. |
+| [22](https://github.com/nostr-protocol/nips/blob/master/22.md) | `created_at` lower/upper bounds (off by default). |
+| [25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions (kind 7). |
+| [28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Public chat (kinds 40–44). |
+| [33](https://github.com/nostr-protocol/nips/blob/master/33.md) | Parameterized replaceable / addressable events (30000–39999), keyed by `d` tag. |
+| [40](https://github.com/nostr-protocol/nips/blob/master/40.md) | Expiration: rejects already-expired events, hides expired events from `REQ`/broadcast, optional background sweep. |
+| [44](https://github.com/nostr-protocol/nips/blob/master/44.md) | Versioned encrypted payloads (client-side content scheme). |
+| [45](https://github.com/nostr-protocol/nips/blob/master/45.md) | `COUNT` — returns the number of stored events matching the filters. |
+| [62](https://github.com/nostr-protocol/nips/blob/master/62.md) | Request to vanish (kind 62): erases the author's history (scoped by `relay` tags). |
+| [65](https://github.com/nostr-protocol/nips/blob/master/65.md) | Relay list metadata (kind 10002) stored as a replaceable event. |
 
 ## Quick start
 
@@ -25,8 +50,16 @@ Configuration via environment variables:
 | Var | Default | Effect |
 | --- | ------- | ------ |
 | `PORT` | `7000` | Listen port (`0` = ephemeral). |
+| `HOST` | `0.0.0.0` | Bind hostname. |
 | `RELAY_DB` | _(unset)_ | If set, use SQLite persistence at this path. Otherwise in-memory. |
-| `RELAY_NAME` | `nostr-relay-ts` | Name shown in the NIP-11 document. |
+| `RELAY_NAME` | `beamhop` | Name shown in the NIP-11 document. |
+| `RELAY_URL` | _(unset)_ | This relay's public `wss://` URL; lets NIP-62 vanish requests target it. |
+| `RELAY_NIP05` | _(unset)_ | JSON name→pubkey map enabling the NIP-05 `/.well-known/nostr.json` endpoint, e.g. `{"alice":"<hex>"}`. |
+| `RELAY_MIN_POW` | _(unset)_ | NIP-13 minimum PoW difficulty (leading zero bits). Unset = no PoW requirement. |
+| `RELAY_CREATED_AT_LOWER` | _(unset)_ | NIP-22: max seconds an event may be older than the relay clock. |
+| `RELAY_CREATED_AT_UPPER` | _(unset)_ | NIP-22: max seconds an event may be in the future. |
+| `RELAY_EXPIRATION_SWEEP_MS` | _(unset)_ | NIP-40 background sweep interval (ms). Unset/`0` = no sweep (expired events are still hidden from clients). |
+| `TLS_CERT` / `TLS_KEY` | _(unset)_ | File paths to serve `wss://` natively (no reverse proxy). |
 
 ```sh
 # In-memory (default): events are lost on restart
@@ -66,20 +99,21 @@ A plugin contributes any of: message-verb handlers, event validators, HTTP route
 ```ts
 import type { NostrPlugin } from "./src/plugin.ts";
 
-export function nip09(): NostrPlugin {
+export function myPlugin(): NostrPlugin {
   return {
-    name: "nip09",
-    supportedNips: [9],
+    name: "my-plugin",
+    supportedNips: [9999],
     messageHandlers: {
-      // EVENT/REQ/CLOSE are taken by nip01; add new verbs or new validators here
+      // EVENT/REQ/CLOSE/COUNT are taken by other plugins; add new verbs or
+      // additional validators here.
     },
     eventValidators: [
-      (event) => (event.kind === 5 ? handleDeletion(event) : { ok: true }),
+      (event) => (event.kind === 1234 ? validateSpecialKind(event) : { ok: true }),
     ],
   };
 }
 
-// then:  relay.use(nip09())
+// then:  relay.use(myPlugin())
 ```
 
 - A `messageHandler` returning `true` claims the message (dispatch stops).
@@ -108,9 +142,22 @@ src/
     memory-store.ts   in-memory backend (default)
     sqlite-store.ts   bun:sqlite backend (opt-in)
   plugins/
-    nip01.ts          core protocol
+    nip01.ts          core protocol (EVENT/REQ/CLOSE, validation, EOSE/OK)
+    nip05.ts          /.well-known/nostr.json identity endpoint (opt-in)
+    nip09.ts          event deletion (kind 5) + request to vanish (kind 62)
     nip11.ts          relay info document
+    nip13.ts          proof-of-work minimum difficulty (config-gated)
+    nip22.ts          created_at lower/upper bounds (config-gated)
+    nip40.ts          expiration: reject/hide/sweep expired events
+    nip45.ts          COUNT
+    conventions.ts    advertises NIPs handled generically by NIP-01
 ```
+
+Time-sensitive plugins (NIP-40, NIP-22) read the clock from `config.now`
+(Unix seconds), which defaults to the wall clock and is injectable for
+deterministic tests. NIP-40 also adds a *visibility filter* — a plugin hook on
+the relay that gates which stored events are served (`REQ`) and broadcast,
+without mutating or deleting them.
 
 ## Tests
 

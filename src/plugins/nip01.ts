@@ -72,7 +72,9 @@ export function nip01(relay: Relay): NostrPlugin {
 
         conn.addSub(subId, filters);
         const stored = ctx.store.query(filters, ctx.config.limitation?.max_limit);
-        for (const event of stored) conn.send(["EVENT", subId, event]);
+        for (const event of stored) {
+          if (ctx.isVisible(event)) conn.send(["EVENT", subId, event]);
+        }
         conn.send(["EOSE", subId]);
         return true;
       },

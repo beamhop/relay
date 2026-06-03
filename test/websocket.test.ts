@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createRelay, startFromEnv } from "../src/server.ts";
+import { createRelay, startFromEnv, tlsFromEnv } from "../src/server.ts";
 import { events } from "./fixtures.ts";
 
 /** A stand-in for Bun's ServerWebSocket exposing only what the handler uses. */
@@ -53,5 +53,43 @@ describe("startFromEnv", () => {
     const server = startFromEnv({ PORT: "0", RELAY_DB: ":memory:" } as NodeJS.ProcessEnv);
     expect(server.port).toBeGreaterThan(0);
     server.stop(true);
+  });
+
+  test("wires NIP-05 names and numeric restrictions from env", async () => {
+    const server = startFromEnv({
+      PORT: "0",
+      RELAY_NIP05: JSON.stringify({ alice: "a".repeat(64) }),
+      RELAY_MIN_POW: "8",
+      RELAY_CREATED_AT_LOWER: "3600",
+      RELAY_CREATED_AT_UPPER: "900",
+      RELAY_EXPIRATION_SWEEP_MS: "", // blank -> treated as unset (numOrUndef)
+    } as NodeJS.ProcessEnv);
+    const res = await fetch(
+      `http://localhost:${server.port}/.well-known/nostr.json?name=alice`,
+    );
+    const body = (await res.json()) as { names: Record<string, string> };
+    expect(body.names.alice).toBe("a".repeat(64));
+
+    const info = await fetch(`http://localhost:${server.port}/`, {
+      headers: { Accept: "application/nostr+json" },
+    });
+    const doc = (await info.json()) as { limitation: { min_pow_difficulty: number } };
+    expect(doc.limitation.min_pow_difficulty).toBe(8);
+    server.stop(true);
+  });
+});
+
+describe("tlsFromEnv", () => {
+  test("returns undefined without both TLS_CERT and TLS_KEY", () => {
+    expect(tlsFromEnv({} as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(tlsFromEnv({ TLS_CERT: "c" } as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(tlsFromEnv({ TLS_KEY: "k" } as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+
+  test("builds cert/key file refs when both are set", () => {
+    const tls = tlsFromEnv({ TLS_CERT: "/path/cert.pem", TLS_KEY: "/path/key.pem" } as NodeJS.ProcessEnv);
+    expect(tls).toBeDefined();
+    expect(tls!.cert).toBeDefined();
+    expect(tls!.key).toBeDefined();
   });
 });

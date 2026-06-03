@@ -21,6 +21,8 @@ export interface PluginContext {
   broadcast(event: NostrEvent): void;
   /** Iterate all currently open connections. */
   connections(): Iterable<Connection>;
+  /** Whether a stored event is currently visible (passes all visibility filters). */
+  isVisible(event: NostrEvent): boolean;
   config: RelayConfig;
 }
 
@@ -40,6 +42,14 @@ export type EventValidator = (
   ctx: PluginContext,
 ) => AcceptResult | Promise<AcceptResult>;
 
+/**
+ * Decides whether a stored event is still visible to clients *right now*, used
+ * to gate both REQ replies and live broadcast. Returning false hides the event
+ * without deleting it (e.g. NIP-40 expiration). Runs after a query/match has
+ * already selected the event, so it should be cheap.
+ */
+export type VisibilityFilter = (event: NostrEvent, ctx: PluginContext) => boolean;
+
 /** An HTTP route, tried before the WebSocket upgrade. */
 export interface HttpRoute {
   /** Return a Response to claim the request, or undefined to pass it on. */
@@ -57,6 +67,11 @@ export interface NostrPlugin {
   readonly messageHandlers?: Partial<Record<string, MessageHandler>>;
   /** Event validators, run in registration order before acceptance. */
   readonly eventValidators?: EventValidator[];
+  /**
+   * Visibility filters gating which stored events are served (REQ) and
+   * broadcast. An event is hidden if *any* filter returns false.
+   */
+  readonly visibilityFilters?: VisibilityFilter[];
   /** HTTP routes, tried in registration order before WebSocket upgrade. */
   readonly httpRoutes?: HttpRoute[];
   /** Fields merged into the NIP-11 relay information document. */
@@ -74,6 +89,18 @@ export interface RelayConfig {
   contact?: string;
   software?: string;
   version?: string;
+  /**
+   * This relay's public WebSocket URL (e.g. wss://relay.example.com). Used to
+   * decide whether a NIP-62 request-to-vanish (which scopes itself via `relay`
+   * tags) applies here.
+   */
+  url?: string;
+  /**
+   * Current time source in Unix *seconds*, used by time-sensitive NIPs
+   * (NIP-40 expiration, NIP-22 created_at limits). Defaults to the wall clock.
+   * Injectable so tests are deterministic.
+   */
+  now?: () => number;
   /** Replace the default in-memory store with a custom backend. */
   store?: EventStore;
   limitation?: {
@@ -81,5 +108,11 @@ export interface RelayConfig {
     max_filters?: number;
     max_limit?: number;
     max_message_length?: number;
+    /** Minimum PoW difficulty the relay requires (NIP-11/NIP-13). */
+    min_pow_difficulty?: number;
+    /** Max seconds an event's created_at may lag the relay clock (NIP-22). */
+    created_at_lower_limit?: number;
+    /** Max seconds an event's created_at may lead the relay clock (NIP-22). */
+    created_at_upper_limit?: number;
   };
 }
