@@ -21,8 +21,11 @@ export interface PluginContext {
   broadcast(event: NostrEvent): void;
   /** Iterate all currently open connections. */
   connections(): Iterable<Connection>;
-  /** Whether a stored event is currently visible (passes all visibility filters). */
-  isVisible(event: NostrEvent): boolean;
+  /**
+   * Whether a stored event is currently visible to `conn` (passes all
+   * visibility filters). Omit `conn` for a connection-independent check.
+   */
+  isVisible(event: NostrEvent, conn?: Connection): boolean;
   config: RelayConfig;
 }
 
@@ -43,12 +46,21 @@ export type EventValidator = (
 ) => AcceptResult | Promise<AcceptResult>;
 
 /**
- * Decides whether a stored event is still visible to clients *right now*, used
+ * Decides whether a stored event is visible to a given client *right now*, used
  * to gate both REQ replies and live broadcast. Returning false hides the event
- * without deleting it (e.g. NIP-40 expiration). Runs after a query/match has
- * already selected the event, so it should be cheap.
+ * without deleting it. Runs after a query/match has already selected the event,
+ * so it should be cheap.
+ *
+ * `conn` is the connection the event would be served to, when known (REQ,
+ * COUNT, broadcast). It is undefined for connection-independent checks. Filters
+ * that don't care about identity (e.g. NIP-40 expiration) ignore it; filters
+ * that gate per-recipient (e.g. NIP-17 gift wraps) use it.
  */
-export type VisibilityFilter = (event: NostrEvent, ctx: PluginContext) => boolean;
+export type VisibilityFilter = (
+  event: NostrEvent,
+  ctx: PluginContext,
+  conn?: Connection,
+) => boolean;
 
 /** An HTTP route, tried before the WebSocket upgrade. */
 export interface HttpRoute {

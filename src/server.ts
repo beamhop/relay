@@ -8,8 +8,10 @@ import { nip05, type Nip05Options } from "./plugins/nip05.ts";
 import { nip09 } from "./plugins/nip09.ts";
 import { nip11 } from "./plugins/nip11.ts";
 import { nip13 } from "./plugins/nip13.ts";
+import { nip17 } from "./plugins/nip17.ts";
 import { nip22 } from "./plugins/nip22.ts";
 import { nip40 } from "./plugins/nip40.ts";
+import { nip42 } from "./plugins/nip42.ts";
 import { nip45 } from "./plugins/nip45.ts";
 import { conventions } from "./plugins/conventions.ts";
 import { MemoryEventStore } from "./store/memory-store.ts";
@@ -29,6 +31,9 @@ export interface RelayPlugins {
  *  - NIP-11 (info doc) and NIP-01 (core protocol)
  *  - NIP-09 + NIP-62 (deletion / request to vanish)
  *  - NIP-40 (expiration), NIP-45 (COUNT)
+ *  - NIP-42 (AUTH) + NIP-17/NIP-59 (private DMs): gift wraps (kind 1059) are
+ *    served only to the AUTH'd recipient. Set `config.url` so AUTH can validate
+ *    its `relay` tag.
  *  - NIP-13 (PoW) and NIP-22 (created_at limits) — only active when the matching
  *    `config.limitation` fields are set; otherwise they accept everything
  *  - the convention NIPs (advertised; handled generically by NIP-01)
@@ -40,6 +45,8 @@ export function createRelay(config: RelayConfig = {}, plugins: RelayPlugins = {}
   relay.use(nip01(relay));
   relay.use(nip09());
   relay.use(nip40({ sweepIntervalMs: plugins.expirationSweepMs }));
+  relay.use(nip42());
+  relay.use(nip17());
   relay.use(nip45());
   relay.use(nip13({ minPow: config.limitation?.min_pow_difficulty }));
   relay.use(

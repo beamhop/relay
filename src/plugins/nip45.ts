@@ -29,7 +29,7 @@ export function nip45(): NostrPlugin {
         const unlimited = filters.map(({ limit: _omit, ...rest }) => rest);
         let count = 0;
         for (const event of ctx.store.query(unlimited)) {
-          if (ctx.isVisible(event)) count++;
+          if (ctx.isVisible(event, conn)) count++;
         }
         conn.send(["COUNT", subId, { count }]);
         return true;

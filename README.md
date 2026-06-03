@@ -27,14 +27,16 @@ a single `conventions` plugin.
 | [14](https://github.com/nostr-protocol/nips/blob/master/14.md) | `subject` tag on text notes — stored and served. |
 | [15](https://github.com/nostr-protocol/nips/blob/master/15.md) | End-of-stored-events `EOSE` after a `REQ`'s stored batch. |
 | [16](https://github.com/nostr-protocol/nips/blob/master/16.md) | Replaceable (10000–19999) and ephemeral (20000–29999) event treatment. |
+| [17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Private direct messages: stores kind-1059 gift wraps and serves them **only to the AUTH'd recipient** (the `p`-tagged pubkey). |
 | [20](https://github.com/nostr-protocol/nips/blob/master/20.md) | Command results via `OK` messages. |
 | [22](https://github.com/nostr-protocol/nips/blob/master/22.md) | `created_at` lower/upper bounds (off by default). |
 | [25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions (kind 7). |
 | [28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Public chat (kinds 40–44). |
 | [33](https://github.com/nostr-protocol/nips/blob/master/33.md) | Parameterized replaceable / addressable events (30000–39999), keyed by `d` tag. |
 | [40](https://github.com/nostr-protocol/nips/blob/master/40.md) | Expiration: rejects already-expired events, hides expired events from `REQ`/broadcast, optional background sweep. |
-| [44](https://github.com/nostr-protocol/nips/blob/master/44.md) | Versioned encrypted payloads (client-side content scheme). |
+| [42](https://github.com/nostr-protocol/nips/blob/master/42.md) | AUTH: issues a challenge on connect and authenticates clients; used to gate NIP-17 gift wraps. |
 | [45](https://github.com/nostr-protocol/nips/blob/master/45.md) | `COUNT` — returns the number of stored events matching the filters. |
+| [59](https://github.com/nostr-protocol/nips/blob/master/59.md) | Gift wrap (kind 1059) — the transport for NIP-17 private DMs. |
 | [62](https://github.com/nostr-protocol/nips/blob/master/62.md) | Request to vanish (kind 62): erases the author's history (scoped by `relay` tags). |
 | [65](https://github.com/nostr-protocol/nips/blob/master/65.md) | Relay list metadata (kind 10002) stored as a replaceable event. |
 
@@ -106,6 +108,25 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
   -keyout key.pem -out cert.pem -subj "/CN=dev.beamhop.com"
 TLS_CERT=cert.pem TLS_KEY=key.pem PORT=7000 bun run index.ts
 ```
+
+## Direct messages (NIP-17)
+
+Modern clients (e.g. iris.to) send private DMs as NIP-17 **gift wraps** (kind
+1059), not legacy NIP-04 kind-4 messages. This relay supports both, but for
+gift-wrapped DMs note:
+
+- **Set `RELAY_URL`** (e.g. `wss://dev.beamhop.com`). NIP-42 AUTH validates the
+  `relay` tag in the client's AUTH event against this URL; without it AUTH still
+  works but is less strict. AUTH is what lets the relay serve a gift wrap to its
+  intended recipient and no one else.
+- **Don't set a tight `RELAY_CREATED_AT_LOWER`.** NIP-59 randomizes a gift
+  wrap's `created_at` up to **2 days (172800 s) in the past** to thwart
+  time-correlation. A lower bound smaller than that will silently reject
+  legitimate DMs. Leave it unset (default) or set it to ≥ 172800.
+
+Gift wraps are signed by throwaway keys, so the relay accepts them from anyone
+but only **serves** a kind-1059 event to the connection that has AUTH'd as the
+pubkey named in the event's `p` tag.
 
 ## Storage
 
