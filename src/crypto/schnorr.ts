@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { bytesToBigInt } from "./hex.ts";
-import { G, liftX, mod, n, p, pointAdd, pointMul } from "./secp256k1.ts";
+import { liftX, mod, n, p, pointAdd, pointMul, pointMulBase } from "./secp256k1.ts";
 
 /** Tagged hash: SHA256(SHA256(tag) || SHA256(tag) || ...msgs). */
 export function taggedHash(tag: string, ...msgs: Uint8Array[]): Uint8Array {
@@ -42,8 +42,9 @@ export function verify(
     n,
   );
 
-  // R = s*G - e*P
-  const R = pointAdd(pointMul(s, G), pointMul(mod(n - e, n), P));
+  // R = s*G - e*P. s*G uses the precomputed fixed-base table (G is constant);
+  // e*P is a general scalar mult since P varies per signature.
+  const R = pointAdd(pointMulBase(s), pointMul(mod(n - e, n), P));
   if (R === null) return false;
   if ((R.y & 1n) === 1n) return false; // R.y must be even
   return R.x === r;

@@ -13,6 +13,7 @@ import {
   pointAdd,
   pointDouble,
   pointMul,
+  pointMulBase,
 } from "../../src/crypto/secp256k1.ts";
 
 describe("mod", () => {
@@ -83,6 +84,23 @@ describe("curve points", () => {
     const threeG = pointMul(3n, G);
     expect(isOnCurve(threeG)).toBe(true);
     expect(pointAdd(pointDouble(G), G)).toEqual(threeG);
+  });
+});
+
+describe("pointMulBase", () => {
+  test("equals pointMul(k, G) across a range of scalars", () => {
+    for (const k of [1n, 2n, 3n, 7n, 16n, 17n, 255n, 256n, 65535n, 123456789n]) {
+      expect(pointMulBase(k)).toEqual(pointMul(k, G));
+    }
+  });
+  test("equals pointMul(k, G) for large/edge scalars", () => {
+    for (const k of [n - 1n, n - 2n, (n >> 1n), 0xdeadbeefn ** 3n]) {
+      expect(pointMulBase(k)).toEqual(pointMul(k, G));
+    }
+  });
+  test("k=0 and k=n yield infinity", () => {
+    expect(pointMulBase(0n)).toBeNull();
+    expect(pointMulBase(n)).toBeNull();
   });
 });
 

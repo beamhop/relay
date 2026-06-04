@@ -1,7 +1,7 @@
 /**
  * In-memory event store (default backend).
  */
-import { matchFilter } from "../filter.ts";
+import { compileFilter, matchCompiled } from "../filter.ts";
 import type { Filter, NostrEvent } from "../types.ts";
 import {
   type AddResult,
@@ -60,9 +60,10 @@ export class MemoryEventStore implements EventStore {
     const result: NostrEvent[] = [];
 
     for (const filter of filters) {
+      const compiled = compileFilter(filter);
       const matches: NostrEvent[] = [];
       for (const event of this.byId.values()) {
-        if (matchFilter(event, filter)) matches.push(event);
+        if (matchCompiled(event, compiled)) matches.push(event);
       }
       sortNewestFirst(matches);
 
@@ -76,7 +77,9 @@ export class MemoryEventStore implements EventStore {
       }
     }
 
-    return sortNewestFirst(result);
+    // A single filter's results are already sorted and contain no duplicates,
+    // so the merge re-sort is only needed when combining multiple filters.
+    return filters.length > 1 ? sortNewestFirst(result) : result;
   }
 
   getById(id: string): NostrEvent | undefined {
@@ -116,8 +119,9 @@ export class MemoryEventStore implements EventStore {
   count(filters: Filter[]): number {
     const seen = new Set<string>();
     for (const filter of filters) {
+      const compiled = compileFilter(filter);
       for (const event of this.byId.values()) {
-        if (!seen.has(event.id) && matchFilter(event, filter)) seen.add(event.id);
+        if (!seen.has(event.id) && matchCompiled(event, compiled)) seen.add(event.id);
       }
     }
     return seen.size;

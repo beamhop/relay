@@ -4,7 +4,7 @@
  * in-memory store. Filter matching reuses matchFilter for parity.
  */
 import { Database } from "bun:sqlite";
-import { matchFilter } from "../filter.ts";
+import { compileFilter, matchCompiled } from "../filter.ts";
 import type { Filter, NostrEvent } from "../types.ts";
 import {
   type AddResult,
@@ -77,24 +77,55 @@ export class SqliteEventStore implements EventStore {
   }
 
   query(filters: Filter[], maxLimit?: number): NostrEvent[] {
-    const all = this.db.query("SELECT * FROM events").all() as Row[];
-    const events = all.map(rowToEvent);
-
     const seen = new Set<string>();
     const result: NostrEvent[] = [];
     for (const filter of filters) {
-      const matches = events.filter((e) => matchFilter(e, filter));
-      sortNewestFirst(matches);
       const limit = effectiveLimit(filter.limit, maxLimit);
-      const limited = limit === undefined ? matches : matches.slice(0, limit);
-      for (const event of limited) {
+      // Push id/author/kind/since/until + ORDER BY + LIMIT into SQL so the
+      // indexes do the work instead of scanning the whole table in JS. Tag
+      // filters can't be expressed in SQL here, so when present we fetch
+      // ordered candidate rows and apply the tag predicate in JS, stopping once
+      // `limit` matches are collected (rows already arrive newest-first).
+      const matches = this.queryFilter(filter, limit);
+      for (const event of matches) {
         if (!seen.has(event.id)) {
           seen.add(event.id);
           result.push(event);
         }
       }
     }
-    return sortNewestFirst(result);
+    // Each filter's rows arrive newest-first from SQL; a single filter is
+    // already globally ordered, so only re-sort when merging multiple filters.
+    return filters.length > 1 ? sortNewestFirst(result) : result;
+  }
+
+  /**
+   * Fetch the newest-first events matching a single filter, honoring `limit`.
+   * Cheap predicates are pushed into SQL; tag predicates (if any) are applied
+   * in JS over the ordered candidate stream.
+   */
+  private queryFilter(filter: Filter, limit: number | undefined): NostrEvent[] {
+    const compiled = compileFilter(filter);
+    const hasTagFilter = compiled.tags.length > 0;
+    const { where, params } = buildWhere(filter);
+
+    // Only the SQL-expressible predicates can bound LIMIT directly. With a tag
+    // filter we must over-fetch (no SQL LIMIT) and filter+limit in JS, since
+    // rows excluded by the tag predicate would otherwise eat into the LIMIT.
+    const sqlLimit = !hasTagFilter && limit !== undefined ? ` LIMIT ${limit}` : "";
+    const sql =
+      `SELECT * FROM events${where}` +
+      ` ORDER BY created_at DESC, id ASC${sqlLimit}`;
+    const rows = this.db.query(sql).all(...params) as Row[];
+
+    const out: NostrEvent[] = [];
+    for (const row of rows) {
+      const event = rowToEvent(row);
+      if (hasTagFilter && !matchCompiled(event, compiled)) continue;
+      out.push(event);
+      if (limit !== undefined && out.length >= limit) break;
+    }
+    return out;
   }
 
   getById(id: string): NostrEvent | undefined {
@@ -131,12 +162,36 @@ export class SqliteEventStore implements EventStore {
   }
 
   count(filters: Filter[]): number {
-    const all = this.db.query("SELECT * FROM events").all() as Row[];
-    const events = all.map(rowToEvent);
     const seen = new Set<string>();
     for (const filter of filters) {
-      for (const event of events) {
-        if (!seen.has(event.id) && matchFilter(event, filter)) seen.add(event.id);
+      const compiled = compileFilter(filter);
+      const hasTagFilter = compiled.tags.length > 0;
+      const { where, params } = buildWhere(filter);
+
+      if (!hasTagFilter) {
+        // No tag predicate: count straight from SQL. Dedup across filters still
+        // requires the ids when more than one filter is present; with a single
+        // filter we can return COUNT(*) directly.
+        if (filters.length === 1) {
+          const row = this.db
+            .query(`SELECT COUNT(*) AS c FROM events${where}`)
+            .get(...params) as { c: number };
+          return row.c;
+        }
+        const rows = this.db
+          .query(`SELECT id FROM events${where}`)
+          .all(...params) as { id: string }[];
+        for (const r of rows) seen.add(r.id);
+        continue;
+      }
+
+      // Tag predicate present: fetch candidate rows and apply it in JS.
+      const rows = this.db
+        .query(`SELECT * FROM events${where}`)
+        .all(...params) as Row[];
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        if (matchCompiled(rowToEvent(row), compiled)) seen.add(row.id);
       }
     }
     return seen.size;
@@ -171,6 +226,47 @@ export class SqliteEventStore implements EventStore {
         replKey,
       );
   }
+}
+
+/**
+ * Build a parameterized SQL `WHERE` clause for the SQL-expressible parts of a
+ * filter (ids, authors, kinds, since, until). Tag filters are NOT included —
+ * callers apply those in JS. Returns an empty `where` string for an
+ * unconstrained filter.
+ *
+ * Matches {@link matchFilter} semantics exactly, including the edge case that an
+ * empty `ids`/`authors`/`kinds` array (e.g. `ids: []`) matches nothing, since
+ * `[].includes(x)` is always false (`IN ()` is invalid SQL, so we emit `0`).
+ */
+type Binding = string | number;
+
+function buildWhere(filter: Filter): { where: string; params: Binding[] } {
+  const clauses: string[] = [];
+  const params: Binding[] = [];
+
+  const inClause = (column: string, values: readonly Binding[]): void => {
+    if (values.length === 0) {
+      clauses.push("0"); // matches nothing, mirroring [].includes()
+      return;
+    }
+    clauses.push(`${column} IN (${values.map(() => "?").join(",")})`);
+    params.push(...values);
+  };
+
+  if (filter.ids) inClause("id", filter.ids);
+  if (filter.authors) inClause("pubkey", filter.authors);
+  if (filter.kinds) inClause("kind", filter.kinds);
+  if (filter.since !== undefined) {
+    clauses.push("created_at >= ?");
+    params.push(filter.since);
+  }
+  if (filter.until !== undefined) {
+    clauses.push("created_at <= ?");
+    params.push(filter.until);
+  }
+
+  const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+  return { where, params };
 }
 
 function rowToEvent(row: Row): NostrEvent {

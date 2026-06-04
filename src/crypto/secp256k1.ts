@@ -128,16 +128,66 @@ export function pointDouble(a: Point | null): Point | null {
   return jacobianToAffine(jacobianDouble(toJacobian(a)));
 }
 
-/** Scalar multiplication k*P via double-and-add in Jacobian coordinates. */
-export function pointMul(k: bigint, point: Point | null): Point | null {
-  let scalar = mod(k, n);
-  if (scalar === 0n || point === null) return null;
+/** k*P as a Jacobian point via double-and-add (no final affine conversion). */
+function jacobianMul(k: bigint, point: Point | null): Jacobian {
+  const scalar = mod(k, n);
+  if (scalar === 0n || point === null) return JACOBIAN_INFINITY;
   let result = JACOBIAN_INFINITY;
   let addend = toJacobian(point);
-  while (scalar > 0n) {
-    if (scalar & 1n) result = jacobianAdd(result, addend);
+  let s = scalar;
+  while (s > 0n) {
+    if (s & 1n) result = jacobianAdd(result, addend);
     addend = jacobianDouble(addend);
-    scalar >>= 1n;
+    s >>= 1n;
+  }
+  return result;
+}
+
+/** Scalar multiplication k*P via double-and-add in Jacobian coordinates. */
+export function pointMul(k: bigint, point: Point | null): Point | null {
+  return jacobianToAffine(jacobianMul(k, point));
+}
+
+// --- Fixed-base acceleration for k*G ---
+//
+// G is constant, so we precompute, once at module load, the windowed multiples
+// (i << (WINDOW*w)) * G for every window w and digit i. A scalar mult against G
+// then costs additions per window instead of ~256 doublings — the dominant cost
+// of the s*G half of every Schnorr verification.
+
+const WINDOW = 4; // bits per window
+const WINDOW_SIZE = 1 << WINDOW; // 16 digits per window
+const WINDOW_COUNT = Math.ceil(256 / WINDOW); // windows to cover a 256-bit scalar
+
+/** baseTable[w][i] = (i << (WINDOW*w)) * G, in Jacobian coordinates. */
+const baseTable: Jacobian[][] = (() => {
+  const table: Jacobian[][] = [];
+  // base = G doubled WINDOW times between windows; built by repeated addition.
+  let windowBase = toJacobian(G);
+  for (let w = 0; w < WINDOW_COUNT; w++) {
+    const row: Jacobian[] = [JACOBIAN_INFINITY]; // i = 0
+    let acc = JACOBIAN_INFINITY;
+    for (let i = 1; i < WINDOW_SIZE; i++) {
+      acc = jacobianAdd(acc, windowBase); // acc = i * windowBase
+      row.push(acc);
+    }
+    table.push(row);
+    // Advance windowBase by WINDOW doublings: windowBase *= 2^WINDOW.
+    for (let d = 0; d < WINDOW; d++) windowBase = jacobianDouble(windowBase);
+  }
+  return table;
+})();
+
+/** Fixed-base scalar multiplication k*G using the precomputed window table. */
+export function pointMulBase(k: bigint): Point | null {
+  const scalar = mod(k, n);
+  if (scalar === 0n) return null;
+  let result = JACOBIAN_INFINITY;
+  let s = scalar;
+  for (let w = 0; w < WINDOW_COUNT && s > 0n; w++) {
+    const digit = Number(s & BigInt(WINDOW_SIZE - 1));
+    if (digit !== 0) result = jacobianAdd(result, baseTable[w]![digit]!);
+    s >>= BigInt(WINDOW);
   }
   return jacobianToAffine(result);
 }

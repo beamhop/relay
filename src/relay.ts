@@ -46,6 +46,9 @@ export class Relay {
   private visibility: VisibilityFilter[] = [];
   private routes: HttpRoute[] = [];
 
+  /** Cached plugin context. Immutable after construction; built lazily. */
+  private cachedCtx?: PluginContext;
+
   constructor(config: RelayConfig = {}) {
     this.config = config;
     this.store = config.store ?? new MemoryEventStore();
@@ -61,13 +64,17 @@ export class Relay {
   }
 
   private ctx(): PluginContext {
-    return {
+    // The context is immutable for the relay's lifetime (store, config, and the
+    // bound methods never change), so build it once and reuse it. This avoids
+    // allocating a fresh object plus four closures on every message, validation,
+    // and per-connection visibility check (the broadcast hot path).
+    return (this.cachedCtx ??= {
       store: this.store,
       broadcast: (event) => this.broadcast(event),
       connections: () => this.connectionsSet.values(),
       isVisible: (event, conn) => this.isVisible(event, conn),
       config: this.config,
-    };
+    });
   }
 
   /**
@@ -146,9 +153,16 @@ export class Relay {
    */
   broadcast(event: NostrEvent): void {
     for (const conn of this.connectionsSet) {
-      if (!this.isVisible(event, conn)) continue;
+      // Most connections won't subscribe to this event. Collect matching
+      // subscriptions first (cheap), and only run the visibility filters (more
+      // expensive, and per-connection) once we know there's something to send —
+      // visibility is computed at most once per connection rather than eagerly.
+      let visible: boolean | undefined;
       for (const [subId, filters] of conn.subscriptions) {
-        if (matchFilters(event, filters)) conn.send(["EVENT", subId, event]);
+        if (!matchFilters(event, filters)) continue;
+        if (visible === undefined) visible = this.isVisible(event, conn);
+        if (!visible) break;
+        conn.send(["EVENT", subId, event]);
       }
     }
   }

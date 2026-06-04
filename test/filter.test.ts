@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { matchFilter, matchFilters } from "../src/filter.ts";
-import type { NostrEvent } from "../src/types.ts";
+import {
+  compileFilter,
+  matchCompiled,
+  matchFilter,
+  matchFilters,
+} from "../src/filter.ts";
+import type { Filter, NostrEvent } from "../src/types.ts";
 
 const event: NostrEvent = {
   id: "a".repeat(64),
@@ -55,6 +60,36 @@ describe("matchFilter", () => {
   test("ignores keys that are not single-letter tag filters", () => {
     expect(matchFilter(event, { "#ee": ["x"] as unknown as string[] })).toBe(true);
   });
+});
+
+describe("matchCompiled parity with matchFilter", () => {
+  const filters: Filter[] = [
+    {},
+    { ids: ["a".repeat(64)] },
+    { ids: ["other"] },
+    { ids: [] },
+    { authors: ["b".repeat(64)] },
+    { authors: [] },
+    { kinds: [0, 1, 2] },
+    { kinds: [0, 2] },
+    { kinds: [] },
+    { since: 1000 },
+    { since: 1001 },
+    { until: 1000 },
+    { until: 999 },
+    { "#e": ["ref2", "zzz"] },
+    { "#e": ["nope"] },
+    { "#e": ["ref1"], "#p": ["peer1"] },
+    { "#e": ["ref1"], "#p": ["other"] },
+    { "#e": "ref1" as unknown as string[] },
+    { "#ee": ["x"] as unknown as string[] },
+    { kinds: [1], authors: ["b".repeat(64)], since: 500, until: 2000, "#t": ["topic"] },
+  ];
+  for (const [i, f] of filters.entries()) {
+    test(`compiled matches matchFilter for filter #${i}`, () => {
+      expect(matchCompiled(event, compileFilter(f))).toBe(matchFilter(event, f));
+    });
+  }
 });
 
 describe("matchFilters", () => {
