@@ -136,6 +136,35 @@ invite) plus AUTH is what authorizes delivery. AUTH stays mandatory either way,
 preserving NIP-59's anti-spam property; delivery is scoped to the subscriber's
 own `#p`.
 
+### Client interoperability: DMs do not cross schemes
+
+A relay only stores and serves events — it cannot translate between two clients
+that implement DMs differently. In practice "kind 1059" means **two
+incompatible things** depending on the client, and DMs only flow when both peers
+use the same scheme. What we observed on the wire:
+
+| Client | DM scheme | Sender publishes | Recipient subscribes |
+| ------ | --------- | ---------------- | -------------------- |
+| **ditto.pub** | standard **NIP-17** (NIP-59 gift wrap) | kind **1059** p-tagged to the recipient's **real identity** pubkey | `{kinds:[1059],"#p":[<myIdentity>]}`, then unwraps 1059 → 13 (seal) → 14 (rumor) |
+| **iris.to** | its own **double-ratchet** (npm `nostr-double-ratchet`) | kind **1059** *handshake* p-tagged to a random **ephemeral** invite key, plus kind **1060** for the actual message | `{kinds:[1059],"#p":[<ephemeral>]}` + `{kinds:[1060],authors:[<peer device keys>]}`; discovery via kind **30078** |
+
+Consequences:
+
+- **iris.to ↔ iris.to works**, and **ditto ↔ ditto works** (each peer speaks the
+  same scheme).
+- **ditto → iris.to does *not* deliver.** ditto gift-wraps the message to the
+  iris user's *identity* pubkey, but iris **never subscribes to kind 1059 by its
+  own identity** (it only listens on ephemeral invite keys + kind-1060 device
+  authors), so there is no iris subscription the wrap can land in — and even if
+  it were delivered, iris cannot turn a NIP-17 seal into a double-ratchet
+  session. This is a **client protocol gap, not a relay bug**: the relay stores
+  the gift wrap and would serve it to any AUTH'd connection that asked for that
+  `#p` (it doesn't reject ditto's wrap), but no relay change can bridge the two
+  schemes.
+
+If cross-client DMs are a requirement, both users must run clients that speak
+the same DM scheme (both NIP-17-to-identity, or both iris double-ratchet).
+
 ## Storage
 
 Storage is **in-memory by default**, with **opt-in SQLite persistence**, both behind the same `EventStore` interface (`src/store/store.ts`). Choose explicitly in code:
