@@ -17,3 +17,4 @@ coverage/
 *.pem
 *.key
 *.crt
+.debug/

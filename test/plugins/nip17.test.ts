@@ -61,11 +61,27 @@ describe("NIP-17 gift-wrap gating over REQ (historical)", () => {
     expect(await reqGiftWraps(relay, conn)).toBe(0);
   });
 
-  test("hidden from a connection AUTH'd as the wrong pubkey", async () => {
+  test("hidden from an AUTH'd connection that does not subscribe by the wrap's #p", async () => {
     const relay = newRelay();
     relay.store.add(giftWrap(RECIPIENT));
-    const conn = await authedConn(relay, PRIV_B); // AUTH'd as sender, not recipient
-    expect(await reqGiftWraps(relay, conn)).toBe(0);
+    const conn = await authedConn(relay, PRIV_B); // AUTH'd as someone else
+    // Subscribe by kind only (no #p naming RECIPIENT): neither gate condition holds.
+    await relay.handleMessage(conn, JSON.stringify(["REQ", "dm", { kinds: [1059] }]));
+    expect(conn.ofType("EVENT").length).toBe(0);
+  });
+
+  test("served to an AUTH'd connection that subscribes by the wrap's (ephemeral) #p", async () => {
+    // Mirrors iris.to's double-ratchet: the wrap is p-tagged to a one-time key
+    // that nobody AUTHs as; the recipient proves authorization by AUTH'ing (as
+    // any identity) and subscribing to that exact #p.
+    const relay = newRelay();
+    const gw = giftWrap(RECIPIENT);
+    relay.store.add(gw);
+    const conn = await authedConn(relay, PRIV_B); // AUTH'd, but not as RECIPIENT
+    await relay.handleMessage(conn, JSON.stringify(["REQ", "dm", { kinds: [1059], "#p": [RECIPIENT] }]));
+    const events = conn.ofType("EVENT");
+    expect(events).toHaveLength(1);
+    expect(events[0]![2].id).toBe(gw.id);
   });
 
   test("served to the AUTH'd recipient", async () => {

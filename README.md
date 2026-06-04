@@ -27,7 +27,7 @@ a single `conventions` plugin.
 | [14](https://github.com/nostr-protocol/nips/blob/master/14.md) | `subject` tag on text notes — stored and served. |
 | [15](https://github.com/nostr-protocol/nips/blob/master/15.md) | End-of-stored-events `EOSE` after a `REQ`'s stored batch. |
 | [16](https://github.com/nostr-protocol/nips/blob/master/16.md) | Replaceable (10000–19999) and ephemeral (20000–29999) event treatment. |
-| [17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Private direct messages: stores kind-1059 gift wraps and serves them **only to the AUTH'd recipient** (the `p`-tagged pubkey). |
+| [17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Private direct messages: stores kind-1059 gift wraps and serves them **only to an AUTH'd connection** — the `p`-tagged identity, or any AUTH'd client that subscribes by the wrap's (ephemeral) `#p` (supports iris.to's double-ratchet DMs). |
 | [20](https://github.com/nostr-protocol/nips/blob/master/20.md) | Command results via `OK` messages. |
 | [22](https://github.com/nostr-protocol/nips/blob/master/22.md) | `created_at` lower/upper bounds (off by default). |
 | [25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions (kind 7). |
@@ -125,8 +125,16 @@ gift-wrapped DMs note:
   legitimate DMs. Leave it unset (default) or set it to ≥ 172800.
 
 Gift wraps are signed by throwaway keys, so the relay accepts them from anyone
-but only **serves** a kind-1059 event to the connection that has AUTH'd as the
-pubkey named in the event's `p` tag.
+but **serves** a kind-1059 event only to an **AUTH'd** connection that is either
+(1) authenticated as the pubkey named in the event's `p` tag (classic NIP-17,
+where `p` = the recipient's real identity), or (2) authenticated as any identity
+**and** explicitly subscribed to that `p` tag via a `#p` filter. Case (2) is
+required for iris.to's double-ratchet DMs, whose kind-1059 handshakes are
+p-tagged to a random, one-time *ephemeral* key the recipient can't AUTH as —
+knowing that unguessable key (learned only from the recipient's own published
+invite) plus AUTH is what authorizes delivery. AUTH stays mandatory either way,
+preserving NIP-59's anti-spam property; delivery is scoped to the subscriber's
+own `#p`.
 
 ## Storage
 
