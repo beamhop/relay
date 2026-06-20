@@ -28,7 +28,9 @@ spec:
           # First push: the promote job rewrites this :latest tag to the real SHA.
           image: ghcr.io/beamhop/relay:c17abfd
           command: ["bun", "run", "src/main.ts"]
-          args: ["--config", "/etc/relay/relay.yaml"]
+          # --web exposes the password-protected admin panel at /admin (served over the public
+          # ingress); the password comes from RELAY_PASSWORD below.
+          args: ["--config", "/etc/relay/relay.yaml", "--web"]
           ports:
             - name: nostr
               containerPort: 7777
@@ -40,6 +42,12 @@ spec:
                 secretKeyRef:
                   name: relay-app
                   key: DB_PASSWORD
+            # Admin panel password (KSOPS-encrypted in platform-gitops relay-app/ADMIN_PASSWORD).
+            - name: RELAY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: relay-app
+                  key: ADMIN_PASSWORD
           volumeMounts:
             - name: config
               mountPath: /etc/relay
