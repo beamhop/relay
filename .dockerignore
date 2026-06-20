@@ -1,0 +1,12 @@
+.git
+node_modules
+.direnv
+.env
+.env.local
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+tests/tmp-*
+.DS_Store
+docs
+gitops

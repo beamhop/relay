@@ -1,0 +1,51 @@
+# Local run paths (ADR-0005).
+#
+#   Standalone, in-memory, dependency-free (default):
+#     docker compose up relay
+#
+#   Production SQL-native path against a local Postgres:
+#     docker compose --profile postgres up db relay-db
+#
+# The standalone `relay` service has no profile and no dependencies; the Postgres path lives
+# behind the `postgres` profile so the default invocation stays dependency-free.
+
+services:
+  relay:
+    build: .
+    image: beamhop-relay
+    ports:
+      - "7777:7777"
+    # No storage config -> memory backend (the one invariant: zero-dependency standalone).
+
+  db:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    ports:
+      - "5432:5432"
+    volumes:
+      - relay-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d relay"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  relay-db:
+    profiles: ["postgres"]
+    build: .
+    image: beamhop-relay
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      RELAY_STORAGE_BACKEND: postgres
+      DATABASE_URL: postgres://postgres:relay@db:5432/relay
+    ports:
+      - "7778:7777"
+
+volumes:
+  relay-pgdata:

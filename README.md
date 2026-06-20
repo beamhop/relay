@@ -6,13 +6,61 @@ A Nostr relay written in TypeScript for Bun.
 > [`docs/adr/`](docs/adr/README.md), [`docs/PLAN.md`](docs/PLAN.md), and
 > [`docs/HUMAN-TODO.md`](docs/HUMAN-TODO.md).
 
-By default the relay stores events in memory only. Run it with `--persistence` or `-p` to use SQLite persistence.
+By default the relay stores events in memory only. Run it with `--persistence` or `-p` to use SQLite persistence, or select the SQL-native Postgres backend for production.
 
 ```bash
 bun install
 bun run start
 bun run start -- --port 7777 --persistence ./relay.sqlite
+bun run start -- --storage postgres --postgres-url postgres://localhost/relay
 ```
+
+## Storage backends
+
+Choose the backend with `storage.backend` (`memory` | `sqlite` | `postgres`), the `--storage`
+flag, or `RELAY_STORAGE_BACKEND`:
+
+- `memory` (default): zero dependencies, in-process. The just-run-it standalone mode.
+- `sqlite`: durable single-file persistence (`--persistence [path]`).
+- `postgres`: SQL-native, the production backend (ADR-0002). Connection comes from
+  `--postgres-url`, `RELAY_POSTGRES_URL` / `DATABASE_URL`, or `storage.postgres` in the config
+  file. The `postgres` driver is a production-only dependency and never loads on the standalone
+  path.
+
+## Configuration
+
+Config is read from YAML or JSON. A `relay.yaml`, `relay.config.yaml`, or `relay.json` file in
+the working directory is auto-discovered; pass `--config <path>` to point elsewhere. Precedence
+is **CLI flags > environment variables > config file > defaults**.
+
+```yaml
+port: 7777
+storage:
+  backend: postgres
+  postgres:
+    host: db.internal
+    database: relay
+disabledNips: ["50", "70"]
+relay:
+  name: Beamhop Relay
+  description: Local development relay
+```
+
+## Running with Docker
+
+```bash
+# Standalone, in-memory, dependency-free:
+docker compose up relay
+
+# Production SQL-native path against a local Postgres:
+docker compose --profile postgres up db relay-db   # relay on host port 7778
+```
+
+## Dev shell
+
+A Nix flake dev shell provides bun, node, postgresql, and docker-compose. With direnv:
+`direnv allow`, then `bun install`. `bin/relay-pg <command>` runs a command (default `bun test`)
+against an ephemeral local Postgres.
 
 Enable the browser admin panel with `--web`/`-w` and a password. The password can be passed with `--password`, as the optional value to `--web`/`-w`, or through `RELAY_PASSWORD`; CLI flags override the environment variable.
 
@@ -51,7 +99,7 @@ bun run start -- --config relay.config.json
 Implemented relay behavior includes:
 
 - NIP-01 WebSocket protocol, event hashing/signature verification, filters, subscriptions, EOSE, replaceable/addressable/ephemeral event treatment.
-- In-memory storage by default and SQLite storage when `--persistence`/`-p` is provided.
+- In-memory storage by default, SQLite when `--persistence`/`-p` is provided, and a SQL-native Postgres backend for production.
 - NIP-09 deletion requests, including event/address tombstones.
 - NIP-11 relay information document with relay-relevant `supported_nips`.
 - NIP-40 expiration rejection and query suppression.
