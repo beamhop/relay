@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from "bun";
+import { InProcessBroadcaster, type Broadcaster } from "./broadcaster";
 import { createAdminState, handleAdminRequest } from "./admin";
 import { isEventShape, makeChallenge, normalizeRelayUrl, verifyEvent } from "./crypto";
 import { matchesAnyFilter, normalizeFilters, validateFilter } from "./filter";
@@ -18,6 +19,8 @@ export interface RelayRuntime {
   store: EventStore;
   plugins: PluginManager;
   management: ManagementState;
+  /** Cross-instance fan-out seam (ADR-0003). Defaults to in-process when omitted. */
+  broadcaster?: Broadcaster;
 }
 
 export async function startRelay(runtime: RelayRuntime): Promise<ReturnType<typeof Bun.serve>> {
@@ -26,6 +29,8 @@ export async function startRelay(runtime: RelayRuntime): Promise<ReturnType<type
   const relayUrls = relayUrlsFor(runtime.config);
   const stats = createRelayStats();
   const admin = createAdminState();
+  const broadcaster = runtime.broadcaster ?? new InProcessBroadcaster();
+  broadcaster.subscribe((event) => fanOutToLocalSubscribers(event, runtime, relayUrls, connections, stats));
   recordRelayActivity(stats, "info", "relay started", { host: runtime.config.host, port: runtime.config.port });
 
   const server = Bun.serve<WsData>({
@@ -92,7 +97,7 @@ export async function startRelay(runtime: RelayRuntime): Promise<ReturnType<type
       async message(ws, message) {
         const connection = connections.get(ws.data.connectionId);
         if (!connection) return;
-        await handleMessage(ws, message, connection, runtime, relayUrls, connections, stats);
+        await handleMessage(ws, message, connection, runtime, relayUrls, connections, stats, broadcaster);
       },
       close(ws) {
         const connection = connections.get(ws.data.connectionId);
@@ -118,6 +123,7 @@ async function handleMessage(
   relayUrls: string[],
   connections: Map<string, ConnectionState>,
   stats: RelayStats,
+  broadcaster: Broadcaster,
 ): Promise<void> {
   const raw = typeof rawMessage === "string" ? rawMessage : rawMessage.toString("utf8");
   if (new TextEncoder().encode(raw).byteLength > runtime.config.limits.maxMessageLength) {
@@ -141,7 +147,7 @@ async function handleMessage(
   const message = parsed as ClientMessage;
   switch (message[0]) {
     case "EVENT":
-      await handleEvent(ws, message[1], connection, runtime, relayUrls, connections, stats);
+      await handleEvent(ws, message[1], connection, runtime, relayUrls, connections, stats, broadcaster);
       return;
     case "REQ":
       await handleReq(ws, message[1], message.slice(2), connection, runtime, relayUrls, stats);
@@ -181,6 +187,7 @@ async function handleEvent(
   relayUrls: string[],
   connections: Map<string, ConnectionState>,
   stats: RelayStats,
+  broadcaster: Broadcaster,
 ): Promise<void> {
   if (!isEventShape(eventLike)) {
     send(ws, ["NOTICE", "invalid: EVENT payload is not a Nostr event"]);
@@ -251,7 +258,7 @@ async function handleEvent(
     !saveResult.duplicate &&
     (saveResult.stored || isEphemeralKind(event.kind)) &&
     ((await runtime.store.has(event.id)) || isEphemeralKind(event.kind));
-  if (shouldBroadcast) await broadcastEvent(event, runtime, relayUrls, connections, stats);
+  if (shouldBroadcast) await broadcaster.announce(event);
 }
 
 async function handleReq(
@@ -421,7 +428,7 @@ async function handleNegMessage(ws: ServerWebSocket<WsData>, message: ClientMess
   send(ws, ["NEG-MSG", subscriptionId, response.message]);
 }
 
-async function broadcastEvent(
+async function fanOutToLocalSubscribers(
   event: NostrEvent,
   runtime: RelayRuntime,
   relayUrls: string[],
