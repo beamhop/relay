@@ -128,12 +128,12 @@ export function countEvents(events: Iterable<NostrEvent>, filters: NostrFilter[]
   return result;
 }
 
-function isHllEligible(filter: NostrFilter): boolean {
+export function isHllEligible(filter: NostrFilter): boolean {
   const tagKeys = Object.keys(filter).filter((key) => key.startsWith("#") && Array.isArray(filter[key]) && (filter[key] as unknown[]).length === 1);
   return tagKeys.length === 1;
 }
 
-function computeHll(events: NostrEvent[], filter: NostrFilter): string {
+export function computeHll(events: Pick<NostrEvent, "pubkey">[], filter: NostrFilter): string {
   const offset = hllOffset(filter);
   const registers = new Uint8Array(256);
   for (const event of events) {

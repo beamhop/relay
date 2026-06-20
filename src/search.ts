@@ -62,6 +62,25 @@ export function buildSqliteFtsQuery(query: string): string | undefined {
   return expressions.filter(Boolean).join(" AND ");
 }
 
+export function buildPostgresTsQuery(query: string): string | undefined {
+  const parsed = parseSearchQuery(query);
+  if (parsed.terms.length === 0) return undefined;
+
+  const expressions = parsed.terms
+    .map((term) => {
+      if (term.phrase) return term.tokens.map(tsLexeme).join(" <-> ");
+      return term.tokens.map((token) => `${tsLexeme(token)}${token.length >= 3 ? ":*" : ""}`).join(" & ");
+    })
+    .filter(Boolean);
+  if (expressions.length === 0) return undefined;
+  return expressions.join(" & ");
+}
+
+export function searchVectorText(event: NostrEvent): string {
+  const fields = eventSearchFields(event);
+  return `${normalizeSearchText(fields.content)} ${normalizeSearchText(fields.tags)}`.trim();
+}
+
 export function eventSearchFields(event: NostrEvent): { content: string; tags: string } {
   return {
     content: event.content,
@@ -170,8 +189,12 @@ function tokenizeNormalizedText(text: string): string[] {
   return [...text.matchAll(TOKEN_RE)].map((match) => match[0] as string);
 }
 
-function normalizeSearchText(text: string): string {
+export function normalizeSearchText(text: string): string {
   return text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function tsLexeme(token: string): string {
+  return `'${token.replace(/'/g, "''")}'`;
 }
 
 function ftsTokenExpression(token: string): string {
