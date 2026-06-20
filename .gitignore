@@ -3,3 +3,11 @@ node_modules/
 *.sqlite-shm
 *.sqlite-wal
 .DS_Store
+
+# direnv / flake dev shell
+.direnv/
+.env
+.env.local
+
+# test scratch
+tests/tmp-*

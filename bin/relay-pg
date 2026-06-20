@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# relay-pg — run a command against an ephemeral local Postgres (ADR-0005).
+#
+# Brings up a throwaway Postgres cluster in a temp dir, exports DATABASE_URL and
+# RELAY_TEST_POSTGRES_URL pointing at a fresh `relay` database, runs the given command,
+# then stops the server and deletes the cluster on exit (no orphaned processes).
+#
+# Examples:
+#   relay-pg bun test                         # run the suite against postgres
+#   relay-pg bun run start --storage postgres # run the relay on the SQL-native backend
+#   relay-pg                                  # defaults to `bun test`
+#
+# Requires `initdb`, `pg_ctl`, `createdb` on PATH (provided by the flake dev shell).
+set -euo pipefail
+
+PORT="${RELAY_PG_PORT:-54329}"
+PGTMP="$(mktemp -d "${TMPDIR:-/tmp}/relay-pg.XXXXXX")"
+
+cleanup() {
+  pg_ctl -D "$PGTMP/data" -m immediate -w stop >/dev/null 2>&1 || true
+  rm -rf "$PGTMP"
+}
+trap cleanup EXIT
+
+echo "[relay-pg] initdb in $PGTMP" >&2
+initdb -D "$PGTMP/data" -U postgres --auth=trust >/dev/null
+
+echo "[relay-pg] starting postgres on port $PORT" >&2
+pg_ctl -D "$PGTMP/data" \
+  -o "-p $PORT -k $PGTMP -c listen_addresses=localhost" \
+  -l "$PGTMP/log" -w start >/dev/null || { cat "$PGTMP/log" >&2; exit 1; }
+
+createdb -h localhost -p "$PORT" -U postgres relay
+
+export DATABASE_URL="postgres://postgres@localhost:$PORT/relay"
+export RELAY_TEST_POSTGRES_URL="$DATABASE_URL"
+echo "[relay-pg] DATABASE_URL=$DATABASE_URL" >&2
+
+if [ "$#" -eq 0 ]; then
+  set -- bun test
+fi
+"$@"
