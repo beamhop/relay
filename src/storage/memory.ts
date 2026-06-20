@@ -1,5 +1,6 @@
 import { applyFilters, countEvents } from "../filter";
 import { addressForEvent, expirationTimestamp, isExpired, isEphemeralKind, replaceableKeyForEvent, shouldReplace, tagValues } from "../kinds";
+import { MemorySearchIndex } from "../search";
 import type { CountResult, DeletedAddressRecord, DeletedEventRecord, NostrEvent, NostrFilter, QueryResult, StoreResult, VanishRecord } from "../types";
 import type { EventStore } from "./types";
 
@@ -16,6 +17,7 @@ export class MemoryEventStore implements EventStore {
   protected readonly deletedEvents = new Map<string, DeletedEventRecord>();
   protected readonly deletedAddresses = new Map<string, DeletedAddressRecord>();
   protected readonly vanished = new Map<string, VanishRecord>();
+  private readonly searchIndex = new MemorySearchIndex();
 
   async init(): Promise<void> {}
 
@@ -51,12 +53,14 @@ export class MemoryEventStore implements EventStore {
       }
       if (existing) {
         this.events.delete(existing.id);
+        this.searchIndex.delete(existing);
         replacedIds.push(existing.id);
       }
       this.replaceableIndex.set(replaceableKey, event.id);
     }
 
     this.events.set(event.id, event);
+    this.searchIndex.add(event);
     return { stored: true, duplicate: false, replacedIds, deletedIds: [], message: "" };
   }
 
@@ -69,11 +73,11 @@ export class MemoryEventStore implements EventStore {
   }
 
   async query(filters: NostrFilter[]): Promise<QueryResult> {
-    return applyFilters(this.events.values(), filters);
+    return applyFilters(this.candidateEventsFor(filters), filters);
   }
 
   async count(filters: NostrFilter[]): Promise<CountResult> {
-    return countEvents(this.events.values(), filters);
+    return countEvents(this.candidateEventsFor(filters), filters);
   }
 
   async allEvents(): Promise<NostrEvent[]> {
@@ -84,6 +88,7 @@ export class MemoryEventStore implements EventStore {
     const existing = this.events.get(id);
     if (!existing) return false;
     this.events.delete(id);
+    this.searchIndex.delete(existing);
     const key = replaceableKeyForEvent(existing);
     if (key && this.replaceableIndex.get(key) === id) this.replaceableIndex.delete(key);
     return true;
@@ -170,10 +175,12 @@ export class MemoryEventStore implements EventStore {
     this.deletedEvents.clear();
     this.deletedAddresses.clear();
     this.vanished.clear();
+    this.searchIndex.clear();
 
     for (const event of snapshot.events) {
       if (isExpired(event)) continue;
       this.events.set(event.id, event);
+      this.searchIndex.add(event);
       const key = replaceableKeyForEvent(event);
       if (key) {
         const existingId = this.replaceableIndex.get(key);
@@ -193,6 +200,16 @@ export class MemoryEventStore implements EventStore {
       deletedAddresses: [...this.deletedAddresses.values()],
       vanished: [...this.vanished.values()],
     };
+  }
+
+  private candidateEventsFor(filters: NostrFilter[]): NostrEvent[] {
+    if (!filters.every((filter) => typeof filter.search === "string" && filter.search.trim())) return [...this.events.values()];
+
+    const ids = new Set<string>();
+    for (const filter of filters) {
+      for (const id of this.searchIndex.searchIds(filter.search as string)) ids.add(id);
+    }
+    return [...ids].map((id) => this.events.get(id)).filter((event): event is NostrEvent => event !== undefined);
   }
 }
 

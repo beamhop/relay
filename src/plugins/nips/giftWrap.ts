@@ -5,7 +5,7 @@ import type { RelayPlugin } from "../types";
 export function giftWrapAccessHooks(): Pick<RelayPlugin, "authorizeFilters" | "filterOutgoingEvents"> {
   return {
     authorizeFilters: (filters, context) => {
-      if (!filtersAskForKind(filters, 1059)) return { ok: true };
+      if (!filtersNeedGiftWrapAuth(filters, context.operation, 1059)) return { ok: true };
       if (context.connection && context.connection.authenticatedPubkeys.size > 0) return { ok: true };
       return { ok: false, prefix: "auth-required", message: "gift wraps require recipient authentication" };
     },
@@ -21,6 +21,9 @@ export function giftWrapAccessHooks(): Pick<RelayPlugin, "authorizeFilters" | "f
   };
 }
 
-function filtersAskForKind(filters: NostrFilter[], kind: number): boolean {
-  return filters.some((filter) => !filter.kinds || filter.kinds.includes(kind));
+function filtersNeedGiftWrapAuth(filters: NostrFilter[], operation: "REQ" | "COUNT" | undefined, kind: number): boolean {
+  return filters.some((filter) => {
+    if (filter.kinds) return filter.kinds.includes(kind);
+    return operation !== "REQ" || typeof filter.search !== "string" || !filter.search.trim();
+  });
 }

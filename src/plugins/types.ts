@@ -6,6 +6,7 @@ export interface PluginContext {
   store: EventStore;
   relayUrls: string[];
   connection?: ConnectionState;
+  operation?: "REQ" | "COUNT";
 }
 
 export interface RelayPlugin {

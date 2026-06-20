@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { applyFilters, countEvents } from "../filter";
+import { buildSqliteFtsQuery, eventSearchFields } from "../search";
 import { MemoryEventStore, type MemorySnapshot } from "./memory";
 import type { EventStore } from "./types";
 import type { CountResult, NostrEvent, NostrFilter, QueryResult, StoreResult } from "../types";
@@ -22,6 +24,10 @@ interface DeletedAddressRow {
 interface VanishedRow {
   pubkey: string;
   until: number;
+}
+
+interface SearchRow {
+  id: string;
 }
 
 export class SqliteEventStore implements EventStore {
@@ -59,8 +65,16 @@ export class SqliteEventStore implements EventStore {
         pubkey TEXT PRIMARY KEY,
         until INTEGER NOT NULL
       );
+      CREATE VIRTUAL TABLE IF NOT EXISTS event_search USING fts5(
+        id UNINDEXED,
+        content,
+        tags,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
     `);
-    this.memory.hydrate(this.loadSnapshot());
+    const snapshot = this.loadSnapshot();
+    this.memory.hydrate(snapshot);
+    this.rebuildSearchIndex(this.memory.snapshot().events);
   }
 
   async close(): Promise<void> {
@@ -82,11 +96,13 @@ export class SqliteEventStore implements EventStore {
   }
 
   async query(filters: NostrFilter[]): Promise<QueryResult> {
-    return this.memory.query(filters);
+    if (!hasSearchFilter(filters)) return this.memory.query(filters);
+    return applyFilters(await this.candidateEventsFor(filters), filters);
   }
 
   async count(filters: NostrFilter[]): Promise<CountResult> {
-    return this.memory.count(filters);
+    if (!hasSearchFilter(filters)) return this.memory.count(filters);
+    return countEvents(await this.candidateEventsFor(filters), filters);
   }
 
   async allEvents(): Promise<NostrEvent[]> {
@@ -144,10 +160,13 @@ export class SqliteEventStore implements EventStore {
   private syncSnapshot(): void {
     const snapshot = this.memory.snapshot();
     const transaction = this.db.transaction(() => {
-      this.db.exec("DELETE FROM events; DELETE FROM deleted_events; DELETE FROM deleted_addresses; DELETE FROM vanished_pubkeys;");
+      this.db.exec("DELETE FROM events; DELETE FROM event_search; DELETE FROM deleted_events; DELETE FROM deleted_addresses; DELETE FROM vanished_pubkeys;");
       const insertEvent = this.db.query("INSERT INTO events (id, pubkey, created_at, kind, event_json) VALUES (?, ?, ?, ?, ?)");
+      const insertSearch = this.db.query("INSERT INTO event_search (id, content, tags) VALUES (?, ?, ?)");
       for (const event of snapshot.events) {
         insertEvent.run(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event));
+        const fields = eventSearchFields(event);
+        insertSearch.run(event.id, fields.content, fields.tags);
       }
       const insertDeletedEvent = this.db.query("INSERT INTO deleted_events (id, pubkey, deleted_at) VALUES (?, ?, ?)");
       for (const record of snapshot.deletedEvents) insertDeletedEvent.run(record.id, record.pubkey, record.deletedAt);
@@ -158,4 +177,52 @@ export class SqliteEventStore implements EventStore {
     });
     transaction();
   }
+
+  private rebuildSearchIndex(events: NostrEvent[]): void {
+    const transaction = this.db.transaction(() => {
+      this.db.exec("DELETE FROM event_search;");
+      const insertSearch = this.db.query("INSERT INTO event_search (id, content, tags) VALUES (?, ?, ?)");
+      for (const event of events) {
+        const fields = eventSearchFields(event);
+        insertSearch.run(event.id, fields.content, fields.tags);
+      }
+    });
+    transaction();
+  }
+
+  private async candidateEventsFor(filters: NostrFilter[]): Promise<NostrEvent[]> {
+    if (!filters.every((filter) => typeof filter.search === "string" && filter.search.trim())) return this.memory.allEvents();
+
+    const ids = new Set<string>();
+    for (const filter of filters) {
+      for (const id of this.searchIds(filter.search as string)) ids.add(id);
+    }
+
+    const events: NostrEvent[] = [];
+    for (const id of ids) {
+      const event = await this.memory.get(id);
+      if (event) events.push(event);
+    }
+    return events;
+  }
+
+  private searchIds(query: string): Set<string> {
+    const ftsQuery = buildSqliteFtsQuery(query);
+    if (!ftsQuery) return new Set();
+
+    const rows = this.db
+      .query<SearchRow, [string]>(`
+        SELECT event_search.id
+        FROM event_search
+        JOIN events ON events.id = event_search.id
+        WHERE event_search MATCH ?
+        ORDER BY bm25(event_search, 0.0, 5.0, 1.0), events.created_at DESC, events.id ASC
+      `)
+      .all(ftsQuery);
+    return new Set(rows.map((row) => row.id));
+  }
+}
+
+function hasSearchFilter(filters: NostrFilter[]): boolean {
+  return filters.some((filter) => typeof filter.search === "string" && filter.search.trim());
 }

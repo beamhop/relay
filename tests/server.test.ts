@@ -63,6 +63,44 @@ test("responds to NIP-77 NEG-OPEN with a protocol v1 NEG-MSG", async () => {
   ws.close();
 });
 
+test("serves unauthenticated NIP-50 search without exposing gift wraps", async () => {
+  const config = testConfig();
+  const store = new MemoryEventStore();
+  const publicNote = signedEvent(secretKey(12), { kind: 1, content: "public relay searchable" });
+  const giftWrap = signedEvent(secretKey(13), { kind: 1059, tags: [["p", "0".repeat(64)]], content: "private relay searchable" });
+  await store.save(publicNote);
+  await store.save(giftWrap);
+
+  const server = await startRelay({ config, store, plugins: createPluginManager(config), management: new ManagementState() });
+  servers.push(server);
+
+  const messages: RelayMessage[] = [];
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/`);
+  ws.addEventListener("message", (event) => messages.push(JSON.parse(String(event.data)) as RelayMessage));
+  await waitFor(() => (ws.readyState === WebSocket.OPEN ? true : undefined), "websocket open");
+  await waitFor(() => messages.find((message) => message[0] === "AUTH"), "AUTH challenge");
+
+  ws.send(JSON.stringify(["REQ", "search", { search: "relay searchable" }]));
+  await waitFor(() => messages.find((message) => message[0] === "EOSE" && message[1] === "search"), "search EOSE");
+
+  const searchEvents = messages.flatMap((message) => (message[0] === "EVENT" && message[1] === "search" ? [message[2].id] : []));
+  expect(searchEvents).toEqual([publicNote.id]);
+  expect(messages.some((message) => message[0] === "CLOSED" && message[1] === "search")).toBe(false);
+
+  ws.send(JSON.stringify(["REQ", "gift-wraps", { kinds: [1059], search: "relay" }]));
+  const closed = await waitFor(() => messages.find((message) => message[0] === "CLOSED" && message[1] === "gift-wraps"), "gift-wrap CLOSED");
+  expect(closed[2]).toStartWith("auth-required:");
+
+  ws.send(JSON.stringify(["COUNT", "public-count", { kinds: [1], search: "relay" }]));
+  const publicCount = await waitFor(() => messages.find((message) => message[0] === "COUNT" && message[1] === "public-count"), "public search COUNT");
+  expect(publicCount[2]).toMatchObject({ count: 1 });
+
+  ws.send(JSON.stringify(["COUNT", "broad-count", { search: "relay" }]));
+  const broadCountClosed = await waitFor(() => messages.find((message) => message[0] === "CLOSED" && message[1] === "broad-count"), "broad search COUNT closed");
+  expect(broadCountClosed[2]).toStartWith("auth-required:");
+  ws.close();
+});
+
 test("serves password-protected admin panel and updates runtime config", async () => {
   const config = testConfig({ admin: { web: true, password: "secret" } });
   const store = new MemoryEventStore();

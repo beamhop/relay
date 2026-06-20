@@ -284,7 +284,7 @@ async function handleReq(
     return;
   }
 
-  const authorized = await runtime.plugins.authorizeFilters(filters, { config: runtime.config, store: runtime.store, relayUrls, connection });
+  const authorized = await runtime.plugins.authorizeFilters(filters, { config: runtime.config, store: runtime.store, relayUrls, connection, operation: "REQ" });
   if (!authorized.ok) {
     if (authorized.prefix === "auth-required") maybeSendAuth(ws, connection, runtime);
     send(ws, ["CLOSED", subscriptionId, formatResult(authorized)]);
@@ -322,7 +322,7 @@ async function handleCount(
     send(ws, ["CLOSED", queryId, `invalid: ${filterError}`]);
     return;
   }
-  const authorized = await runtime.plugins.authorizeFilters(filters, { config: runtime.config, store: runtime.store, relayUrls, connection });
+  const authorized = await runtime.plugins.authorizeFilters(filters, { config: runtime.config, store: runtime.store, relayUrls, connection, operation: "COUNT" });
   if (!authorized.ok) {
     if (authorized.prefix === "auth-required") maybeSendAuth(ws, connection, runtime);
     send(ws, ["CLOSED", queryId, formatResult(authorized)]);

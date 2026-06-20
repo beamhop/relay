@@ -2,7 +2,10 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { HEX_32_RE } from "./crypto";
 import { isExpired } from "./kinds";
+import { searchScore } from "./search";
 import type { CountResult, NostrEvent, NostrFilter } from "./types";
+
+export { searchScore } from "./search";
 
 const textEncoder = new TextEncoder();
 
@@ -93,34 +96,22 @@ export function sortEventsForFilter(events: NostrEvent[], filter: NostrFilter): 
 }
 
 export function applyFilters(events: Iterable<NostrEvent>, filters: NostrFilter[]): { events: NostrEvent[]; complete: boolean } {
+  const allEvents = [...events];
   const byId = new Map<string, NostrEvent>();
   let complete = true;
+  let hasSearchFilter = false;
   for (const filter of filters) {
+    if (filter.search) hasSearchFilter = true;
     const matches = sortEventsForFilter(
-      [...events].filter((event) => matchesFilter(event, filter)),
+      allEvents.filter((event) => matchesFilter(event, filter)),
       filter,
     );
     const limit = typeof filter.limit === "number" ? filter.limit : matches.length;
     if (matches.length > limit) complete = false;
     for (const event of matches.slice(0, limit)) byId.set(event.id, event);
   }
-  return { events: sortEventsForRelay([...byId.values()]), complete };
-}
-
-export function searchScore(event: NostrEvent, query: string): number {
-  const terms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((term) => term && !term.includes(":"));
-  if (terms.length === 0) return 1;
-  const content = event.content.toLowerCase();
-  const tagText = event.tags.flat().join(" ").toLowerCase();
-  let score = 0;
-  for (const term of terms) {
-    if (content.includes(term)) score += 4;
-    if (tagText.includes(term)) score += 1;
-  }
-  return score;
+  const values = [...byId.values()];
+  return { events: hasSearchFilter ? values : sortEventsForRelay(values), complete };
 }
 
 export function countEvents(events: Iterable<NostrEvent>, filters: NostrFilter[]): CountResult {
