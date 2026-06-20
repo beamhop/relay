@@ -1,0 +1,31 @@
+# relay.beamhop.com -> relay Service :80 -> container :7777. nginx-ingress upgrades to WebSocket
+# automatically; the long proxy timeouts keep idle subscriptions alive. Real client IP arrives via
+# x-forwarded-for (the relay reads it for IP blocking).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: relay
+  namespace: relay
+  labels:
+    platform/project: relay
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - relay.beamhop.com
+      secretName: relay-tls
+  rules:
+    - host: relay.beamhop.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: relay
+                port:
+                  number: 80

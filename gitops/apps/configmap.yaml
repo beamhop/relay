@@ -1,0 +1,26 @@
+# Relay settings (ADR-0004), mounted read-only and passed via --config. Non-secret connection
+# bits only: the Postgres password is injected from the relay-app Secret as RELAY_POSTGRES_PASSWORD
+# (env overrides file). Postgres is the shared CNPG read-write service, database `relay` (ADR-0002).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-config
+  namespace: relay
+  labels:
+    platform/project: relay
+    app: relay
+data:
+  relay.yaml: |
+    host: 0.0.0.0
+    port: 7777
+    relayUrl: wss://relay.beamhop.com/
+    storage:
+      backend: postgres
+      postgres:
+        host: shared-pg-rw.cnpg-system.svc.cluster.local
+        port: 5432
+        database: relay
+        user: relay
+    relay:
+      name: beamhop relay
+      description: beamhop nostr relay, hosted at relay.beamhop.com

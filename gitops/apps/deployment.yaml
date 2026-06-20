@@ -1,0 +1,69 @@
+# beamhop relay. Single pod + Recreate (ADR-0003): live fan-out is in-process this phase, so two
+# overlapping pods would split-brain live subscriptions. Postgres is the source of truth (ADR-0002),
+# so a brief gap on rollout only delays live pushes, not durability. No Redis (ADR-0003).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay
+  namespace: relay
+  labels:
+    platform/project: relay
+    app: relay
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: relay
+  template:
+    metadata:
+      labels:
+        platform/project: relay
+        app: relay
+    spec:
+      containers:
+        - name: relay
+          # Pinned to the short commit SHA built by .github/workflows/image.yml.
+          # First push: the promote job rewrites this :latest tag to the real SHA.
+          image: ghcr.io/beamhop/relay:latest
+          command: ["bun", "run", "src/main.ts"]
+          args: ["--config", "/etc/relay/relay.yaml"]
+          ports:
+            - name: nostr
+              containerPort: 7777
+          env:
+            # DB role password from the platform-managed relay-app Secret (key DB_PASSWORD).
+            # User/host/database come from the relay-config ConfigMap; env overrides file.
+            - name: RELAY_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: relay-app
+                  key: DB_PASSWORD
+          volumeMounts:
+            - name: config
+              mountPath: /etc/relay
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: nostr
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: nostr
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: relay-config

@@ -1,0 +1,17 @@
+# Origin TLS cert for relay.beamhop.com via the shared letsencrypt-prod ClusterIssuer (HTTP-01
+# through the relay ingress). Produces the relay-tls Secret the ingress references.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: relay-tls
+  namespace: relay
+  labels:
+    platform/project: relay
+spec:
+  secretName: relay-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - relay.beamhop.com

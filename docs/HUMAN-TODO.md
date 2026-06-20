@@ -36,6 +36,11 @@ Remaining one-time manual step:
 
 - [ ] Confirm the admin password / NIP-86 management pubkeys and DB credentials the production
       Deployment will consume, and that they exist as Secrets in the `relay` namespace.
+- [ ] The in-repo Deployment (`gitops/apps/deployment.yaml`) reads the Postgres password from the
+      existing **`relay-app` Secret, key `DB_PASSWORD`** (env `RELAY_POSTGRES_PASSWORD`); `user`,
+      `host`, and `database` come from the `relay-config` ConfigMap. Confirm `relay-app` is
+      retained at cutover (its nostream-only `SECRET` / `REDIS_PASSWORD` keys are unused here).
+      If the credential moves to a different Secret/key, update the Deployment's `secretKeyRef`.
 
 ## Out of scope now (HA phase — ADR-0003)
 
