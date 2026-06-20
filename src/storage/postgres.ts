@@ -9,7 +9,7 @@ import type { EventStore } from "./types";
 type Sql = postgres.Sql;
 type TxSql = postgres.TransactionSql<Record<string, never>>;
 
-export type PostgresStoreOptions = string | postgres.Options<Record<string, never>>;
+export type PostgresStoreOptions = string | Record<string, unknown>;
 
 interface EventRow {
   id: string;
@@ -32,7 +32,9 @@ export class PostgresEventStore implements EventStore {
   constructor(options: PostgresStoreOptions) {
     // Silence NOTICE chatter (e.g. "relation already exists" from idempotent DDL on boot).
     const quiet = { onnotice: () => {} };
-    this.sql = typeof options === "string" ? postgres(options, quiet) : postgres({ ...options, ...quiet });
+    this.sql = typeof options === "string"
+      ? postgres(options, quiet)
+      : postgres({ ...options, ...quiet } as postgres.Options<Record<string, never>>);
   }
 
   async init(): Promise<void> {

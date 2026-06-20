@@ -76,10 +76,31 @@ export interface RelayMetadata {
   terms_of_service?: string;
 }
 
+export type StorageBackend = "memory" | "sqlite" | "postgres";
+
+export interface PostgresConnectionConfig {
+  url?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+  ssl?: boolean | "require" | "prefer" | "verify-full";
+  max?: number;
+}
+
+export interface StorageConfig {
+  backend: StorageBackend;
+  sqlitePath?: string;
+  postgres?: PostgresConnectionConfig;
+}
+
 export interface RelayConfig {
   host: string;
   port: number;
   relayUrl?: string;
+  storage: StorageConfig;
+  /** Legacy SQLite path mirror of storage (sqlite backend only); kept for the admin panel. */
   persistence?: string;
   admin: RelayAdminConfig;
   disabledNips: Set<NipId>;

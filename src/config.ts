@@ -1,4 +1,13 @@
-import type { NipId, RelayAdminConfig, RelayConfig, RelayLimits, RelayMetadata } from "./types";
+import type {
+  NipId,
+  PostgresConnectionConfig,
+  RelayAdminConfig,
+  RelayConfig,
+  RelayLimits,
+  RelayMetadata,
+  StorageBackend,
+  StorageConfig,
+} from "./types";
 
 const DEFAULT_LIMITS: RelayLimits = {
   maxMessageLength: 524_288,
@@ -18,11 +27,18 @@ const DEFAULT_RELAY: RelayMetadata = {
   version: "0.1.0",
 };
 
+const DEFAULT_SQLITE_PATH = "beamhop-relay.sqlite";
+const STORAGE_BACKENDS: StorageBackend[] = ["memory", "sqlite", "postgres"];
+
+// Auto-discovered in the working directory when no --config is passed (ADR-0004). YAML first.
+const AUTO_CONFIG_FILES = ["relay.yaml", "relay.config.yaml", "relay.yml", "relay.json"];
+
 interface ConfigFile {
   host?: string;
   port?: number;
   relayUrl?: string;
   persistence?: string | boolean;
+  storage?: Partial<StorageConfig>;
   admin?: Partial<RelayAdminConfig>;
   disabledNips?: NipId[];
   requireAuthForRead?: boolean;
@@ -35,8 +51,9 @@ interface ConfigFile {
 
 export async function loadConfig(argv = Bun.argv.slice(2)): Promise<RelayConfig> {
   const args = parseArgs(argv);
-  const fileConfig = args.config ? await readConfigFile(args.config) : {};
-  const persistence = resolvePersistence(args, fileConfig);
+  const configPath = args.config ?? (await discoverConfigFile());
+  const fileConfig = configPath ? await readConfigFile(configPath) : {};
+  const storage = resolveStorage(args, fileConfig);
   const admin = resolveAdminConfig(args, fileConfig);
   const disabledNips = new Set<NipId>([...(fileConfig.disabledNips ?? []), ...args.disabledNips].map(normalizeNipId));
   const relay = { ...DEFAULT_RELAY, ...(fileConfig.relay ?? {}) };
@@ -44,8 +61,9 @@ export async function loadConfig(argv = Bun.argv.slice(2)): Promise<RelayConfig>
   if (args.description) relay.description = args.description;
 
   const config: RelayConfig = {
-    host: args.host ?? fileConfig.host ?? "0.0.0.0",
+    host: args.host ?? process.env.HOST ?? fileConfig.host ?? "0.0.0.0",
     port: resolvePort(args, fileConfig),
+    storage,
     admin,
     disabledNips,
     relay,
@@ -57,7 +75,7 @@ export async function loadConfig(argv = Bun.argv.slice(2)): Promise<RelayConfig>
   };
   const relayUrl = args.relayUrl ?? fileConfig.relayUrl;
   if (relayUrl) config.relayUrl = relayUrl;
-  if (persistence) config.persistence = persistence;
+  if (storage.backend === "sqlite" && storage.sqlitePath) config.persistence = storage.sqlitePath;
   return config;
 }
 
@@ -68,6 +86,8 @@ function parseArgs(argv: string[]) {
     port?: number;
     relayUrl?: string;
     persistence?: string | true;
+    storageBackend?: StorageBackend;
+    postgresUrl?: string;
     disabledNips: NipId[];
     web?: boolean;
     password?: string;
@@ -96,6 +116,12 @@ function parseArgs(argv: string[]) {
       i += 1;
     } else if (arg === "--relay-url" && next) {
       parsed.relayUrl = next;
+      i += 1;
+    } else if (arg === "--storage" && next) {
+      parsed.storageBackend = assertBackend(next);
+      i += 1;
+    } else if (arg === "--postgres-url" && next) {
+      parsed.postgresUrl = next;
       i += 1;
     } else if (arg === "--web" || arg === "-w") {
       parsed.web = true;
@@ -133,25 +159,81 @@ function parseArgs(argv: string[]) {
   return parsed;
 }
 
+async function discoverConfigFile(): Promise<string | undefined> {
+  for (const name of AUTO_CONFIG_FILES) {
+    if (await Bun.file(name).exists()) return name;
+  }
+  return undefined;
+}
+
 async function readConfigFile(path: string): Promise<ConfigFile> {
   const file = Bun.file(path);
   if (!(await file.exists())) throw new Error(`config file not found: ${path}`);
-  return (await file.json()) as ConfigFile;
+  // YAML is a superset of JSON, so a single parser reads both .yaml and .json (ADR-0004).
+  const parsed = Bun.YAML.parse(await file.text());
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`config file must be a mapping: ${path}`);
+  }
+  return parsed as ConfigFile;
 }
 
 function resolvePort(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): number {
+  // Precedence: CLI > env > file > default (ADR-0004).
   if (args.port !== undefined) return args.port;
-  if (fileConfig.port !== undefined) return fileConfig.port;
   if (process.env.PORT !== undefined) return Number.parseInt(process.env.PORT, 10);
+  if (fileConfig.port !== undefined) return fileConfig.port;
   return 7777;
 }
 
-function resolvePersistence(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): string | undefined {
+function resolveStorage(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): StorageConfig {
+  const fileStorage = fileConfig.storage ?? {};
+  const envBackend = process.env.RELAY_STORAGE_BACKEND ? assertBackend(process.env.RELAY_STORAGE_BACKEND) : undefined;
+  const sqlitePath = resolveSqlitePath(args, fileConfig, fileStorage);
+
+  // Precedence: CLI > env > file > (legacy --persistence implies sqlite) > memory.
+  // A CLI --postgres-url is explicit intent to use postgres; env DATABASE_URL is not.
+  const backend: StorageBackend =
+    args.storageBackend ??
+    (args.postgresUrl ? "postgres" : undefined) ??
+    envBackend ??
+    (fileStorage.backend ? assertBackend(fileStorage.backend) : undefined) ??
+    (hasPersistenceFlag(args, fileConfig) ? "sqlite" : undefined) ??
+    "memory";
+
+  if (backend === "sqlite") return { backend, sqlitePath };
+  if (backend === "postgres") return { backend, postgres: resolvePostgres(args, fileStorage.postgres) };
+  return { backend };
+}
+
+function hasPersistenceFlag(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): boolean {
+  return args.persistence !== undefined || process.env.RELAY_SQLITE_PATH !== undefined || fileConfig.persistence !== undefined;
+}
+
+function resolveSqlitePath(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile, fileStorage: Partial<StorageConfig>): string {
   if (typeof args.persistence === "string") return args.persistence;
-  if (args.persistence === true) return "beamhop-relay.sqlite";
+  if (process.env.RELAY_SQLITE_PATH) return process.env.RELAY_SQLITE_PATH;
+  if (fileStorage.sqlitePath) return fileStorage.sqlitePath;
   if (typeof fileConfig.persistence === "string") return fileConfig.persistence;
-  if (fileConfig.persistence === true) return "beamhop-relay.sqlite";
-  return undefined;
+  return DEFAULT_SQLITE_PATH;
+}
+
+function resolvePostgres(args: ReturnType<typeof parseArgs>, filePostgres: PostgresConnectionConfig | undefined): PostgresConnectionConfig {
+  const base = filePostgres ?? {};
+  const env = process.env;
+  const url = args.postgresUrl ?? env.RELAY_POSTGRES_URL ?? env.DATABASE_URL ?? base.url;
+  const result: PostgresConnectionConfig = { ...base };
+  if (url) result.url = url;
+  if (env.RELAY_POSTGRES_HOST) result.host = env.RELAY_POSTGRES_HOST;
+  if (env.RELAY_POSTGRES_PORT) result.port = Number.parseInt(env.RELAY_POSTGRES_PORT, 10);
+  if (env.RELAY_POSTGRES_DB) result.database = env.RELAY_POSTGRES_DB;
+  if (env.RELAY_POSTGRES_USER) result.user = env.RELAY_POSTGRES_USER;
+  if (env.RELAY_POSTGRES_PASSWORD) result.password = env.RELAY_POSTGRES_PASSWORD;
+  return result;
+}
+
+function assertBackend(value: string): StorageBackend {
+  if ((STORAGE_BACKENDS as string[]).includes(value)) return value as StorageBackend;
+  throw new Error(`invalid storage backend: ${value} (expected one of ${STORAGE_BACKENDS.join(", ")})`);
 }
 
 function resolveAdminConfig(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): RelayAdminConfig {
@@ -177,14 +259,19 @@ Options:
   --host <host>                 Host to bind (default: 0.0.0.0)
   --port <port>                 Port to bind (default: 7777)
   --relay-url <url>             Public relay URL used by AUTH validation
+  --storage <backend>           Storage backend: memory | sqlite | postgres
+  --postgres-url <url>          Postgres connection string (selects the postgres backend)
   -w, --web [password]          Enable password-protected browser admin panel
   --password <password>         Password for the browser admin panel
   --admin-password <password>   Alias for --password
-  -p, --persistence [path]      Enable SQLite persistence (default path: beamhop-relay.sqlite)
-  --config <path>               Read JSON config
+  -p, --persistence [path]      Enable SQLite persistence (default path: ${DEFAULT_SQLITE_PATH})
+  --config <path>               Read a YAML or JSON config file
   --disable-nip <id[,id]>       Disable implemented NIP plugins
   --require-auth-read           Require NIP-42 auth before REQ/COUNT
   --require-auth-write          Require NIP-42 auth before EVENT
   --reject-protected-events     Reject NIP-70 protected events instead of accepting authenticated authors
+
+Config is auto-discovered from relay.yaml / relay.config.yaml / relay.json in the working
+directory. Precedence: CLI flags > environment variables > config file > defaults.
 `);
 }
