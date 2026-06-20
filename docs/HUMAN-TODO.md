@@ -1,46 +1,33 @@
 # Human TODO
 
-Blockers and decisions that only a human (Yasin) can clear. Recorded during the 2026-06-20
-grill so implementation work can proceed without pinging mid-way.
+## Phase 1 cutover — DONE (2026-06-20)
 
-## Cross-org credentials — NOT a blocker (verified 2026-06-20)
+`relay.beamhop.com` now runs **this** Bun/TypeScript relay (replacing nostream). Live, verified
+end-to-end (publish / REQ / COUNT / NIP-11 / health / admin), serving real traffic.
 
-Initially feared, then checked: `beamhop/relay` is **public** and Yasin is **admin** of the
-`beamhop` org, so no cross-org credential is needed.
+How it is wired (so there is no future confusion):
 
-- Argo reads the public repo with **no creds**.
-- Every existing tenant (music-manager, nostream) pulls its `ghcr.io/...` image with **no
-  `imagePullSecret`** → GHCR packages are public and pulled anonymously. Same will apply here.
-- CI runs *inside* `beamhop/relay` and uses that repo's own `GITHUB_TOKEN` (`packages: write`)
-  to push to `ghcr.io/beamhop/relay`. No personal/cross-org token involved.
+- **Two Argo apps, by design** (tenant slim-split, ADR-0006):
+  - `beamhop-relay` — the **workload** (this repo's `gitops/apps`: Deployment, Service, Ingress,
+    Certificate, ConfigMap), project `beamhop-relay`, scoped to the `relay` namespace.
+  - `relay-shared` — platform-side **shared infra only** (platform-gitops `platform/relay/`,
+    project `default`): the `relay` namespace, the cnpg-system `Database` CR, and the secrets.
+    A namespace-scoped tenant cannot own the cross-namespace Database CR, hence the split.
+- **Storage:** SQL-native Postgres on the shared CNPG cluster, database `relay`. Our tables live
+  in the **`beamhop` schema** (`storage.postgres.schema`), because the `relay` database is shared
+  db-per-app and previously held nostream's `public.*` tables. nostream's `public.*` tables have
+  been **dropped**; `beamhop` is our clean home.
+- **Secrets:** `relay-app` (in `relay` ns) holds `DB_PASSWORD` + `ADMIN_PASSWORD` (the dead
+  nostream keys `SECRET` / `REDIS_PASSWORD` were removed). `relay-db-credentials` (cnpg-system)
+  holds the DB role password. The image `ghcr.io/beamhop/relay` is **public**.
+- **Admin panel:** enabled (`--web`) at `https://relay.beamhop.com/admin`; password is
+  `relay-app/ADMIN_PASSWORD` (retrieve with
+  `sops -d platform/relay/secrets/gen.keep/relay-app.enc.yaml | grep ADMIN_PASSWORD`).
 
-Remaining one-time manual step:
+## Optional follow-ups
 
-- [ ] On first image publish, set the `ghcr.io/beamhop/relay` **package visibility to public**
-      (org admin), matching the other tenants. (Alternative: keep it private and add an
-      `imagePullSecret` to the `relay` namespace — not the established pattern.)
-- [ ] Add `https://github.com/beamhop/relay.git` to `sourceRepos` in
-      `projects/beamhop-relay.yaml` (plain config, not a credential — done as part of the work).
-
-## Platform-gitops changes (ADR-0006)
-
-- [ ] Remove `platform/relay/` and `apps/children/application-relay.yaml` (the nostream
-      Application) at cutover.
-- [ ] Add `projects/beamhop-relay.yaml` (AppProject) + `tenants/beamhop-relay.yaml` (root
-      Application → `beamhop/relay` `gitops/apps`).
-- [ ] Keep the CNPG `Database` CR (`relay` in `cnpg-system`) and the relay secrets
-      platform-managed; confirm the new Deployment references the existing secret names.
-- [ ] Decide cutover timing (brief downtime: single pod, `Recreate`).
-
-## Secrets
-
-- [ ] Confirm the admin password / NIP-86 management pubkeys and DB credentials the production
-      Deployment will consume, and that they exist as Secrets in the `relay` namespace.
-- [ ] The in-repo Deployment (`gitops/apps/deployment.yaml`) reads the Postgres password from the
-      existing **`relay-app` Secret, key `DB_PASSWORD`** (env `RELAY_POSTGRES_PASSWORD`); `user`,
-      `host`, and `database` come from the `relay-config` ConfigMap. Confirm `relay-app` is
-      retained at cutover (its nostream-only `SECRET` / `REDIS_PASSWORD` keys are unused here).
-      If the credential moves to a different Secret/key, update the Deployment's `secretKeyRef`.
+- [ ] Delete the obsolete nostream fork image `ghcr.io/yasinuslu/nostream` if it is no longer
+      wanted (not referenced anywhere now).
 
 ## Out of scope now (HA phase — ADR-0003)
 
