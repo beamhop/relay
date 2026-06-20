@@ -11,6 +11,10 @@ interface RpcRequest {
   params?: unknown[];
 }
 
+interface ValidationContext {
+  supportedEventKinds?: ReadonlySet<number>;
+}
+
 export class ManagementState {
   readonly bannedPubkeys = new Map<string, string>();
   readonly allowedPubkeys = new Map<string, string>();
@@ -18,7 +22,7 @@ export class ManagementState {
   readonly allowedKinds = new Set<number>();
   readonly blockedIps = new Map<string, string>();
 
-  validateEvent(event: NostrEvent): ValidationResult {
+  validateEvent(event: NostrEvent, context: ValidationContext = {}): ValidationResult {
     const bannedPubkey = this.bannedPubkeys.get(event.pubkey);
     if (bannedPubkey !== undefined) return { ok: false, prefix: "blocked", message: bannedPubkey || "pubkey is banned" };
     if (this.allowedPubkeys.size > 0 && !this.allowedPubkeys.has(event.pubkey)) {
@@ -26,7 +30,7 @@ export class ManagementState {
     }
     const bannedEvent = this.bannedEvents.get(event.id);
     if (bannedEvent !== undefined) return { ok: false, prefix: "blocked", message: bannedEvent || "event is banned" };
-    if (this.allowedKinds.size > 0 && !this.allowedKinds.has(event.kind)) {
+    if (this.allowedKinds.size > 0 && !this.allowedKinds.has(event.kind) && !context.supportedEventKinds?.has(event.kind)) {
       return { ok: false, prefix: "restricted", message: "event kind is not allowlisted" };
     }
     return { ok: true };

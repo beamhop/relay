@@ -210,7 +210,7 @@ async function handleEvent(
     return;
   }
 
-  const moderation = runtime.management.validateEvent(event);
+  const moderation = runtime.management.validateEvent(event, { supportedEventKinds: runtime.plugins.supportedEventKinds });
   if (!moderation.ok) {
     send(ws, ["OK", event.id, false, formatResult(moderation)]);
     recordEventRejected(stats, event, formatResult(moderation));

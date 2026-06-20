@@ -583,8 +583,8 @@ function adminPage(): string {
             <form id="kindForm" class="form-grid">
               <label>Kind<input id="kindValue" type="number" min="0" max="65535"></label>
               <div class="actions">
-                <button data-action="allowkind" type="button">Allow kind</button>
-                <button data-action="disallowkind" class="secondary" type="button">Remove kind</button>
+                <button data-action="allowkind" type="button">Allow custom kind</button>
+                <button data-action="disallowkind" class="secondary" type="button">Remove custom kind</button>
               </div>
             </form>
             <div id="moderationMessage" class="muted"></div>
@@ -599,7 +599,7 @@ function adminPage(): string {
               <div class="mini-list"><h3>Allowed pubkeys</h3><ul id="allowedPubkeys"></ul></div>
               <div class="mini-list"><h3>Banned events</h3><ul id="bannedEvents"></ul></div>
               <div class="mini-list"><h3>Blocked IPs</h3><ul id="blockedIps"></ul></div>
-              <div class="mini-list"><h3>Allowed kinds</h3><ul id="allowedKinds"></ul></div>
+              <div class="mini-list"><h3>Allowed custom kinds</h3><ul id="allowedKinds"></ul></div>
             </div>
           </div>
         </section>
@@ -757,7 +757,7 @@ function adminPage(): string {
       const list = $('allowedKinds');
       list.replaceChildren();
       if (!items.length) {
-        list.append(emptyItem('No kind allowlist'));
+        list.append(emptyItem('No custom kind allowlist'));
         return;
       }
       for (const kind of items) {

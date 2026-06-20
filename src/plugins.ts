@@ -8,11 +8,13 @@ export type { PluginContext, RelayPlugin } from "./plugins/types";
 export class PluginManager {
   readonly enabled: RelayPlugin[];
   readonly disabled: Map<NipId, RelayPlugin>;
+  readonly supportedEventKinds: ReadonlySet<number>;
 
   constructor(plugins: RelayPlugin[], disabledNips: Set<NipId>) {
     const disabled = new Set([...disabledNips].map(normalizeNipId));
     this.enabled = plugins.filter((plugin) => !disabled.has(plugin.nip));
     this.disabled = new Map(plugins.filter((plugin) => disabled.has(plugin.nip)).map((plugin) => [plugin.nip, plugin]));
+    this.supportedEventKinds = new Set(this.enabled.flatMap((plugin) => plugin.eventKinds));
   }
 
   supportedNips(): number[] {
@@ -33,6 +35,7 @@ export class PluginManager {
   }
 
   disabledKindReason(kind: number): string | undefined {
+    if (this.supportedEventKinds.has(kind)) return undefined;
     for (const plugin of this.disabled.values()) {
       if (plugin.eventKinds.includes(kind)) return `unsupported: NIP-${plugin.nip} plugin is disabled`;
     }

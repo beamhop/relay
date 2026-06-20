@@ -60,6 +60,7 @@ Implemented relay behavior includes:
 - NIP-70 protected event publishing rules.
 - NIP-77 `NEG-*` support using valid protocol-v1 ID-list reconciliation frames.
 - NIP-86 relay management JSON-RPC with NIP-98 authorization.
+- Management kind allowlists apply to custom/unknown event kinds; event kinds declared by enabled NIP plugins remain publishable.
 
 NIPs that define client behavior, event payload conventions, or event kinds without relay-side state changes are represented as plugins with declared event kinds and focused structural checks where the NIP requires relay enforcement.
 

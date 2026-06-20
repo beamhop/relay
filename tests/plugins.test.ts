@@ -13,6 +13,15 @@ test("disabled plugins are removed from supported NIPs and reject their declared
   expect(result).toMatchObject({ ok: false, prefix: "unsupported" });
 });
 
+test("disabled plugins do not reject event kinds still covered by enabled plugins", async () => {
+  const config = testConfig({ disabledNips: new Set(["14"]) });
+  const plugins = createPluginManager(config);
+  const note = signedEvent(secretKey(16), { kind: 1, content: "shared kind" });
+
+  const result = await plugins.validateEvent(note, { config, store: new MemoryEventStore(), relayUrls: ["ws://localhost:7777/"] });
+  expect(result).toEqual({ ok: true });
+});
+
 test("NIP-70 protected events require authenticated author", async () => {
   const config = testConfig();
   const plugins = createPluginManager(config);

@@ -63,6 +63,32 @@ test("responds to NIP-77 NEG-OPEN with a protocol v1 NEG-MSG", async () => {
   ws.close();
 });
 
+test("management kind allowlist does not block enabled NIP event kinds", async () => {
+  const config = testConfig();
+  const store = new MemoryEventStore();
+  const management = new ManagementState();
+  management.allowedKinds.add(54321);
+  const server = await startRelay({ config, store, plugins: createPluginManager(config), management });
+  servers.push(server);
+
+  const messages: RelayMessage[] = [];
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/`);
+  ws.addEventListener("message", (event) => messages.push(JSON.parse(String(event.data)) as RelayMessage));
+  await waitFor(() => (ws.readyState === WebSocket.OPEN ? true : undefined), "websocket open");
+
+  const nip04 = signedEvent(secretKey(21), { kind: 4, tags: [["p", "0".repeat(64)]], content: "encrypted direct message probe" });
+  const unknown = signedEvent(secretKey(22), { kind: 54322, content: "unknown kind probe" });
+  ws.send(JSON.stringify(["EVENT", nip04]));
+  ws.send(JSON.stringify(["EVENT", unknown]));
+
+  const nip04Ok = await waitFor(() => messages.find((message) => message[0] === "OK" && message[1] === nip04.id), "NIP-04 OK");
+  expect(nip04Ok).toEqual(["OK", nip04.id, true, ""]);
+
+  const unknownRejected = await waitFor(() => messages.find((message) => message[0] === "OK" && message[1] === unknown.id), "unknown kind OK");
+  expect(unknownRejected).toEqual(["OK", unknown.id, false, "restricted: event kind is not allowlisted"]);
+  ws.close();
+});
+
 test("serves unauthenticated NIP-50 search without exposing gift wraps", async () => {
   const config = testConfig();
   const store = new MemoryEventStore();
