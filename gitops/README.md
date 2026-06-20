@@ -9,7 +9,6 @@ than this folder (ADR-0006, slim-platform split).
 
 | file               | what                                                                    |
 |--------------------|-------------------------------------------------------------------------|
-| `namespace.yaml`   | `relay` namespace                                                        |
 | `configmap.yaml`   | `relay-config` — the relay.yaml settings (postgres backend, host, db)    |
 | `deployment.yaml`  | the `relay` Deployment — single pod, `Recreate`, image pinned to a SHA   |
 | `service.yaml`     | ClusterIP `relay` :80 -> container :7777                                 |
@@ -21,6 +20,7 @@ than this folder (ADR-0006, slim-platform split).
 
 The cross-namespace shared bits live in `platform-gitops`, not here:
 
+- the `relay` namespace,
 - the CNPG `Database` CR (`relay` in `cnpg-system`) and the `relay` DB role,
 - the secrets in the `relay` namespace. The Deployment reads the DB password from the
   `relay-app` Secret (key `DB_PASSWORD`); `user`/`host`/`database` come from `relay-config`.

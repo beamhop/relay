@@ -3,8 +3,9 @@ kind: Kustomization
 
 namespace: relay
 
+# The `relay` namespace, the CNPG Database CR, and the secrets stay platform-managed
+# (platform-gitops platform/relay, slim-split). This tenant owns only the app workload.
 resources:
-  - namespace.yaml
   - configmap.yaml
   - deployment.yaml
   - service.yaml
