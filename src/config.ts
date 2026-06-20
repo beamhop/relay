@@ -228,6 +228,7 @@ function resolvePostgres(args: ReturnType<typeof parseArgs>, filePostgres: Postg
   if (env.RELAY_POSTGRES_DB) result.database = env.RELAY_POSTGRES_DB;
   if (env.RELAY_POSTGRES_USER) result.user = env.RELAY_POSTGRES_USER;
   if (env.RELAY_POSTGRES_PASSWORD) result.password = env.RELAY_POSTGRES_PASSWORD;
+  if (env.RELAY_POSTGRES_SCHEMA) result.schema = env.RELAY_POSTGRES_SCHEMA;
   return result;
 }
 

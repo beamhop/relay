@@ -361,6 +361,29 @@ if (postgresBackend) {
         await cleanup();
       }
     });
+
+    test("isolates its tables in a dedicated schema, ignoring a conflicting public.events", async () => {
+      // Reproduces the cutover bug: the database already held a prior relay's public.events with a
+      // different shape. A schema-scoped store must create + use its own tables and never touch it.
+      await postgresAdmin!`DROP TABLE IF EXISTS public.events CASCADE`;
+      await postgresAdmin!`CREATE TABLE public.events (id text PRIMARY KEY, legacy_pubkey text, kind int)`;
+      await postgresAdmin!`INSERT INTO public.events VALUES ('legacy', 'oldpk', 1)`;
+      const store = new PostgresEventStore(POSTGRES_URL!, "beamhop_test");
+      await store.init();
+      try {
+        const event = signedEvent(secretKey(43), { kind: 1, content: "schema isolation", created_at: 10 });
+        expect((await store.save(event)).stored).toBe(true);
+        expect(idset((await store.query([{ ids: [event.id] }])).events)).toEqual([event.id]);
+        expect(await store.count([{ kinds: [1] }])).toMatchObject({ count: 1 });
+        // The legacy public.events row is untouched and invisible to the store.
+        const [legacy] = await postgresAdmin!`SELECT count(*)::int AS n FROM public.events`;
+        expect(legacy.n).toBe(1);
+      } finally {
+        await store.close();
+        await postgresAdmin!`DROP SCHEMA IF EXISTS beamhop_test CASCADE`;
+        await postgresAdmin!`DROP TABLE IF EXISTS public.events CASCADE`;
+      }
+    });
   });
 }
 

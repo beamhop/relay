@@ -53,6 +53,9 @@ services:
     environment:
       RELAY_STORAGE_BACKEND: postgres
       DATABASE_URL: postgres://postgres:relay@db:5432/relay
+      # Dedicated schema isolates our tables from anything else in the database (mirrors prod,
+      # where the `relay` database still holds the previous relay's public.* tables).
+      RELAY_POSTGRES_SCHEMA: beamhop
       RELAY_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me}
     ports:
       - "7778:7777"

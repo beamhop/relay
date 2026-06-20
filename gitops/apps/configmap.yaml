@@ -21,6 +21,8 @@ data:
         port: 5432
         database: relay
         user: relay
+        # Dedicated schema: the `relay` database still holds the previous relay's public.* tables.
+        schema: beamhop
     relay:
       name: beamhop relay
       description: beamhop nostr relay, hosted at relay.beamhop.com

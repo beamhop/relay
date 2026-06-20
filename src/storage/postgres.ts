@@ -28,18 +28,27 @@ interface EventRow {
  */
 export class PostgresEventStore implements EventStore {
   private readonly sql: Sql;
+  private readonly schema: string | undefined;
 
-  constructor(options: PostgresStoreOptions) {
+  constructor(options: PostgresStoreOptions, schema?: string) {
+    if (schema !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+      throw new Error(`invalid postgres schema name: ${schema}`);
+    }
+    this.schema = schema;
     // Silence NOTICE chatter (e.g. "relation already exists" from idempotent DDL on boot).
-    const quiet = { onnotice: () => {} };
+    // Pin search_path to our schema so unqualified table names never collide with another app's
+    // tables in the same database (e.g. a prior relay's public.events). See init().
+    const base: Record<string, unknown> = { onnotice: () => {} };
+    if (schema) base.connection = { search_path: schema };
     this.sql = typeof options === "string"
-      ? postgres(options, quiet)
-      : postgres({ ...options, ...quiet } as postgres.Options<Record<string, never>>);
+      ? postgres(options, base as postgres.Options<Record<string, never>>)
+      : postgres({ ...options, ...base } as postgres.Options<Record<string, never>>);
   }
 
   async init(): Promise<void> {
+    const schemaDdl = this.schema ? `CREATE SCHEMA IF NOT EXISTS "${this.schema}";\n` : "";
     await this.sql.unsafe(`
-      CREATE TABLE IF NOT EXISTS events (
+      ${schemaDdl}CREATE TABLE IF NOT EXISTS events (
         id text PRIMARY KEY,
         pubkey text NOT NULL,
         created_at bigint NOT NULL,

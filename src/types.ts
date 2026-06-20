@@ -87,6 +87,8 @@ export interface PostgresConnectionConfig {
   password?: string;
   ssl?: boolean | "require" | "prefer" | "verify-full";
   max?: number;
+  /** Dedicated schema for the relay's tables. Isolates from other apps sharing the database. */
+  schema?: string;
 }
 
 export interface StorageConfig {
