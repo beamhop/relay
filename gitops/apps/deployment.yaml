@@ -26,7 +26,7 @@ spec:
         - name: relay
           # Pinned to the short commit SHA built by .github/workflows/image.yml.
           # First push: the promote job rewrites this :latest tag to the real SHA.
-          image: ghcr.io/beamhop/relay:latest
+          image: ghcr.io/beamhop/relay:ed4c733
           command: ["bun", "run", "src/main.ts"]
           args: ["--config", "/etc/relay/relay.yaml"]
           ports:
