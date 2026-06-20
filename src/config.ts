@@ -45,7 +45,7 @@ export async function loadConfig(argv = Bun.argv.slice(2)): Promise<RelayConfig>
 
   const config: RelayConfig = {
     host: args.host ?? fileConfig.host ?? "0.0.0.0",
-    port: args.port ?? fileConfig.port ?? 7777,
+    port: resolvePort(args, fileConfig),
     admin,
     disabledNips,
     relay,
@@ -137,6 +137,13 @@ async function readConfigFile(path: string): Promise<ConfigFile> {
   const file = Bun.file(path);
   if (!(await file.exists())) throw new Error(`config file not found: ${path}`);
   return (await file.json()) as ConfigFile;
+}
+
+function resolvePort(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): number {
+  if (args.port !== undefined) return args.port;
+  if (fileConfig.port !== undefined) return fileConfig.port;
+  if (process.env.PORT !== undefined) return Number.parseInt(process.env.PORT, 10);
+  return 7777;
 }
 
 function resolvePersistence(args: ReturnType<typeof parseArgs>, fileConfig: ConfigFile): string | undefined {

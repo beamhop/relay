@@ -73,6 +73,7 @@ test("serves password-protected admin panel and updates runtime config", async (
   expect(page.status).toBe(200);
   const pageHtml = await page.text();
   expect(pageHtml).toContain("Beamhop Relay Admin");
+  expect(pageHtml).toContain("Live peers");
   const script = pageHtml.match(/<script>([\s\S]*)<\/script>/)?.[1];
   expect(script).toBeString();
   expect(() => new Function(script as string)).not.toThrow();
@@ -100,7 +101,18 @@ test("serves password-protected admin panel and updates runtime config", async (
     headers: { cookie: cookie as string },
   }).then((response) => response.json());
   expect(status.stats.activeConnections).toBe(0);
+  expect(status.stats.liveConnectedPeers).toBe(0);
   expect(status.plugins.supportedNips).toContain(50);
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/`);
+  await waitFor(() => (ws.readyState === WebSocket.OPEN ? true : undefined), "admin peer websocket open");
+  const liveStatus = await fetch(`http://127.0.0.1:${server.port}/admin/api/status`, {
+    headers: { cookie: cookie as string },
+  }).then((response) => response.json());
+  expect(liveStatus.stats.activeConnections).toBe(1);
+  expect(liveStatus.stats.liveConnectedPeers).toBe(1);
+  expect(liveStatus.connections).toHaveLength(1);
+  ws.close();
 
   const updated = await fetch(`http://127.0.0.1:${server.port}/admin/api/config`, {
     method: "PATCH",

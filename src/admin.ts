@@ -136,6 +136,7 @@ async function adminStatus(context: AdminRequestContext) {
       events: stats.events,
       recent: stats.recent,
       storedEvents: storedEvents.count,
+      liveConnectedPeers: connectionList.length,
       activeConnections: connectionList.length,
       authenticatedConnections,
       activeSubscriptions,
@@ -514,7 +515,7 @@ function adminPage(): string {
         <h2>Relay Activity</h2>
         <div class="panel-body">
           <div class="metrics">
-            <div class="metric"><span>Connections</span><strong id="statConnections">0</strong></div>
+            <div class="metric"><span>Live peers</span><strong id="statConnections">0</strong></div>
             <div class="metric"><span>Subscriptions</span><strong id="statSubscriptions">0</strong></div>
             <div class="metric"><span>Stored events</span><strong id="statStored">0</strong></div>
             <div class="metric"><span>Accepted</span><strong id="statAccepted">0</strong></div>
@@ -684,7 +685,7 @@ function adminPage(): string {
       $('relayTitle').textContent = status.config.relay.name || 'Beamhop Relay';
       $('relaySubtitle').textContent = 'ws://' + status.config.host + ':' + status.config.port + '/';
       $('pollStatus').textContent = 'Live';
-      $('statConnections').textContent = String(status.stats.activeConnections);
+      $('statConnections').textContent = String(status.stats.liveConnectedPeers ?? status.stats.activeConnections);
       $('statSubscriptions').textContent = String(status.stats.activeSubscriptions);
       $('statStored').textContent = String(status.stats.storedEvents);
       $('statAccepted').textContent = String(status.stats.events.accepted);
