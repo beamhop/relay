@@ -18,7 +18,7 @@ services:
   relay:
     build: .
     image: beamhop-relay
-    command: ["bun", "run", "src/main.ts", "--web"]
+    command: ["--web"]
     environment:
       RELAY_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me}
     ports:
@@ -46,7 +46,7 @@ services:
     profiles: ["postgres"]
     build: .
     image: beamhop-relay
-    command: ["bun", "run", "src/main.ts", "--web"]
+    command: ["--web"]
     depends_on:
       db:
         condition: service_healthy

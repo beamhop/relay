@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import postgres from "postgres";
+import { SQL } from "bun";
 import { MemoryEventStore, SqliteEventStore } from "../src/storage";
 import { PostgresEventStore } from "../src/storage/postgres";
 import type { EventStore } from "../src/storage";
@@ -14,10 +14,10 @@ interface Backend {
 }
 
 const POSTGRES_URL = process.env.RELAY_TEST_POSTGRES_URL;
-const postgresAdmin = POSTGRES_URL ? postgres(POSTGRES_URL) : undefined;
+const postgresAdmin = POSTGRES_URL ? new SQL(POSTGRES_URL) : undefined;
 
 afterAll(async () => {
-  if (postgresAdmin) await postgresAdmin.end({ timeout: 5 });
+  if (postgresAdmin) await postgresAdmin.close({ timeout: 5 });
 });
 
 async function deleteIfExists(path: string): Promise<void> {

@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import { SQL, type TransactionSQL } from "bun";
 import { computeHll, isHllEligible } from "../filter";
 import { sortEventsForRelay } from "../filter";
 import { addressForEvent, expirationTimestamp, isEphemeralKind, isExpired, replaceableKeyForEvent, shouldReplace, tagValues } from "../kinds";
@@ -6,8 +6,8 @@ import { buildPostgresTsQuery, searchVectorText } from "../search";
 import type { CountResult, NostrEvent, NostrFilter, QueryResult, StoreResult } from "../types";
 import type { EventStore } from "./types";
 
-type Sql = postgres.Sql;
-type TxSql = postgres.TransactionSql<Record<string, never>>;
+type Sql = InstanceType<typeof SQL>;
+type TxSql = TransactionSQL;
 
 export type PostgresStoreOptions = string | Record<string, unknown>;
 
@@ -18,7 +18,7 @@ interface EventRow {
   kind: number;
   content: string;
   sig: string;
-  tags: string[][];
+  tags: string[][] | string;
 }
 
 /**
@@ -35,14 +35,11 @@ export class PostgresEventStore implements EventStore {
       throw new Error(`invalid postgres schema name: ${schema}`);
     }
     this.schema = schema;
-    // Silence NOTICE chatter (e.g. "relation already exists" from idempotent DDL on boot).
     // Pin search_path to our schema so unqualified table names never collide with another app's
     // tables in the same database (e.g. a prior relay's public.events). See init().
-    const base: Record<string, unknown> = { onnotice: () => {} };
-    if (schema) base.connection = { search_path: schema };
     this.sql = typeof options === "string"
-      ? postgres(options, base as postgres.Options<Record<string, never>>)
-      : postgres({ ...options, ...base } as postgres.Options<Record<string, never>>);
+      ? new SQL(schema ? postgresUrlWithSearchPath(options, schema) : options)
+      : new SQL(postgresOptionsWithSchema(options, schema));
   }
 
   async init(): Promise<void> {
@@ -90,11 +87,11 @@ export class PostgresEventStore implements EventStore {
         pubkey text PRIMARY KEY,
         until bigint NOT NULL
       );
-    `);
+    `).simple();
   }
 
   async close(): Promise<void> {
-    await this.sql.end({ timeout: 5 });
+    await this.sql.close({ timeout: 5 });
   }
 
   async save(event: NostrEvent): Promise<StoreResult> {
@@ -164,7 +161,7 @@ export class PostgresEventStore implements EventStore {
 
       const rows = await this.sql.unsafe<EventRow[]>(
         `SELECT e.id, e.pubkey, e.created_at, e.kind, e.content, e.sig, e.tags FROM events e WHERE ${where} ORDER BY ${order} LIMIT ${Math.floor(fetch)}`,
-        params as never[],
+        params,
       );
 
       if (rows.length > limit) complete = false;
@@ -183,7 +180,7 @@ export class PostgresEventStore implements EventStore {
     const where = clauses.length > 0 ? clauses.join(" OR ") : "TRUE";
     const [row] = await this.sql.unsafe<{ count: string }[]>(
       `SELECT count(*)::bigint AS count FROM events e WHERE ${where}`,
-      params as never[],
+      params,
     );
     const result: CountResult = { count: Number(row?.count ?? 0) };
 
@@ -192,7 +189,7 @@ export class PostgresEventStore implements EventStore {
       const hllWhere = buildWhere(filters[0] as NostrFilter, hllParams, now);
       const pubkeys = await this.sql.unsafe<{ pubkey: string }[]>(
         `SELECT DISTINCT e.pubkey FROM events e WHERE ${hllWhere}`,
-        hllParams as never[],
+        hllParams,
       );
       result.hll = computeHll(pubkeys, filters[0] as NostrFilter);
     }
@@ -304,7 +301,7 @@ export class PostgresEventStore implements EventStore {
       INSERT INTO events (id, pubkey, created_at, kind, content, sig, tags, address, expires_at, search)
       VALUES (
         ${event.id}, ${event.pubkey}, ${event.created_at}, ${event.kind}, ${event.content}, ${event.sig},
-        ${sql.json(event.tags)}, ${address}, ${expiresAt}, to_tsvector('simple', ${vectorText})
+        ${JSON.stringify(event.tags)}::jsonb, ${address}, ${expiresAt}, to_tsvector('simple', ${vectorText})
       )
     `;
 
@@ -323,7 +320,7 @@ function rowToEvent(row: EventRow): NostrEvent {
     pubkey: row.pubkey,
     created_at: Number(row.created_at),
     kind: row.kind,
-    tags: row.tags,
+    tags: Array.isArray(row.tags) ? row.tags : JSON.parse(row.tags),
     content: row.content,
     sig: row.sig,
   };
@@ -337,9 +334,9 @@ function pushParam(params: unknown[], value: unknown): string {
 function buildWhere(filter: NostrFilter, params: unknown[], nowSeconds: number): string {
   const clauses: string[] = ["TRUE"];
 
-  if (Array.isArray(filter.ids)) clauses.push(`e.id = ANY(${pushParam(params, filter.ids)})`);
-  if (Array.isArray(filter.authors)) clauses.push(`e.pubkey = ANY(${pushParam(params, filter.authors)})`);
-  if (Array.isArray(filter.kinds)) clauses.push(`e.kind = ANY(${pushParam(params, filter.kinds)})`);
+  if (Array.isArray(filter.ids)) clauses.push(buildInClause("e.id", filter.ids, params));
+  if (Array.isArray(filter.authors)) clauses.push(buildInClause("e.pubkey", filter.authors, params));
+  if (Array.isArray(filter.kinds)) clauses.push(buildInClause("e.kind", filter.kinds, params));
   if (typeof filter.since === "number") clauses.push(`e.created_at >= ${pushParam(params, filter.since)}`);
   if (typeof filter.until === "number") clauses.push(`e.created_at <= ${pushParam(params, filter.until)}`);
 
@@ -355,7 +352,7 @@ function buildWhere(filter: NostrFilter, params: unknown[], nowSeconds: number):
       continue;
     }
     clauses.push(
-      `EXISTS (SELECT 1 FROM event_tags t WHERE t.event_id = e.id AND t.tag = ${pushParam(params, name)} AND t.value = ANY(${pushParam(params, values)}))`,
+      `EXISTS (SELECT 1 FROM event_tags t WHERE t.event_id = e.id AND t.tag = ${pushParam(params, name)} AND ${buildInClause("t.value", values, params)})`,
     );
   }
 
@@ -366,6 +363,35 @@ function buildWhere(filter: NostrFilter, params: unknown[], nowSeconds: number):
   }
 
   return clauses.join(" AND ");
+}
+
+function buildInClause(column: string, values: unknown[], params: unknown[]): string {
+  if (values.length === 0) return "FALSE";
+  return `${column} IN (${values.map((value) => pushParam(params, value)).join(", ")})`;
+}
+
+function postgresOptionsWithSchema(options: Record<string, unknown>, schema: string | undefined): SQL.Options {
+  const result: Record<string, unknown> = { adapter: "postgres", ...options };
+  if (schema) {
+    const connection = typeof options.connection === "object" && options.connection !== null && !Array.isArray(options.connection)
+      ? options.connection as Record<string, string | boolean | number>
+      : {};
+    result.connection = { ...connection, search_path: schema };
+  }
+  return result as SQL.Options;
+}
+
+function postgresUrlWithSearchPath(connectionString: string, schema: string): string {
+  const options = `-c search_path=${schema}`;
+  try {
+    const url = new URL(connectionString);
+    const existingOptions = url.searchParams.get("options");
+    url.searchParams.set("options", existingOptions ? `${existingOptions} ${options}` : options);
+    return url.toString();
+  } catch {
+    const separator = connectionString.includes("?") ? "&" : "?";
+    return `${connectionString}${separator}options=${encodeURIComponent(options)}`;
+  }
 }
 
 function parseAddress(address: string): { kind: number; pubkey: string; d: string } | undefined {

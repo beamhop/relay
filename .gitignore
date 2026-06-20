@@ -1,13 +1,42 @@
+# dependencies
 node_modules/
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-.DS_Store
+
+# build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# local environment
+.env
+.env.*
+!.env.example
 
 # direnv / flake dev shell
 .direnv/
-.env
-.env.local
+
+# runtime data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# logs and process files
+*.log
+*.pid
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+bun-error.log
 
 # test scratch
 tests/tmp-*
+tmp/
+temp/
+.tmp/
+
+# OS/editor noise
+.DS_Store

@@ -14,7 +14,7 @@ Ordered by dependency. #1 is the critical path and highest risk.
      addressable / ephemeral handling per the memory store's semantics.
    - NIP-50 search via Postgres full-text (`tsvector` / `pg_trgm`), replacing the SQLite FTS5
      path. NIP-45 COUNT must work.
-   - Driver: `postgres` (porsager), production-only dependency.
+   - Driver: Bun native SQL, so the production path can compile into the standalone binary.
    - **Reuse `tests/storage.test.ts`**: parametrize it so the same suite runs against memory,
      sqlite, and postgres (skip postgres when no DB env). This is the correctness backstop.
 
@@ -31,8 +31,8 @@ Ordered by dependency. #1 is the critical path and highest risk.
 4. **Flake + tooling** — ADR-0005: `flake.nix`, `.envrc` (`use flake`), committed `flake.lock`,
    `bin/relay-*` scripts.
 
-5. **Dockerfile + docker-compose** — ADR-0005: oven/bun multi-stage; compose with a `postgres`
-   service + profiles so the relay also runs standalone in-memory.
+5. **Dockerfile + docker-compose** — ADR-0005: Bun compile multi-stage, scratch runtime image,
+   and compose with a `postgres` service + profiles so the relay also runs standalone in-memory.
 
 6. **In-repo gitops** — ADR-0006: `gitops/apps/` (namespace, Deployment, Service, Ingress,
    Certificate, settings ConfigMap, kustomization) mirroring music-manager, plus

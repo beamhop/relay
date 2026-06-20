@@ -29,7 +29,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 async function createStore(): Promise<EventStore> {
   switch (config.storage.backend) {
     case "postgres": {
-      // Lazily imported so the production-only postgres driver never loads on the standalone path (ADR-0001).
+      // Keep the production-only Postgres backend off the standalone memory/sqlite paths (ADR-0001).
       const { PostgresEventStore } = await import("./storage/postgres");
       return new PostgresEventStore(postgresOptions(config.storage.postgres), config.storage.postgres?.schema);
     }

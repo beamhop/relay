@@ -21,14 +21,16 @@ standalone story (ADR-0001) for anyone who just wants to run it.
 - Flake shell hooks use srid/flake-root's `$FLAKE_ROOT`, never `$PWD`; no side effects on shell
   entry.
 
-**Dockerfile** — `oven/bun` multi-stage, mirroring the music-manager tenant:
+**Dockerfile** — single-executable multi-stage image:
 
-- Copy manifests first (`package.json`, `bun.lock`), `bun install --frozen-lockfile`, then
-  source; run the entrypoint directly.
-- `linux/amd64` only (matches the Hetzner amd64 node).
+- Build with `oven/bun`: copy manifests first, `bun install --frozen-lockfile`, copy source,
+  run `bun run typecheck`, then `bun build --compile` for a musl Linux target.
+- Final runtime is `scratch`: copy only the compiled `/beamhop-relay` executable, the musl loader,
+  `libgcc`, `libstdc++`, and the CA bundle from Alpine. No Bun runtime, no `node_modules`, no
+  TypeScript source.
+- CI builds `linux/amd64` only (matches the Hetzner amd64 node). The Dockerfile also maps
+  `TARGETARCH=arm64` to Bun's arm64 musl target for local Docker builds.
 - Keep `BUN_VERSION` synced with the local `bun.lock`.
-- A `bun build --compile` single-binary image was considered and **deferred**: the bun image
-  is simpler and consistent with the other tenants; revisit if a standalone binary is wanted.
 
 **docker-compose** — local testing of the production path:
 
@@ -40,8 +42,9 @@ standalone story (ADR-0001) for anyone who just wants to run it.
 ## Consequences
 
 - ✅ Reproducible dev shell; consistent tooling ergonomics with other repos.
-- ✅ Image build matches the existing tenant pipeline (ADR-0006), so CI/CD is a known quantity.
+- ✅ Image build still matches the existing tenant pipeline (ADR-0006), but ships a much smaller
+  runtime image.
 - ✅ Contributors can spin up Postgres mode locally without touching the cluster.
+- ✅ The production image has one application executable and no package-manager runtime surface.
 - ⚠️ Two run paths to keep working (standalone vs compose-with-Postgres); both must be covered
   in the README and smoke-tested.
-- ➡️ Single-binary distribution remains an open option, not a commitment.

@@ -12,14 +12,14 @@ Before building, read in this order:
 3. `docs/HUMAN-TODO.md` — the (small) human-only items.
 4. `docs/GLOSSARY.md` — terms.
 
-Current state (2026-06-20): decisions locked via a grill; **nothing implemented yet**. The
-next work is Phase 1 per `docs/PLAN.md`.
+Current state (2026-06-21): Phase 1 is implemented and deployed. The current image is a Bun
+standalone executable built in Docker and run from a scratch runtime image.
 
 ## The one invariant
 
 There are two **operating modes** (ADR-0001). **Never break standalone**: with no config and
 no dependencies, `bun run start` must bring the relay up in-memory. Postgres/production is
-strictly additive and its dependency must never load on the standalone path.
+strictly additive and must never break the standalone path.
 
 ## Architecture in one breath
 

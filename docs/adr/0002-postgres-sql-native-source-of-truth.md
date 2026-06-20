@@ -35,10 +35,11 @@ RAM mirror, no snapshot dumps.
 - Deletions / tombstones / vanish requests become real rows and SQL operations, not snapshot
   rewrites.
 
-**Driver:** the `postgres` (porsager) npm package. Chosen over `Bun.sql` because it has
-confirmed `LISTEN`/`NOTIFY` support, which ADR-0003 needs for the HA fan-out option. This is a
-**production-only** dependency; the standalone path (`memory` / `bun:sqlite`) never imports it,
-preserving the zero-dependency default (ADR-0001).
+**Driver:** Bun's native SQL client (`SQL` from `bun`). This keeps Postgres access inside the
+Bun runtime and removes the npm Postgres driver from the production dependency graph, which is
+required for the single-executable Docker distribution. HA fan-out remains a later ADR-0003
+phase; if it needs Postgres `LISTEN`/`NOTIFY`, that support must be revalidated against the
+current Bun SQL API before implementation.
 
 The existing `memory` and `sqlite` stores are left as-is.
 
@@ -49,5 +50,5 @@ The existing `memory` and `sqlite` stores are left as-is.
 - ✅ Unblocks HA: pods can share one Postgres without clobbering each other.
 - ⚠️ The single largest piece of new code in this effort; correctness of the SQL mapping for
   every supported NIP filter must be covered by tests, reusing the existing storage test suite.
-- ⚠️ One added production dependency (the Postgres driver).
+- ✅ No added production Postgres driver dependency beyond Bun itself.
 - ➡️ First production cutover uses this backend directly (no SQLite-on-PVC interim step).

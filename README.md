@@ -24,8 +24,7 @@ flag, or `RELAY_STORAGE_BACKEND`:
 - `sqlite`: durable single-file persistence (`--persistence [path]`).
 - `postgres`: SQL-native, the production backend (ADR-0002). Connection comes from
   `--postgres-url`, `RELAY_POSTGRES_URL` / `DATABASE_URL`, or `storage.postgres` in the config
-  file. The `postgres` driver is a production-only dependency and never loads on the standalone
-  path.
+  file. Postgres access uses Bun's native SQL client.
 
 ## Configuration
 
@@ -59,6 +58,9 @@ docker compose --profile postgres up db relay-db   # relay on host port 7778
 Both compose relays enable the admin panel at `/admin` (standalone `:7777`, postgres `:7778`).
 The password defaults to `change-me`; override it with `RELAY_ADMIN_PASSWORD` (e.g. in a `.env`
 file next to the compose file).
+
+The Docker image is built as a standalone Bun executable in a multi-stage builder and runs from
+a scratch runtime image. It does not include Bun, `node_modules`, or the TypeScript source.
 
 ## Dev shell
 
@@ -134,4 +136,6 @@ NIPs that define client behavior, event payload conventions, or event kinds with
 ```bash
 bun run typecheck
 bun test
+bun run build:binary:mac      # host-native proof on macOS
+bun run build:binary:linux    # linux/amd64 musl binary used by Docker/CI
 ```

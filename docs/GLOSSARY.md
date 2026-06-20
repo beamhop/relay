@@ -12,7 +12,7 @@ Default operating mode. No external dependencies; storage is `memory` or `bun:sq
 
 ### Production mode
 Operating mode backed by Postgres as the source of truth (ADR-0002), with a path to
-multi-instance HA (ADR-0003). Pulls in a production-only Postgres driver dependency.
+multi-instance HA (ADR-0003). Uses Bun's native SQL client for database access.
 
 ### EventStore
 The storage interface every backend implements (`src/storage/types.ts`): save, query, count,
