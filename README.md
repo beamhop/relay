@@ -2,6 +2,10 @@
 
 A Nostr relay written in TypeScript for Bun.
 
+> Design decisions and the build plan live in [`docs/`](docs/): see
+> [`docs/adr/`](docs/adr/README.md), [`docs/PLAN.md`](docs/PLAN.md), and
+> [`docs/HUMAN-TODO.md`](docs/HUMAN-TODO.md).
+
 By default the relay stores events in memory only. Run it with `--persistence` or `-p` to use SQLite persistence.
 
 ```bash
