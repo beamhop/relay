@@ -56,6 +56,10 @@ docker compose up relay
 docker compose --profile postgres up db relay-db   # relay on host port 7778
 ```
 
+Both compose relays enable the admin panel at `/admin` (standalone `:7777`, postgres `:7778`).
+The password defaults to `change-me`; override it with `RELAY_ADMIN_PASSWORD` (e.g. in a `.env`
+file next to the compose file).
+
 ## Dev shell
 
 A Nix flake dev shell provides bun, node, postgresql, and docker-compose. With direnv:

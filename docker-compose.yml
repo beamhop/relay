@@ -8,11 +8,19 @@
 #
 # The standalone `relay` service has no profile and no dependencies; the Postgres path lives
 # behind the `postgres` profile so the default invocation stays dependency-free.
+#
+# Both relays enable the password-protected admin panel (--web + RELAY_PASSWORD). The password
+# defaults to "change-me"; override it with RELAY_ADMIN_PASSWORD (e.g. in a .env file).
+#   standalone admin: http://localhost:7777/admin
+#   postgres   admin: http://localhost:7778/admin
 
 services:
   relay:
     build: .
     image: beamhop-relay
+    command: ["bun", "run", "src/main.ts", "--web"]
+    environment:
+      RELAY_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me}
     ports:
       - "7777:7777"
     # No storage config -> memory backend (the one invariant: zero-dependency standalone).
@@ -38,12 +46,14 @@ services:
     profiles: ["postgres"]
     build: .
     image: beamhop-relay
+    command: ["bun", "run", "src/main.ts", "--web"]
     depends_on:
       db:
         condition: service_healthy
     environment:
       RELAY_STORAGE_BACKEND: postgres
       DATABASE_URL: postgres://postgres:relay@db:5432/relay
+      RELAY_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me}
     ports:
       - "7778:7777"
 
