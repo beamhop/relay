@@ -84,6 +84,15 @@ export class MemoryEventStore implements EventStore {
     return [...this.events.values()];
   }
 
+  async clear(): Promise<void> {
+    this.events.clear();
+    this.replaceableIndex.clear();
+    this.deletedEvents.clear();
+    this.deletedAddresses.clear();
+    this.vanished.clear();
+    this.searchIndex.clear();
+  }
+
   async deleteEvent(id: string): Promise<boolean> {
     const existing = this.events.get(id);
     if (!existing) return false;

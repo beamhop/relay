@@ -217,6 +217,29 @@ for (const backend of backends) {
       }
     });
 
+    test("clear() erases stored events and moderation tombstones", async () => {
+      const { store, cleanup } = await backend.fresh();
+      try {
+        const sk = secretKey(30);
+        const note = signedEvent(sk, { kind: 1, content: "wipe me", created_at: 10 });
+        const deletion = signedEvent(sk, { kind: 5, tags: [["e", note.id], ["k", "1"]], created_at: 20 });
+
+        await store.save(note);
+        await store.applyDeletionRequest(deletion);
+        expect(await store.has(note.id)).toBe(false);
+
+        await store.clear();
+
+        expect(await store.count([{}])).toMatchObject({ count: 0 });
+        expect(await store.allEvents()).toEqual([]);
+        // The deletion tombstone is gone, so the original note is acceptable again.
+        const reinserted = await store.save(note);
+        expect(reinserted.stored).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
     test("excludes expired events from queries", async () => {
       const { store, cleanup } = await backend.fresh();
       try {

@@ -109,6 +109,11 @@ export class SqliteEventStore implements EventStore {
     return this.memory.allEvents();
   }
 
+  async clear(): Promise<void> {
+    await this.memory.clear();
+    this.syncSnapshot();
+  }
+
   async deleteEvent(id: string, reason?: string): Promise<boolean> {
     const deleted = await this.memory.deleteEvent(id);
     if (deleted) this.syncSnapshot();

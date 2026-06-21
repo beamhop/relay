@@ -55,6 +55,12 @@ export async function handleAdminRequest(request: Request, state: AdminState, co
       const params = Array.isArray(body.params) ? body.params : [];
       return context.runtime.management.handleRpc(method ? { method, params } : { params }, context.runtime.config);
     }
+    if (url.pathname === "/admin/api/reset" && request.method === "POST") {
+      const body = await readJsonObject(request);
+      if (optionalString(body.confirm) !== "RESET") throw new Error('confirm must be the string "RESET"');
+      await context.runtime.store.clear();
+      return jsonResponse(await adminStatus(context));
+    }
 
     return jsonResponse({ error: "not found" }, 404);
   } catch (error) {
@@ -617,6 +623,20 @@ function adminPage(): string {
         </section>
 
         <section class="panel span-12">
+          <h2>Danger Zone</h2>
+          <div class="panel-body">
+            <p class="muted" style="margin: 0">Erase every stored event and reset moderation tombstones (deleted events, deleted addresses, vanish requests). This wipes the database and cannot be undone.</p>
+            <form id="resetForm" class="form-grid">
+              <label class="wide">Type <span class="mono">RESET</span> to confirm<input id="resetConfirm" autocomplete="off" placeholder="RESET"></label>
+              <div class="wide actions">
+                <button data-action="resetdatabase" class="danger" type="button">Erase and reset database</button>
+                <span id="resetMessage" class="muted"></span>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel span-12">
           <h2>Recent Activity</h2>
           <div class="panel-body">
             <div class="table-wrap">
@@ -890,9 +910,32 @@ function adminPage(): string {
       }
     }
 
+    async function resetDatabase() {
+      const confirm = $('resetConfirm').value.trim();
+      if (confirm !== 'RESET') {
+        $('resetMessage').className = 'error';
+        $('resetMessage').textContent = 'Type RESET to confirm';
+        return;
+      }
+      $('resetMessage').className = 'muted';
+      $('resetMessage').textContent = 'Erasing';
+      try {
+        const status = await api('/api/reset', { method: 'POST', body: JSON.stringify({ confirm }) });
+        app.status = status;
+        renderStatus(status);
+        $('resetConfirm').value = '';
+        $('resetMessage').className = 'ok';
+        $('resetMessage').textContent = 'Database erased';
+      } catch (error) {
+        $('resetMessage').className = 'error';
+        $('resetMessage').textContent = error.message;
+      }
+    }
+
     document.addEventListener('click', (event) => {
       const target = event.target.closest('button');
       if (!target) return;
+      if (target.dataset.action === 'resetdatabase') { resetDatabase(); return; }
       if (target.dataset.rpc) {
         const value = target.dataset.value;
         const parsed = target.dataset.rpc.includes('kind') ? Number(value) : value;

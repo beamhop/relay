@@ -9,6 +9,7 @@ export interface EventStore {
   query(filters: NostrFilter[]): Promise<QueryResult>;
   count(filters: NostrFilter[]): Promise<CountResult>;
   allEvents(): Promise<NostrEvent[]>;
+  clear(): Promise<void>;
   deleteEvent(id: string, reason?: string): Promise<boolean>;
   deleteEventsByPubkey(pubkey: string, until: number): Promise<number>;
   applyDeletionRequest(event: NostrEvent): Promise<number>;

@@ -201,6 +201,14 @@ export class PostgresEventStore implements EventStore {
     return rows.map(rowToEvent);
   }
 
+  async clear(): Promise<void> {
+    // RESTART IDENTITY is harmless here (no sequences) but keeps intent explicit; event_tags is
+    // listed alongside events because the FK makes a bare TRUNCATE of events alone fail.
+    await this.sql.unsafe(
+      "TRUNCATE TABLE events, event_tags, deleted_events, deleted_addresses, vanished_pubkeys RESTART IDENTITY",
+    ).simple();
+  }
+
   async deleteEvent(id: string): Promise<boolean> {
     const rows = await this.sql`DELETE FROM events WHERE id = ${id} RETURNING id`;
     return rows.length > 0;
