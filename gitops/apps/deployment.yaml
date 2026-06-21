@@ -26,7 +26,7 @@ spec:
         - name: relay
           # Pinned to the short commit SHA built by .github/workflows/image.yml.
           # First push: the promote job rewrites this :latest tag to the real SHA.
-          image: ghcr.io/beamhop/relay:ab542e4
+          image: ghcr.io/beamhop/relay:fd19f53
           command: ["/beamhop-relay"]
           # --web exposes the password-protected admin panel at /admin (served over the public
           # ingress); the password comes from RELAY_PASSWORD below.
