@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Insights runtime: flush loop, live snapshot, series queries, exporters. */
 import type { Kernel, RelayId, StoreStats } from '@beamhop/core';
-import { Analytics, type AnalyticsReport } from './analytics.ts';
+import { Analytics, type AnalyticsReport, dayOf } from './analytics.ts';
 import { NODE, wireCollector } from './collector.ts';
 import { type InsightsConfig, InsightsConfigSchema } from './config.ts';
 import { type HealthReport, builtinChecks, runChecks } from './health.ts';
@@ -9,7 +9,7 @@ import { METRICS, MetricsRegistry } from './metrics.ts';
 import { type FetchLike, buildOtlpPayload, exportOtlp } from './otlp.ts';
 import { formatPrometheus } from './prometheus.ts';
 import { type DiskProvider, readDisk } from './providers.ts';
-import { type Agg, Rollups, defaultAgg } from './rollup.ts';
+import { type Agg, Rollups, STATE_COLLECTION, defaultAgg } from './rollup.ts';
 
 export interface InsightsModuleOptions {
   /** Free-disk provider (the runtime may instead provide `kernel.use('runtime.disk')`). */
@@ -65,6 +65,12 @@ export interface InsightsService {
   flush(): Promise<void>;
   /** Run rollups + retention now. */
   maintain(): Promise<void>;
+  /**
+   * Daily availability for the public status page: share of flush windows in
+   * which the relay was accepting connections (missing samples = down).
+   * Days before monitoring started are omitted. Oldest first.
+   */
+  uptime(relayId: RelayId, days: number): Promise<Array<{ day: string; upRatio: number }>>;
   readonly registry: MetricsRegistry;
 }
 
@@ -148,6 +154,10 @@ export class InsightsRuntime implements InsightsService {
       this.lastSlow = now;
       await this.slowGauges(relays);
     }
+    const up = !!this.kernel.ws && this.kernel.isEnabled('relay');
+    for (const id of relays)
+      this.registry.set(METRICS.relayUp, { relay: id }, up && this.kernel.relay(id) ? 1 : 0);
+    if (!this.firstSample) await this.markFirstSample(now);
     const points = this.registry.flush(now);
     if (points.length) await this.kernel.ports.metrics.record(points);
     const snap = this.live();
@@ -292,6 +302,67 @@ export class InsightsRuntime implements InsightsService {
       },
     });
     await exportOtlp(fetchFn, otlp.endpoint, otlp.headers, payload);
+  }
+
+  private firstSample = 0;
+
+  private async markFirstSample(now: number): Promise<void> {
+    const docs = this.kernel.ports.docs;
+    const prev = await docs.get<{ t: number }>(STATE_COLLECTION, 'firstSample');
+    this.firstSample = prev?.t ?? now;
+    if (!prev) await docs.put(STATE_COLLECTION, 'firstSample', { t: now });
+  }
+
+  async uptime(relayId: RelayId, days: number): Promise<Array<{ day: string; upRatio: number }>> {
+    const now = this.now();
+    const cfg = this.config();
+    if (!this.firstSample) {
+      const prev = await this.kernel.ports.docs.get<{ t: number }>(STATE_COLLECTION, 'firstSample');
+      if (!prev) return [];
+      this.firstSample = prev.t;
+    }
+    const step = cfg.flushSeconds;
+    const rawCutoff = now - cfg.retention.rawHours * 3600;
+    const today = Math.floor(now / 86400) * 86400;
+    const out: Array<{ day: string; upRatio: number }> = [];
+    const n = Math.max(1, Math.min(400, Math.floor(days)));
+    for (let i = n - 1; i >= 0; i--) {
+      const start = today - i * 86400;
+      const end = Math.min(start + 86400, now);
+      const from = Math.max(start, this.firstSample);
+      if (end <= from) continue;
+      const expected = Math.max(1, Math.floor((end - from) / step));
+      // Hours older than raw retention come from hourly rollups; the rest from raw points.
+      const rawFrom = Math.min(end, Math.max(from, Math.ceil(rawCutoff / 3600) * 3600));
+      let ups = 0;
+      if (rawFrom > from) {
+        const rolled = await this.rollups.read({
+          metric: METRICS.relayUp.id,
+          relayId,
+          from,
+          to: rawFrom - 1,
+          stepSeconds: 86400 * 2,
+          agg: 'sum',
+        });
+        ups += rolled.reduce((a, p) => a + p.v, 0);
+      }
+      if (end > rawFrom) {
+        const pts = await this.kernel.ports.metrics.range({
+          metric: METRICS.relayUp.id,
+          labels: { relay: relayId },
+          from: rawFrom,
+          to: end,
+          stepSeconds: 86400 * 2,
+          agg: 'sum',
+        });
+        ups += pts.reduce((a, p) => a + p.v, 0);
+      }
+      out.push({
+        day: dayOf(start),
+        upRatio: Math.round(Math.min(1, ups / expected) * 10000) / 10000,
+      });
+    }
+    return out;
   }
 
   async maintain(): Promise<void> {

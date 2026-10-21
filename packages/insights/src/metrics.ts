@@ -72,6 +72,11 @@ export const METRICS = {
   diskFree: { id: 'disk.free', type: 'gauge', help: 'Free disk space', unit: 'bytes' },
   diskTotal: { id: 'disk.total', type: 'gauge', help: 'Total disk space', unit: 'bytes' },
   healthScore: { id: 'health.score', type: 'gauge', help: 'Overall health score (0-100)' },
+  relayUp: {
+    id: 'relay.up',
+    type: 'gauge',
+    help: 'Relay accepting connections (1) or not (0), sampled every flush',
+  },
 } as const satisfies Record<string, MetricDef>;
 
 export const METRIC_DEFS: Map<string, MetricDef> = new Map(

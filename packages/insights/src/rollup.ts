@@ -36,6 +36,7 @@ export const ROLLUP_METRICS: Array<{ metric: string; aggs: Agg[] }> = [
     'blobs.uploaded_bytes',
     'blobs.deleted',
     'errors',
+    'relay.up',
   ].map((metric) => ({ metric, aggs: ['sum'] as Agg[] })),
   ...[
     'connections',
@@ -122,7 +123,8 @@ export class Rollups {
     agg: Agg;
   }): Promise<Array<{ t: number; v: number }>> {
     const step = Math.max(3600, Math.ceil(q.stepSeconds / 3600) * 3600);
-    const storedAgg: Agg = defaultAgg(q.metric) === 'sum' ? 'sum' : q.agg === 'sum' ? 'avg' : q.agg;
+    const kept = ROLLUP_METRICS.find((m) => m.metric === q.metric)?.aggs ?? ['avg'];
+    const storedAgg: Agg = kept.includes(q.agg) ? q.agg : (kept[0] ?? 'avg');
     const buckets = new Map<number, number[]>();
     for (let d = Math.floor(q.from / 86400) * 86400; d <= q.to; d += 86400) {
       const doc = await this.docs.get<RollupDoc>(ROLLUP_COLLECTION, `${q.relayId}:${dayOf(d)}`);

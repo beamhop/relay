@@ -398,6 +398,36 @@ describe('rollups, retention, OTLP, actions', () => {
   });
 });
 
+describe('uptime', () => {
+  test('daily up ratio from relay.up samples; gaps count as down; rollups for old days', async () => {
+    const { ports, rt, advance } = await setup({ insights: { retention: { rawHours: 2 } } });
+    expect(await rt.uptime('main', 7)).toEqual([]);
+    ports.clock.ms = (Math.floor(ports.clock.ms / 86_400_000) * 86_400 + 6 * 3600) * 1000;
+    await rt.flush();
+    await advance(3600); // up for an hour
+    await rt.maintain();
+    ports.clock.advance(3600); // node down for an hour (no samples)
+    await rt.maintain();
+    await advance(3600);
+    await rt.maintain();
+    let days = await rt.uptime('main', 3);
+    expect(days).toHaveLength(1);
+    expect(days[0]!.upRatio).toBeGreaterThan(0.6);
+    expect(days[0]!.upRatio).toBeLessThan(0.7);
+    // next day: day one now answered from hourly rollups
+    ports.clock.advance(20 * 3600);
+    for (let h = 0; h < 4; h++) {
+      await advance(3600);
+      await rt.maintain();
+    }
+    days = await rt.uptime('main', 3);
+    expect(days).toHaveLength(2);
+    expect(days[0]!.upRatio).toBeGreaterThan(0.05);
+    // down 00:00-05:00, up 05:00-09:00
+    expect(days[1]!.upRatio).toBeCloseTo(4 / 9, 1);
+  });
+});
+
 describe('grafana dashboard', () => {
   test('ships valid JSON that only uses exported metric names', async () => {
     const { METRIC_DEFS, promName } = await import('../src/index.ts');
