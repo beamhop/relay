@@ -3,10 +3,16 @@
 import type { EffectiveLimits, EventStoreCapabilities, RelayConfig } from '@beamhop/core';
 import type { RelayModuleConfig } from './config.ts';
 
-export const BASE_NIPS = [1, 9, 11, 13, 40, 42, 45, 62, 70] as const;
+/**
+ * Always-on NIPs: 01, 02 (follow lists stored), 09, 11, 13, 17 + 59 (gift wraps
+ * only served to their AUTHed recipient), 40, 42, 45, 56 (reports surface in
+ * moderation), 62, 65 (relay lists stored as replaceable), 70.
+ */
+export const BASE_NIPS = [1, 2, 9, 11, 13, 17, 40, 42, 45, 56, 59, 62, 65, 70] as const;
 
 export function supportedNips(caps: EventStoreCapabilities, cfg: RelayModuleConfig): number[] {
   const out: number[] = [...BASE_NIPS];
+  if (cfg.groups.enabled) out.push(29);
   if (caps.search) out.push(50);
   if (cfg.negentropy.enabled) out.push(77);
   return out.sort((a, b) => a - b);
@@ -16,6 +22,8 @@ export interface RelayInfoDocument {
   name: string;
   description: string;
   pubkey?: string;
+  /** The relay's own pubkey (signs NIP-29 group state). */
+  self?: string;
   contact?: string;
   icon?: string;
   banner?: string;
@@ -44,6 +52,7 @@ export function relayInfo(
   limits: EffectiveLimits,
   caps: EventStoreCapabilities,
   cfg: RelayModuleConfig,
+  self?: string,
 ): RelayInfoDocument {
   const info = relay.info;
   const doc: RelayInfoDocument = {
@@ -69,6 +78,7 @@ export function relayInfo(
   if (limits.maxCreatedAtPastSeconds > 0)
     doc.limitation.created_at_lower_limit = limits.maxCreatedAtPastSeconds;
   if (info.pubkey) doc.pubkey = info.pubkey;
+  if (self) doc.self = self;
   if (info.contact) doc.contact = info.contact;
   if (info.icon) doc.icon = info.icon;
   if (info.banner) doc.banner = info.banner;

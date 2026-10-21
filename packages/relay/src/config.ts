@@ -65,6 +65,22 @@ export const RelayModuleConfigSchema = z
         .prefault({}),
       'NIP-77 negentropy set reconciliation (NEG-OPEN/NEG-MSG/NEG-CLOSE).',
     ),
+    groups: technical(
+      z
+        .object({
+          enabled: z.boolean().default(true).describe('Allow group chats (channels) on this relay'),
+          whoCanCreate: z
+            .enum(['anyone', 'owner'])
+            .default('anyone')
+            .describe('Who may start a new group from a Nostr app'),
+        })
+        .prefault({}),
+      'NIP-29 relay-based groups: h-tagged posts, moderation kinds 9000–9009, join/leave 9021/9022, relay-signed 39000–39003. Admins can always create groups via the groups.* actions.',
+    ),
+    vanishIdCap: technical(
+      z.number().int().min(0).default(1000),
+      'NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total.',
+    ),
     software: z.string().default('https://github.com/beamhop/beamhop'),
     version: z.string().default('0.0.0'),
   })

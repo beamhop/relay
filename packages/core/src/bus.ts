@@ -21,9 +21,13 @@ export interface AppEvents {
   };
   'event.held': { relayId: RelayId; event: NostrEvent; by?: string; reason?: string };
   'event.deleted': {
+    /** `'*'` when the deletion spans all relays on the node (NIP-40 expiry sweeps). */
     relayId: RelayId;
+    /** Deleted ids when cheaply known; may be empty or capped (see `count`). */
     ids: string[];
     cause: 'nip09' | 'nip62' | 'admin' | 'retention' | 'expiry';
+    /** Total number of deleted events when known; may exceed `ids.length` (ids unknown or capped). */
+    count?: number;
   };
   'req.served': {
     relayId: RelayId;
