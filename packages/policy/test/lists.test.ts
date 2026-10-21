@@ -12,7 +12,7 @@ describe('policy.explain-limits what-if', () => {
   test('goals and persona preview limits without changing the relay', async () => {
     const { act, kernel } = await setup();
     const base = await act('policy.explain-limits', {});
-    expect(base.result.output.whatIf).toBeUndefined();
+    expect((base.result.output as { whatIf?: unknown }).whatIf).toBeUndefined();
     const before = kernel.relay('main')!.goals.openness;
 
     const strict = await act('policy.explain-limits', { goals: { openness: 0 } });
