@@ -102,6 +102,36 @@ describe('runBulk', () => {
   });
 });
 
+describe('runBulk for plans', () => {
+  it('always uses the bulk endpoint for plans', async () => {
+    expect(BULK.tier.bulk).toBe(true);
+    const { api, calls } = fakeApi();
+    const out = await runBulk(api, 'users.set-tier', [{}, {}], { bulk: BULK.tier.bulk ?? false });
+    expect(calls).toEqual(['bulk users.set-tier 2']);
+    expect(out.undoTokens).toEqual(['T']);
+  });
+
+  it('falls back to one-by-one only when the server refuses bulk (4xx)', async () => {
+    const refusing = (status: number) => {
+      const { api, calls } = fakeApi();
+      api.bulk = async () => {
+        calls.push('bulk');
+        throw Object.assign(new Error('not bulk'), { status });
+      };
+      return { api, calls };
+    };
+    const a = refusing(400);
+    const out = await runBulk(a.api, 'users.set-tier', [{}, {}], { bulk: true });
+    expect(a.calls).toEqual(['bulk', 'run users.set-tier 0', 'run users.set-tier 1']);
+    expect(out.undoTokens).toEqual(['t0', 't1']);
+    const b = refusing(503);
+    await expect(runBulk(b.api, 'users.set-tier', [{}], { bulk: true })).rejects.toThrow(
+      'not bulk',
+    );
+    expect(b.calls).toEqual(['bulk']);
+  });
+});
+
 describe('selection', () => {
   it('shift-click selects a range from the anchor', () => {
     const order = [A, B, C, 'd'];

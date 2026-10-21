@@ -11,7 +11,6 @@
   import type { JsonSchema, NodeConfig } from '$lib/api/types';
   import type { FieldSpec } from '$lib/forms/json-schema';
   import { getIn } from '$lib/forms/json-schema';
-  import { flatten } from '$lib/forms/values';
   import { app } from '$lib/stores/app.svelte';
   import { configFlow } from '$lib/stores/config.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
@@ -21,12 +20,26 @@
   import Sheet from '$lib/components/Sheet.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
-  import { ADVANCED, NET, SIMPLE, fieldsFor, hasNetworkSchema, patchFor } from './network.ts';
+  import { query } from '$lib/stores/actions.svelte';
+  import {
+    ADVANCED,
+    NET,
+    SIMPLE,
+    type GroupRef,
+    fieldsFor,
+    groupRefs,
+    hasNetworkSchema,
+    initialValues,
+    outboundFields,
+    outboundLens,
+    patchFor,
+  } from './network.ts';
 
   interface Loaded {
     doc: NodeConfig;
     simple: FieldSpec[];
     advanced: FieldSpec[];
+    outbound: FieldSpec[];
     initial: Record<string, unknown>;
   }
 
@@ -35,11 +48,17 @@
   let error = $state<unknown>(null);
   let version = $state(0);
   let advancedOpen = $state(false);
+  /** Live values of the team-groups form (saved together with the Advanced form). */
+  let outboundValues: Record<string, unknown> = {};
 
   async function load() {
     error = null;
     try {
-      const [cfg, schema] = await Promise.all([app.api.config(), app.api.configSchema(false)]);
+      const [cfg, schema, groups] = await Promise.all([
+        app.api.config(),
+        app.api.configSchema(false),
+        query<GroupRef[]>('groups.list'),
+      ]);
       const s = schema as JsonSchema;
       if (!hasNetworkSchema(s)) {
         unavailable = true;
@@ -49,7 +68,15 @@
       const relays = (doc.relays ?? []).map((r) => ({ id: r.id, name: r.info?.name }));
       const simple = fieldsFor(s, SIMPLE, relays, app.relayId);
       const advanced = fieldsFor(s, ADVANCED, relays, app.relayId);
-      data = { doc, simple, advanced, initial: flatten(doc, [...simple, ...advanced]) };
+      const outbound = outboundFields(s, groupRefs(doc, Array.isArray(groups) ? groups : []));
+      outboundValues = {};
+      data = {
+        doc,
+        simple,
+        advanced,
+        outbound,
+        initial: initialValues(doc, [...simple, ...advanced, ...outbound]),
+      };
       version++;
     } catch (err) {
       error = err;
@@ -83,10 +110,16 @@
   const proxyWarning = $derived.by(() => {
     if (!data) return false;
     const net = getIn(data.doc, [...NET]) as
-      | { allowlist?: { admin?: string[]; relays?: Record<string, string[]> }; mtls?: { enabled?: boolean } }
+      | {
+          allowlist?: { admin?: string[]; relays?: Record<string, string[]> };
+          denylist?: { all?: string[]; relays?: Record<string, string[]> };
+          mtls?: { enabled?: boolean };
+        }
       | undefined;
     const needs =
       (net?.allowlist?.admin?.length ?? 0) > 0 ||
+      (net?.denylist?.all?.length ?? 0) > 0 ||
+      Object.values(net?.denylist?.relays ?? {}).some((l) => l.length > 0) ||
       Object.values(net?.allowlist?.relays ?? {}).some((l) => l.length > 0) ||
       !!net?.mtls?.enabled;
     return needs && !getIn(data.doc, ['node', 'trustProxy']);
@@ -127,9 +160,30 @@
 </div>
 
 {#if data}
-  <Sheet bind:open={advancedOpen} title="Network access · Advanced" description="Device certificates, sign-in proxy details and other relays.">
+  <Sheet bind:open={advancedOpen} title="Network access · Advanced" description="Device certificates, sign-in proxy details, other relays and team groups.">
     {#key version}
-      <GeneratedForm id="network-advanced" fields={data.advanced} initial={data.initial} doc={data.doc} onsubmit={(v) => save(data!.advanced, v)} />
+      <GeneratedForm
+      id="network-advanced"
+      fields={data.advanced}
+      initial={data.initial}
+      doc={data.doc}
+      onsubmit={(v) => save([...data!.advanced, ...data!.outbound], { ...data!.initial, ...outboundValues, ...v })}
+    />
+    {#if data.outbound.length}
+      <section class="mt-6 border-t pt-4" data-testid="network-outbound">
+        <h3 class="text-sm font-semibold">Team groups</h3>
+        <p class="mt-1 text-sm text-muted-foreground">Messages in these groups stay on your company’s relays.</p>
+        <ItemLens lines={outboundLens(data.doc)} />
+        <GeneratedForm
+          id="network-outbound"
+          fields={data.outbound}
+          initial={data.initial}
+          doc={data.doc}
+          onchange={(v) => (outboundValues = v)}
+          onsubmit={() => {}}
+        />
+      </section>
+    {/if}
     {/key}
     {#snippet footer()}
       <Button class="w-full" type="submit" form="network-advanced">Save</Button>

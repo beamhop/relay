@@ -259,6 +259,24 @@ describe('usage reports', () => {
       await collectStream((await ports.blobs.get(rep.csv.sha256))!.body),
     );
     expect(csv.split('\n')[0]).toBe('month,group,users,events,storage_bytes,uploaded_bytes');
+    // Download the stored files (read-only, same permission as the report).
+    const fileDef = kernel.actions.get('compliance.report-file')!;
+    expect(fileDef.readOnly).toBe(true);
+    expect(fileDef.permission).toBe(kernel.actions.get('compliance.usage-report')!.permission);
+    const dl = (await runAction(kernel, 'compliance.report-file', { month: '2023-11' }, alice))
+      .output as { type: string; base64: string };
+    expect(dl.type).toBe('text/csv');
+    expect(new TextDecoder().decode(Uint8Array.from(atob(dl.base64), (c) => c.charCodeAt(0)))).toBe(
+      csv,
+    );
+    const pdf = (
+      await runAction(kernel, 'compliance.report-file', { month: '2023-11', format: 'pdf' }, alice)
+    ).output as { type: string; base64: string };
+    expect(pdf.type).toBe('application/pdf');
+    expect(atob(pdf.base64).startsWith('%PDF-')).toBe(true);
+    await expect(
+      runAction(kernel, 'compliance.report-file', { month: '2023-10' }, alice),
+    ).rejects.toThrow(/no usage report/);
     // Scheduler generates last month once.
     await ports.scheduler.tick('enterprise-compliance.reports');
     const month = previousMonth(ports.clock.now());

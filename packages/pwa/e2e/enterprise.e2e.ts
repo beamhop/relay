@@ -166,6 +166,16 @@ test('compliance: holds, release asks a second admin, archive download, log test
   await page.getByTestId('compliance-advanced').click();
   await page.getByTestId('make-report').click();
   await expect(page.getByTestId('usage-report')).toContainText('eng');
+  const [csv] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('report-csv').click(),
+  ]);
+  expect(csv.suggestedFilename()).toMatch(/^usage-report-\d{4}-\d{2}\.csv$/);
+  const [pdf] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('report-pdf').click(),
+  ]);
+  expect(pdf.suggestedFilename()).toMatch(/\.pdf$/);
 });
 
 test('network access: ≤7 settings, saved through the standard settings review', async ({
@@ -176,8 +186,9 @@ test('network access: ≤7 settings, saved through the standard settings review'
   await page.getByRole('link', { name: 'Network access' }).click();
   await expect(page).toHaveURL(/\/admin\/m\/settings\/network$/);
   const simple = page.getByTestId('network-simple');
-  await expect(simple.locator('[data-setting-field]')).toHaveCount(6);
+  await expect(simple.locator('[data-setting-field]')).toHaveCount(7);
   await expect(simple).toContainText('Networks that can use Test Relay');
+  await expect(simple).toContainText('Blocked networks');
   await simple
     .locator('[data-setting-field="modules.enterprise-network.allowlist.admin"] input')
     .fill('10.0.0.0/8');
@@ -191,4 +202,34 @@ test('network access: ≤7 settings, saved through the standard settings review'
   await expect(page.getByTestId('proxy-warning')).toBeVisible();
   const log = await serverLog(page);
   expect(log.log.map((l) => l.id)).toContain('config.commit');
+});
+
+test('network access: team groups stay on company relays (Advanced)', async ({ page }) => {
+  await enterprise(page);
+  await page.goto('/admin/m/settings/network');
+  await page.getByTestId('network-advanced-open').click();
+  const groups = page.getByTestId('network-outbound');
+  await expect(groups).toContainText('Messages in these groups stay on your company’s relays');
+  await expect(groups).toContainText('Other relays “Engineering” may also post to');
+  await expect(page.getByText('Networks blocked from Test Relay')).toBeVisible();
+  // The "every group" list only shows once the switch is on.
+  const every = '[data-setting-field="modules.enterprise-network.outbound.default"]';
+  await expect(groups.locator(every)).toHaveCount(0);
+  await groups
+    .locator('[data-setting-field="modules.enterprise-network.outbound.limit"] [role="switch"]')
+    .click();
+  await expect(groups.locator(every)).toBeVisible();
+  const eng = groups.locator(
+    '[data-setting-field="modules.enterprise-network.outbound.groups.eng-chat"] input',
+  );
+  await eng.fill('wss://partner.example.com');
+  await eng.blur();
+  await page.getByRole('button', { name: 'Save' }).last().click();
+  const review = page.getByTestId('config-diff-sheet');
+  await expect(review).toBeVisible();
+  await review.getByTestId('config-apply').click();
+  await expect(review).toBeHidden();
+  const log = await serverLog(page);
+  const commit = log.log.filter((l) => l.id === 'config.commit').pop();
+  expect(JSON.stringify(commit)).toContain('partner.example.com');
 });

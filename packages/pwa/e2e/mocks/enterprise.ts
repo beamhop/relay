@@ -612,6 +612,40 @@ function actions(host: Host): MockAction[] {
     },
     {
       ...node,
+      id: 'compliance.report-file',
+      title: 'Download a usage report',
+      description: 'Get a usage report you already made, as a spreadsheet (CSV) or PDF.',
+      permission: 'compliance.read',
+      readOnly: true,
+      input: z.object({ month: z.string(), format: z.enum(['csv', 'pdf']).default('csv') }),
+      run: (i) => ({
+        output:
+          i.format === 'pdf'
+            ? { type: 'application/pdf', base64: btoa('%PDF-1.4\n%%EOF\n') }
+            : {
+                type: 'text/csv',
+                base64: btoa(
+                  `month,group,users,events,storage_bytes,uploaded_bytes\n${i.month},eng,2,40,0,0\n`,
+                ),
+              },
+        summary: `Downloaded the ${String(i.format).toUpperCase()} usage report for ${i.month}`,
+      }),
+    },
+    {
+      id: 'groups.list',
+      title: 'Groups',
+      description: 'Group chats on this relay and who is in them.',
+      scope: 'relay',
+      permission: 'relay.read',
+      readOnly: true,
+      input: z.object({}),
+      run: () => ({
+        output: [{ id: 'eng-chat', name: 'Engineering', private: true, closed: true, members: 2 }],
+        summary: '1 group',
+      }),
+    },
+    {
+      ...node,
       id: 'compliance.check-residency',
       title: 'Check where data is stored',
       description: 'Make sure each relay’s data stays in its required region.',

@@ -190,6 +190,7 @@ export function registerPeopleMocks(actions: MockAction[], host: () => HostState
       description: 'Move a person to another tier (limits bundle).',
       scope: 'relay',
       permission: 'users.write',
+      bulk: true,
       keywords: ['tier', 'plan'],
       input: z.object({ pubkey: z.string(), tier: z.string().nullable() }),
       preview: (i) => [

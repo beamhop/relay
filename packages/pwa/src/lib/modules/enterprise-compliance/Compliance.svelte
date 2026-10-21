@@ -47,6 +47,7 @@
   let month = $state(lastMonth());
   let report = $state<unknown>(null);
   let reporting = $state(false);
+  let reportMonth = $state<string | null>(null);
   let downloading = $state<string | null>(null);
 
   async function loadHolds() {
@@ -95,13 +96,33 @@
         { exportId: e.id, path },
         def.scope,
       );
-      const bytes = base64Bytes(r.output.base64);
-      const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: r.output.type || 'application/octet-stream' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${e.name.replace(/[^\w.-]+/g, '-')}-${path.split('/').pop() ?? 'file'}`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      saveFile(r.output, `${e.name.replace(/[^\w.-]+/g, '-')}-${path.split('/').pop() ?? 'file'}`);
+    } catch (err) {
+      const x = asApiError(err);
+      toasts.error(x.message, x.technical);
+    } finally {
+      downloading = null;
+    }
+  }
+
+  function saveFile(file: { type: string; base64: string }, name: string) {
+    const bytes = base64Bytes(file.base64);
+    const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: file.type || 'application/octet-stream' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  /** Download the stored CSV/PDF of the report just made (`compliance.report-file`). */
+  async function downloadReport(format: 'csv' | 'pdf') {
+    const def = app.action('compliance.report-file');
+    if (!def || !reportMonth) return;
+    downloading = `report/${format}`;
+    try {
+      const r = await app.api.run<{ type: string; base64: string }>(def.id, { month: reportMonth, format }, def.scope);
+      saveFile(r.output, `usage-report-${reportMonth}.${format}`);
     } catch (err) {
       const x = asApiError(err);
       toasts.error(x.message, x.technical);
@@ -117,6 +138,7 @@
     try {
       const r = await app.api.run<{ report: { rows: unknown[]; totals: unknown } }>(def.id, { month }, def.scope);
       report = { groups: r.output.report.rows, totals: r.output.report.totals };
+      reportMonth = month;
       toasts.success(r.summary);
     } catch (err) {
       const x = asApiError(err);
@@ -291,7 +313,25 @@
           <input type="month" class="h-10 flex-1 rounded-lg border bg-background px-3 text-sm" aria-label="Month" bind:value={month} />
           <Button variant="secondary" disabled={reporting || !/^\d{4}-\d{2}$/.test(month)} onclick={makeReport} data-testid="make-report">Make report</Button>
         </div>
-        {#if report}<div class="mt-3 text-sm"><OutputView value={report} /></div>{/if}
+        {#if report}
+          <div class="mt-3 text-sm"><OutputView value={report} /></div>
+          {#if reportMonth && app.hasAction('compliance.report-file')}
+            <div class="mt-3 flex gap-2" data-testid="report-downloads">
+              {#each ['csv', 'pdf'] as const as format (format)}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="flex-1"
+                  disabled={downloading === `report/${format}`}
+                  onclick={() => downloadReport(format)}
+                  data-testid={`report-${format}`}
+                >
+                  <Download class="size-3.5" />{format === 'csv' ? 'Spreadsheet (CSV)' : 'PDF'}
+                </Button>
+              {/each}
+            </div>
+          {/if}
+        {/if}
       </section>
     {/if}
     {#if released.length}

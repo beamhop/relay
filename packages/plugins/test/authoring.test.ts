@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { createBunPluginHost } from '../src/bun/index.ts';
 import { createBundledPluginHost } from '../src/bundled.ts';
 import type { PluginHost } from '../src/host/host.ts';
-import { bootKernel, ev, runEvent, tempDir, waitFor } from './helpers.ts';
+import { bootKernel, ev, runAction, runEvent, tempDir, waitFor } from './helpers.ts';
 
 const CODE = `import { definePlugin } from '@beamhop/plugins/sdk';
 export default definePlugin({
@@ -80,3 +80,44 @@ test('hosts without source support do not advertise test/install', async () => {
   expect(typeof host.install).toBe('undefined');
   expect(host.sdkGuide.length).toBeGreaterThan(100);
 });
+
+test('AI plugins show source "ai"; removing a source plugin can be undone', async () => {
+  const dir = tempDir();
+  const { kernel } = await bootKernel({}, [createBunPluginHost({ dir, watch: () => () => {} })]);
+  const host = kernel.use<PluginHost>('plugins')!;
+  await host.install!({ id: 'no-shouting', code: CODE, enabled: false, source: 'ai' });
+  await kernel.applyConfig({
+    ...kernel.config(),
+    plugins: [{ id: 'no-shouting', enabled: true, config: {} }],
+    modules: {
+      ...kernel.config().modules,
+      plugins: { entries: { 'no-shouting': { failMode: 'closed' } } },
+    },
+  });
+  await waitFor(() => host.status()[0]?.status === 'running');
+  const st = await runAction(kernel, 'plugins.status', {});
+  const rows = (st.result.output as { plugins: Array<{ id: string; source?: string }> }).plugins;
+  expect(rows.find((r) => r.id === 'no-shouting')?.source).toBe('ai');
+
+  const rm = await runAction(kernel, 'plugins.uninstall', { id: 'no-shouting' });
+  expect(rm.preview.map((l) => l.text).join(' ')).toContain('undo');
+  expect(kernel.config().plugins).toEqual([]);
+  expect(existsSync(`${dir}/local/no-shouting`)).toBe(false);
+  expect((await runEvent(kernel, ev('LOUD NOISES'))).action).toBe('accept');
+  const undo = rm.result.undo!;
+  expect(undo.actionId).toBe('plugins.uninstall');
+
+  await kernel.actions.get('plugins.uninstall')!.undo!(undo.payload, {
+    principal: { id: 'o', roles: { '*': 'owner' }, via: 'cli' },
+    relayId: null,
+    ports: kernel.ports,
+  });
+  expect(kernel.config().plugins).toEqual([{ id: 'no-shouting', enabled: true, config: {} }]);
+  const entries = (kernel.config().modules.plugins as { entries: Record<string, unknown> }).entries;
+  expect(entries['no-shouting']).toMatchObject({ failMode: 'closed' });
+  expect(existsSync(`${dir}/local/no-shouting`)).toBe(true);
+  expect((await host.statusRows()).find((r) => r.id === 'no-shouting')?.source).toBe('ai');
+  await waitFor(() => host.status()[0]?.status === 'running');
+  expect((await runEvent(kernel, ev('LOUD NOISES'))).action).toBe('reject');
+  await host.stop();
+}, 30_000);

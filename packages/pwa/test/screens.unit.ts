@@ -43,6 +43,21 @@ describe('screens', () => {
     expect(nearestTab('/media/quarantine')).toBe('/media');
   });
 
+  it('puts approvals under the Activity tab', () => {
+    const routes = [
+      { path: '/approvals', placement: 'activity-section' as const },
+      { path: '/settings/compliance', placement: 'settings-section' as const },
+    ];
+    expect(nearestTab('/approvals', routes)).toBe('/activity');
+    expect(nearestTab('/approvals/abc123', routes)).toBe('/activity');
+    expect(nearestTab('/m/approvals', routes)).toBe('/activity');
+    expect(nearestTab('/m/approvals/abc123?x=1', routes)).toBe('/activity');
+    expect(nearestTab('/m/approvals-other', routes)).toBe('/');
+    expect(nearestTab('/m/settings/compliance', routes)).toBe('/settings');
+    expect(nearestTab('/m/settings/network')).toBe('/settings');
+    expect(nearestTab('/activity?tab=bin', routes)).toBe('/activity');
+  });
+
   it('marks checklist links that fell back', () => {
     const items = fromServer({
       hidden: false,

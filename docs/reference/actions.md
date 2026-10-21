@@ -519,6 +519,19 @@ Let normal deletion rules apply again. Needs a second admin’s approval.
 | `holdId` | string |  |  |
 | `reason` | string |  | Why the hold can end |
 
+### Download a usage report
+
+Get a usage report you already made, as a spreadsheet (CSV) or PDF.
+
+- **id:** `compliance.report-file` · **CLI:** `beamhop compliance report-file` · **scope:** node · **permission:** `compliance.read`
+- read-only
+- *Technical:* Reads the pinned CSV/PDF the usage report stored in the blob store (compliance.reports index), base64.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `month` | string |  | Month, e.g. 2026-09 |
+| `format` | `csv` \| `pdf` | `"csv"` | File type |
+
 ### Show SIEM export status
 
 How far each security log destination has caught up.
@@ -1450,7 +1463,7 @@ See how each plugin is doing: how often it runs, what it blocks, and how fast it
 Turn a plugin off and delete it from this server.
 
 - **id:** `plugins.uninstall` · **CLI:** `beamhop plugins uninstall` · **scope:** node · **permission:** `plugins.write`
-- changes settings/data
+- changes settings/data · undoable
 - *Technical:* Removes config.plugins[id] and modules.plugins.entries[id], deletes installed files and the install record.
 
 | Setting | Type | Default | Description |
@@ -1690,7 +1703,7 @@ Everyone seen here recently, with their tier, activity, storage and status.
 Move a person to another tier (limits bundle).
 
 - **id:** `users.set-tier` · **CLI:** `beamhop users set-tier` · **scope:** relay · **permission:** `users.write`
-- changes settings/data · undoable
+- changes settings/data · undoable · bulk
 - *Technical:* Explicit tier assignment in policy.tiers; overrides tier rules. null = back to rules/default.
 
 | Setting | Type | Default | Description |

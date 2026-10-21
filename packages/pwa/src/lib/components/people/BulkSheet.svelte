@@ -100,7 +100,7 @@
     const label = action.title;
     try {
       const out = await runBulk(app.api, def.actionId, inputsFor(def, pubkeys, { tier: tier ?? null }), {
-        bulk: action.bulk,
+        bulk: def.bulk ?? action.bulk,
         scope: action.scope,
       });
       haptic(out.failed.length ? 'warning' : 'success');

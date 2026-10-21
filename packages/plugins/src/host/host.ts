@@ -41,6 +41,7 @@ import {
   type LoadedPlugin,
   type PluginInstaller,
   type PluginLoader,
+  type PluginSource,
   PluginTimeoutError,
   PluginUnavailableError,
   permissionsExceed,
@@ -84,6 +85,8 @@ export interface PluginStatusRow {
   error?: string;
   tripped?: { reason: string; at: number };
   stats: PluginStatsSnapshot;
+  /** Where it came from (`ai` = written by the assistant). Filled by {@link PluginHost.statusRows}. */
+  source?: PluginSource;
 }
 
 export interface PluginHostOptions {
@@ -139,6 +142,7 @@ export class PluginHost {
     this.beamhopVersion = opts.beamhopVersion ?? BEAMHOP_VERSION;
     this.builtinCatalog = opts.builtinCatalog ?? BUILTIN_CATALOG;
     const a = opts.authoring;
+    this.authoring = a;
     if (a) {
       this.test = (p) => a.test(p);
       this.install = (p) => this.installSource(a, p);
@@ -147,6 +151,8 @@ export class PluginHost {
   }
 
   // ── Source-code plugins (AI assistant contract; present only when supported) ──
+
+  private readonly authoring?: AuthoringBackend;
 
   readonly sdkGuide = SDK_GUIDE;
   test?: (p: { id: string; code: string; tests?: string }) => Promise<{
@@ -183,6 +189,8 @@ export class PluginHost {
       permissions: [],
       source: 'file',
       installedAt: this.kernel.ports.clock.now(),
+      ...(p.source === 'ai' ? { author: 'ai' as const } : {}),
+      code: p.code,
     };
     await this.kernel.ports.docs.put(INSTALLED_COLLECTION, p.id, rec);
     await this.untrip(p.id);
@@ -210,6 +218,44 @@ export class PluginHost {
     await this.kernel.ports.docs.delete(INSTALLED_COLLECTION, id);
     await this.untrip(id);
     await this.forget(id);
+  }
+
+  /** Delete a source plugin's local files (no-op without an authoring backend). */
+  async removeLocalFiles(id: string): Promise<void> {
+    await this.authoring?.removeLocal(id);
+  }
+
+  /** Can a removed source plugin be put back (code kept and a backend to write it)? */
+  canRestoreSource(rec: InstalledRecord | null): boolean {
+    return !!rec && rec.source === 'file' && typeof rec.code === 'string' && !!this.authoring;
+  }
+
+  /** Put a removed source plugin's code back in place (same path as installing it). */
+  async restoreSource(rec: InstalledRecord): Promise<InstalledRecord> {
+    if (!this.authoring || typeof rec.code !== 'string')
+      throw new Error('This plugin can no longer be put back');
+    const entry = await this.authoring.writeLocal(rec.id, rec.code);
+    const restored: InstalledRecord = { ...rec, entry };
+    await this.kernel.ports.docs.put(INSTALLED_COLLECTION, rec.id, restored);
+    await this.untrip(rec.id);
+    return restored;
+  }
+
+  /** Where a plugin came from, as shown to the admin. */
+  sourceOf(id: string, rec: InstalledRecord | null): PluginSource | undefined {
+    if (rec) return rec.author === 'ai' ? 'ai' : rec.source;
+    if (this.builtinCatalog.plugins.some((e) => e.id === id)) return 'builtin';
+    return undefined;
+  }
+
+  /** {@link status} plus where each plugin came from (reads the install records). */
+  async statusRows(): Promise<PluginStatusRow[]> {
+    const rows = this.status();
+    for (const r of rows) {
+      const src = this.sourceOf(r.id, await this.installedRecord(r.id));
+      if (src) r.source = src;
+    }
+    return rows;
   }
 
   settings(config: BeamhopConfig = this.kernel.config()): PluginsModuleSettings {

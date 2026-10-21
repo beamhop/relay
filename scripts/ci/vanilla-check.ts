@@ -62,13 +62,7 @@ const ALLOWLIST = VANILLA_ALLOWLIST;
  * printed as warnings; `VANILLA_STRICT=1` turns them into failures. Remove an entry as soon
  * as the leak is fixed; a stale entry is reported.
  */
-export const KNOWN_LEAKS: AllowEntry[] = [
-  {
-    term: 'SCIM',
-    context: /\["sso","company","scim"\]/,
-    reason: 'CommandPalette.svelte search keywords for /settings/company.',
-  },
-];
+export const KNOWN_LEAKS: AllowEntry[] = [];
 
 export interface ScanResult {
   scanned: string[];

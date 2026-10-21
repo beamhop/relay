@@ -22,6 +22,7 @@
   import { goto } from '$app/navigation';
   import { resolveScreen } from '$lib/screens';
   import { announceFallback } from '$lib/fallback';
+  import { focusField, locateField } from '$lib/settings/focus';
   import GeneratedForm from '$lib/components/forms/GeneratedForm.svelte';
   import ChannelsEditor from '$lib/components/settings/ChannelsEditor.svelte';
   import type { AlertChannel } from '$lib/alert-channels';
@@ -72,6 +73,20 @@
       data = null;
       void load();
     }
+  });
+
+  // Deep link `?field=<dotted.path>`: open Advanced if needed, then scroll, focus and highlight.
+  let focusedFor = '';
+  $effect(() => {
+    const want = page.url.searchParams.get('field');
+    if (!data || !want) return;
+    const key = `${id}|${want}|${version}`;
+    if (focusedFor === key) return;
+    focusedFor = key;
+    const place = locateField(want, simpleFields, data.advanced);
+    if (!place) return;
+    if (place.where === 'advanced') advancedOpen = true;
+    void focusField(place.path);
   });
 
   /** Settings with their own editor instead of a generated field. */

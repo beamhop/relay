@@ -317,6 +317,37 @@ export function complianceActions(p: ComplianceParts): ActionDef[] {
       },
     }),
     defineAction({
+      id: 'compliance.report-file',
+      title: 'Download a usage report',
+      description: 'Get a usage report you already made, as a spreadsheet (CSV) or PDF.',
+      technical:
+        'Reads the pinned CSV/PDF the usage report stored in the blob store (compliance.reports index), base64.',
+      scope: 'node',
+      permission: 'compliance.read',
+      readOnly: true,
+      keywords: ['usage', 'report', 'download', 'csv', 'pdf'],
+      input: z.object({
+        month: z
+          .string()
+          .regex(/^\d{4}-\d{2}$/, 'Use the form 2026-09')
+          .describe('Month, e.g. 2026-09'),
+        format: z.enum(['csv', 'pdf']).default('csv').describe('File type'),
+      }),
+      async run(input) {
+        const r = await reports.get(input.month);
+        if (!r) throw new Error(`There is no usage report for ${input.month} yet. Make it first.`);
+        const ref = r[input.format];
+        const blob = await rt.ports.blobs.get(ref.sha256);
+        if (!blob) throw new Error('The report file is missing. Make the report again.');
+        const data = new Uint8Array(await new Response(blob.body).arrayBuffer());
+        const type = input.format === 'csv' ? 'text/csv' : 'application/pdf';
+        return {
+          output: { type, base64: b64encode(data) },
+          summary: `Downloaded the ${input.format.toUpperCase()} usage report for ${input.month}`,
+        };
+      },
+    }),
+    defineAction({
       id: 'compliance.check-residency',
       title: 'Check where data is stored',
       description: 'Make sure each relay’s data stays in its required region.',

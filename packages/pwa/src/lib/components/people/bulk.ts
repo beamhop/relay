@@ -15,6 +15,8 @@ export interface BulkDef {
   one: (pubkey: string, extra: { tier?: string | null }) => Record<string, unknown>;
   /** Input covering everyone at once (actions taking `pubkeys`), used for a single preview. */
   all?: (pubkeys: string[]) => Record<string, unknown>;
+  /** Always use the server's bulk endpoint (one undo), even if the catalog does not say so. */
+  bulk?: boolean;
 }
 
 const many = (actionId: string, kind: BulkKind): BulkDef => ({
@@ -32,6 +34,7 @@ export const BULK: Record<BulkKind, BulkDef> = {
     kind: 'tier',
     actionId: 'users.set-tier',
     one: (pubkey, extra) => ({ pubkey, tier: extra.tier ?? null }),
+    bulk: true,
   },
 };
 
@@ -77,10 +80,17 @@ export interface BulkOutcome {
   undoExpiresAt?: number;
 }
 
+/** Status of a failed request (ApiError), if any. */
+const statusOf = (err: unknown): number =>
+  typeof (err as { status?: unknown })?.status === 'number'
+    ? (err as { status: number }).status
+    : 0;
+
 /**
  * Run an action for many inputs. Uses `POST /actions/{id}/bulk` (one undo
- * for all) when the action supports it; otherwise runs them one by one and
- * keeps every per-item undo token so a single toast can undo them all.
+ * for all) when the action supports it; otherwise — or when an older server
+ * refuses the bulk request (4xx) — runs them one by one and keeps every
+ * per-item undo token so a single toast can undo them all.
  */
 export async function runBulk(
   api: BulkApi,
@@ -90,12 +100,20 @@ export async function runBulk(
 ): Promise<BulkOutcome> {
   const scope = opts.scope ?? 'relay';
   if (opts.bulk) {
-    const r = await api.bulk(actionId, inputs, scope);
-    const failed: BulkOutcome['failed'] = [];
-    r.results.forEach((x, index) => {
-      if (!x.ok) failed.push({ index, message: x.error?.message ?? '' });
-    });
-    return withUndo({ done: r.results.length - failed.length, failed, undoTokens: [] }, r.undo);
+    let r: BulkResult | null = null;
+    try {
+      r = await api.bulk(actionId, inputs, scope);
+    } catch (err) {
+      const status = statusOf(err);
+      if (status < 400 || status >= 500) throw err;
+    }
+    if (r) {
+      const failed: BulkOutcome['failed'] = [];
+      r.results.forEach((x, index) => {
+        if (!x.ok) failed.push({ index, message: x.error?.message ?? '' });
+      });
+      return withUndo({ done: r.results.length - failed.length, failed, undoTokens: [] }, r.undo);
+    }
   }
   const out: BulkOutcome = { done: 0, failed: [], undoTokens: [] };
   for (const [index, input] of inputs.entries()) {

@@ -19,6 +19,14 @@ const idInput = z.object({ id: z.string().min(1).describe('Plugin id, e.g. keywo
 
 type PluginsList = BeamhopConfig['plugins'];
 
+/** Undo payload of `plugins.uninstall`: the config entries and install record as they were. */
+interface UninstallUndo {
+  id: string;
+  plugins: PluginsList;
+  entry?: unknown;
+  rec?: InstalledRecord;
+}
+
 export function permissionLines(perms: readonly PluginPermission[]): DiffLine[] {
   if (perms.length === 0) {
     return [
@@ -190,7 +198,7 @@ export function pluginActions(host: PluginHost): ActionDef[] {
           reason: ctx.reason,
         },
       );
-      const row = host.status().find((r) => r.id === entry.id);
+      const row = (await host.statusRows()).find((r) => r.id === entry.id);
       return {
         output: row,
         summary: `Added “${entry.name ?? entry.id}”${input.enable ? ' and turned it on' : ''}`,
@@ -251,7 +259,7 @@ export function pluginActions(host: PluginHost): ActionDef[] {
             reason: ctx.reason,
           },
         );
-        const row = host.status().find((r) => r.id === input.id);
+        const row = (await host.statusRows()).find((r) => r.id === input.id);
         return {
           output: row,
           summary: `${enabled ? 'Turned on' : 'Turned off'} “${nameOf(host, input.id)}”${
@@ -395,7 +403,15 @@ export function pluginActions(host: PluginHost): ActionDef[] {
           technical: `config.plugins − ${input.id}`,
         },
       ];
-      if (rec && rec.source !== 'builtin') {
+      if (rec?.source === 'file') {
+        lines.push({
+          kind: 'info',
+          text: host.canRestoreSource(rec)
+            ? 'Its code is deleted from this server; you can undo this for a few minutes'
+            : 'Its code is deleted from this server',
+          technical: rec.entry ?? rec.package,
+        });
+      } else if (rec && rec.source !== 'builtin') {
         lines.push({
           kind: 'warning',
           text: 'Its files will be deleted; you can add it again from the catalog later',
@@ -410,6 +426,9 @@ export function pluginActions(host: PluginHost): ActionDef[] {
       if (!rec && !cfg.plugins.some((p) => p.id === input.id)) {
         throw new Error(`There is no plugin called “${input.id}” here`);
       }
+      const prevPlugins = cfg.plugins;
+      const prevEntry = ((cfg.modules.plugins ?? {}) as { entries?: Record<string, unknown> })
+        .entries?.[input.id];
       await host.commitConfig(
         (c) => {
           const s = (c.modules.plugins ?? {}) as { entries?: Record<string, unknown> };
@@ -427,11 +446,45 @@ export function pluginActions(host: PluginHost): ActionDef[] {
           reason: ctx.reason,
         },
       );
-      if (rec && rec.source !== 'builtin' && host.installer) await host.installer.remove(rec);
+      if (rec?.source === 'file') await host.removeLocalFiles(input.id);
+      else if (rec && rec.source !== 'builtin' && host.installer) await host.installer.remove(rec);
       await kernel.ports.docs.delete(INSTALLED_COLLECTION, input.id);
       await host.untrip(input.id);
       await host.forget(input.id);
-      return { output: { id: input.id, removed: true }, summary: `Removed “${input.id}”` };
+      // Undo: built-in plugins only need their settings back; source plugins also their code.
+      // Downloaded (catalog/npm) plugins are added again from the catalog instead.
+      const undoable = !rec || rec.source === 'builtin' || host.canRestoreSource(rec);
+      const payload: UninstallUndo = {
+        id: input.id,
+        plugins: prevPlugins.filter((p) => p.id === input.id),
+        ...(prevEntry !== undefined ? { entry: prevEntry } : {}),
+        ...(rec ? { rec } : {}),
+      };
+      return {
+        output: { id: input.id, removed: true },
+        summary: `Removed “${input.id}”`,
+        ...(undoable
+          ? { undo: { actionId: 'plugins.uninstall', payload, expiresAt: undoAt() } }
+          : {}),
+      };
+    },
+    async undo(payload, ctx) {
+      const p = payload as UninstallUndo;
+      if (p.rec?.source === 'file') await host.restoreSource(p.rec);
+      else if (p.rec) await kernel.ports.docs.put(INSTALLED_COLLECTION, p.id, p.rec);
+      await host.commitConfig(
+        (c) => {
+          const s = (c.modules.plugins ?? {}) as { entries?: Record<string, unknown> };
+          const entries = { ...(s.entries ?? {}) };
+          if (p.entry !== undefined) entries[p.id] = p.entry;
+          return {
+            ...c,
+            plugins: [...c.plugins.filter((x) => x.id !== p.id), ...p.plugins],
+            modules: { ...c.modules, plugins: { ...s, entries } },
+          };
+        },
+        { principalId: ctx.principal.id, summary: `Put back plugin ${p.id}` },
+      );
     },
   });
 
@@ -447,7 +500,7 @@ export function pluginActions(host: PluginHost): ActionDef[] {
     keywords: ['plugins', 'plugin stats', 'plugin health'],
     input: z.object({}),
     async run() {
-      const rows = host.status();
+      const rows = await host.statusRows();
       const bad = rows.filter((r) => r.status === 'error' || r.status === 'tripped').length;
       return {
         output: { plugins: rows },
