@@ -72,9 +72,13 @@ export const fsWatch: NonNullable<PluginHostModuleOptions['watch']> = (path, onC
 export const dnsResolveHost: ResolveHost = async (hostname) =>
   (await lookup(hostname, { all: true })).map((a) => a.address);
 
+/** Reads `file://` catalogs and tarballs from disk. */
+export const readTextFile = (path: string): Promise<string> => Bun.file(path).text();
+
 export function createBunPluginHost(opts: BunPluginHostOptions = {}): BeamhopModule {
   const { dir, run, hardKillMs, watch: watchFn, ...rest } = opts;
   return createPluginHostModule({
+    readFile: readTextFile,
     ...rest,
     watch: watchFn ?? fsWatch,
     loader: (kernel) =>

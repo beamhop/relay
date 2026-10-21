@@ -18,7 +18,7 @@ import {
   type PolicyContext,
 } from '@beamhop/core';
 import { BUILTIN_CATALOG } from '../builtin/index.ts';
-import { type Catalog, type CatalogEntry, fetchCatalog, mergeCatalogs } from '../catalog/index.ts';
+import { type Catalog, type CatalogEntry, loadCatalog, mergeCatalogs } from '../catalog/index.ts';
 import {
   PLUGIN_ID_RE,
   type PluginManifest,
@@ -92,6 +92,8 @@ export interface PluginHostOptions {
   installer?: PluginInstaller;
   /** Used for the remote catalog and handed to plugins with the `network` permission. */
   fetch?: typeof fetch;
+  /** Reads `file://` catalogs (`modules.plugins.catalogUrl`) on runtimes with a file system. */
+  readFile?: (path: string) => Promise<string>;
   /** File watcher for hot reload: returns an unsubscribe function. */
   watch?: (path: string, onChange: () => void) => () => void;
   beamhopVersion?: string;
@@ -117,6 +119,7 @@ export class PluginHost {
   readonly installer?: PluginInstaller;
   readonly beamhopVersion: string;
   private readonly fetchFn?: typeof fetch;
+  private readonly readFileFn?: (path: string) => Promise<string>;
   private readonly watchFn?: PluginHostOptions['watch'];
   private readonly builtinCatalog: Catalog;
   private readonly plugins = new Map<string, Managed>();
@@ -131,6 +134,7 @@ export class PluginHost {
     this.loader = opts.loader;
     this.installer = opts.installer;
     this.fetchFn = opts.fetch;
+    this.readFileFn = opts.readFile;
     this.watchFn = opts.watch;
     this.beamhopVersion = opts.beamhopVersion ?? BEAMHOP_VERSION;
     this.builtinCatalog = opts.builtinCatalog ?? BUILTIN_CATALOG;
@@ -577,7 +581,7 @@ export class PluginHost {
     );
   }
 
-  /** Built-in catalog merged with the signed remote catalog (cached 10 minutes). */
+  /** Built-in catalog merged with the signed remote / local file catalog (cached 10 minutes). */
   async catalog(opts: { refresh?: boolean } = {}): Promise<{
     entries: CatalogEntry[];
     remoteError?: string;
@@ -587,7 +591,10 @@ export class PluginHost {
     const now = this.kernel.ports.clock.now();
     if (opts.refresh || !this.remoteCatalog || now - this.remoteCatalog.at > 600) {
       try {
-        const remote = await fetchCatalog(s.catalogUrl, s.catalogPubkeys, this.fetchFn ?? fetch);
+        const remote = await loadCatalog(s.catalogUrl, s.catalogPubkeys, {
+          fetch: this.fetchFn ?? fetch,
+          ...(this.readFileFn ? { readFile: this.readFileFn } : {}),
+        });
         this.remoteCatalog = { at: now, entries: remote.plugins };
       } catch (err) {
         this.remoteCatalog = {

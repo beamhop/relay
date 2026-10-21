@@ -7,7 +7,13 @@
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type CatalogEntry, npmTarballUrl, verifyIntegrity } from '../catalog/index.ts';
+import {
+  type CatalogEntry,
+  filePathOf,
+  isFileUrl,
+  npmTarballUrl,
+  verifyIntegrity,
+} from '../catalog/index.ts';
 import type { InstalledRecord, PluginInstaller } from '../host/types.ts';
 import { assertPublicUrl } from '../net/ssrf.ts';
 import { type RunCommand, bunRun } from './authoring.ts';
@@ -41,10 +47,20 @@ export class BunPluginInstaller implements PluginInstaller {
 
   async install(entry: CatalogEntry): Promise<InstalledRecord> {
     const url = entry.tarball ?? npmTarballUrl(entry.package, entry.version);
-    await assertPublicUrl(url);
-    const res = await (this.opts.fetch ?? fetch)(url, { signal: AbortSignal.timeout(60_000) });
-    if (!res.ok) throw new Error(`The plugin could not be downloaded (HTTP ${res.status})`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
+    let bytes: Uint8Array;
+    if (isFileUrl(url)) {
+      // Offline catalog: the tarball sits on local disk (integrity is still checked below).
+      try {
+        bytes = new Uint8Array(await Bun.file(filePathOf(url)).arrayBuffer());
+      } catch (err) {
+        throw new Error(`The plugin file could not be read: ${String(err)}`);
+      }
+    } else {
+      await assertPublicUrl(url);
+      const res = await (this.opts.fetch ?? fetch)(url, { signal: AbortSignal.timeout(60_000) });
+      if (!res.ok) throw new Error(`The plugin could not be downloaded (HTTP ${res.status})`);
+      bytes = new Uint8Array(await res.arrayBuffer());
+    }
     // Integrity first: nothing touches the disk unless the bytes match the signed catalog.
     await verifyIntegrity(bytes, entry);
     const dir = await this.ensureDir();
