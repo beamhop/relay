@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Perceptual hashes and BlurHash computed from raw pixels (no extra library).
- * Runtime-agnostic: callers decode/resize images (sharp, Cloudflare Images, …)
+ * Runtime-agnostic: callers decode/resize images (the image codecs, Cloudflare Images, …)
  * and pass the raw buffers here.
  *
  * - pHash: 32×32 grayscale → 2-D DCT-II → top-left 8×8 low frequencies →

@@ -3,7 +3,7 @@
  * Media module: abuse scanning of image uploads (perceptual hashes vs. hash
  * lists, §5.3), derivative variants (thumbnail + responsive sizes, video
  * transcode + poster, §4.2) with `GET /<sha256>/variants`, health check and
- * attention cards. Processing goes through `ports.media` (sharp/ffmpeg on Bun
+ * attention cards. Processing goes through `ports.media` (built-in image codecs/ffmpeg on Bun
  * via `@beamhop/media/bun`, Cloudflare Images on Workers).
  *
  * Runtime-agnostic entry: Bun-only processors live in `@beamhop/media/bun`.
@@ -75,12 +75,32 @@ export {
   type RoutableProcessor,
 } from './composite.ts';
 export {
-  SharpMediaProcessor,
-  createSharpMediaProcessor,
-  sharpFormat,
-  type SharpFactory,
-  type SharpProcessorOptions,
-} from './sharp.ts';
+  IMAGE_OPS,
+  ImageMediaProcessor,
+  busiestWindow,
+  cropTo,
+  encodeFormat,
+  flatten,
+  grey,
+  orient,
+  type EncodeFormat,
+  type ImageCodecs,
+  type ImageProcessorOptions,
+  type Rect,
+  type ResizeKernel,
+  type RgbaImage,
+} from './images.ts';
+export {
+  exifOrientation,
+  imageFormat,
+  imageInfo,
+  mimeOf,
+  sniffImage,
+  stripContainerMetadata,
+  type ImageFormat,
+  type ImageInfo,
+} from './image-meta.ts';
+export { JSQUASH_WASM, createJsquashCodecs, type JsquashWasmName } from './jsquash.ts';
 export {
   blurhashEncode,
   dhashFromGray,

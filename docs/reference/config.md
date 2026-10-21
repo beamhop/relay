@@ -188,6 +188,7 @@ Each section exists only when that feature is turned on; enterprise features are
 |---|---|---|---|
 | `maxRounds` | number | `6` | How many steps the assistant may take to answer one question *Technical:* Max LLM round trips (tool call → result → next call) per question. |
 | `maxToolCalls` | number | `12` | How many lookups the assistant may do for one question |
+| `maxTools` | number | `12` | How many lookups to show the assistant up front (small models need fewer) *Technical:* Action tools offered per question, picked by matching words; find_tools reaches the rest. Built-in tools are always offered. |
 | `maxTokensPerRequest` | number | `24000` | Upper limit on how much text one question may use (keeps costs predictable) *Technical:* Budget across all rounds: provider-reported usage when available, else ~4 chars per token. |
 | `maxOutputTokens` | number | `1200` | Longest answer the assistant may write |
 | `timeoutSeconds` | number | `90` | Give up on a question after this long |

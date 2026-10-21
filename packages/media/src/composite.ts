@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Composite MediaProcessor: routes each op to the first component that can
- * handle it for the given content type (e.g. images → sharp, video → ffmpeg).
+ * handle it for the given content type (e.g. images → image codecs, video → ffmpeg).
  * Runtime-agnostic.
  */
 import type { MediaOp, MediaProcessor, MediaResult } from '@beamhop/core';
 
 /** A MediaProcessor that may also say which content types it handles. */
 export interface RoutableProcessor extends MediaProcessor {
-  /** Short name for health/technical text, e.g. `sharp`, `ffmpeg`. */
+  /** Short name for health/technical text, e.g. `image-codecs`, `ffmpeg`. */
   readonly name?: string;
   /** Whether this processor can run `op` on content of `type`. Default: `supports` includes op. */
   accepts?(op: MediaOp, type: string): boolean;

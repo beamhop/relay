@@ -12,28 +12,25 @@ import {
   parseConfig,
 } from '@beamhop/core';
 import { FakeClock, memoryPorts, testCrypto } from '@beamhop/testkit';
+import { createBunImageCodecs } from '../src/bun-codecs.ts';
+import {
+  type EncodeFormat,
+  ImageMediaProcessor,
+  type ImageProcessorOptions,
+  type RgbaImage,
+} from '../src/images.ts';
 import { type MediaOptions, createMediaModule } from '../src/index.ts';
-import { type SharpFactory, createSharpMediaProcessor } from '../src/sharp.ts';
 
 export const HOST = 'media.example.com';
 export const BASE = `https://${HOST}`;
 
 export const sha = (b: Uint8Array) => testCrypto.sha256Hex(b);
 
-let sharpFactory: SharpFactory | null | undefined;
-/** sharp if installed, else null (tests skip with a message). */
-export async function loadSharp(): Promise<SharpFactory | null> {
-  if (sharpFactory !== undefined) return sharpFactory;
-  try {
-    const specifier = 'sharp';
-    const mod = (await import(specifier)) as { default: SharpFactory };
-    sharpFactory = mod.default;
-  } catch {
-    sharpFactory = null;
-    console.warn('[media tests] sharp is not installed: skipping image-pixel tests');
-  }
-  return sharpFactory;
-}
+/** The built-in wasm codecs, run in-thread (the runtime uses a worker; see image-pool.ts). */
+export const codecs = createBunImageCodecs();
+
+/** In-thread image processor over the real codecs. */
+export const imageProcessor = (o: ImageProcessorOptions = {}) => new ImageMediaProcessor(codecs, o);
 
 /**
  * Deterministic synthetic RGB picture: smooth shapes + gradients driven by `seed`.
@@ -60,24 +57,70 @@ export function syntheticPixels(seed: number, width = 256, height = 256): Uint8A
   return px;
 }
 
+/** RGB pixels → RGBA image. */
+export function rgba(rgb: Uint8Array, width: number, height: number): RgbaImage {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    data[i * 4] = rgb[i * 3] ?? 0;
+    data[i * 4 + 1] = rgb[i * 3 + 1] ?? 0;
+    data[i * 4 + 2] = rgb[i * 3 + 2] ?? 0;
+    data[i * 4 + 3] = 255;
+  }
+  return { data, width, height };
+}
+
 export async function syntheticImage(
-  sharp: SharpFactory,
   seed: number,
-  o: { width?: number; height?: number; format?: 'png' | 'jpeg'; quality?: number } = {},
+  o: { width?: number; height?: number; format?: EncodeFormat; quality?: number } = {},
 ): Promise<Uint8Array> {
   const width = o.width ?? 256;
   const height = o.height ?? 256;
-  const img = sharp(syntheticPixels(seed, width, height), {
-    raw: { width, height, channels: 3 },
-  }).toFormat(o.format ?? 'png', o.quality ? { quality: o.quality } : {});
-  const { data } = await img.toBuffer({ resolveWithObject: true });
-  return new Uint8Array(data);
+  return codecs.encode(
+    o.format ?? 'png',
+    rgba(syntheticPixels(seed, width, height), width, height),
+    o.quality,
+  );
 }
 
-export async function sharpProcessor() {
-  const s = await loadSharp();
-  if (!s) return null;
-  return createSharpMediaProcessor({ load: async () => ({ default: s }) });
+/**
+ * Insert an EXIF APP1 segment (big-endian TIFF) right after SOI: orientation, a
+ * camera make, and a GPS IFD with a latitude ref, so tests can check all are gone.
+ */
+export function withExif(jpeg: Uint8Array, orientation: number, make = 'SecretCam'): Uint8Array {
+  const makeBytes = new TextEncoder().encode(`${make}\0`);
+  // TIFF: header(8) + IFD0 with 3 entries (2 + 36 + 4) + GPS IFD with 1 entry (2 + 12 + 4) + make.
+  const ifd0 = 8;
+  const gps = ifd0 + 2 + 3 * 12 + 4;
+  const makeAt = gps + 2 + 12 + 4;
+  const tiff = new Uint8Array(makeAt + makeBytes.length);
+  const v = new DataView(tiff.buffer);
+  tiff.set([0x4d, 0x4d, 0, 42]);
+  v.setUint32(4, ifd0);
+  v.setUint16(ifd0, 3);
+  const entry = (at: number, tag: number, type: number, count: number, value: number) => {
+    v.setUint16(at, tag);
+    v.setUint16(at + 2, type);
+    v.setUint32(at + 4, count);
+    if (type === 3 && count === 1) v.setUint16(at + 8, value);
+    else v.setUint32(at + 8, value);
+  };
+  entry(ifd0 + 2, 0x010f, 2, makeBytes.length, makeAt); // Make (ASCII, offset)
+  entry(ifd0 + 14, 0x0112, 3, 1, orientation); // Orientation (SHORT)
+  entry(ifd0 + 26, 0x8825, 4, 1, gps); // GPS IFD pointer
+  v.setUint16(gps, 1);
+  entry(gps + 2, 0x0001, 2, 2, 0x4e000000); // GPSLatitudeRef "N"
+  tiff.set(makeBytes, makeAt);
+  const app1 = new Uint8Array(4 + 6 + tiff.length);
+  const a = new DataView(app1.buffer);
+  a.setUint16(0, 0xffe1);
+  a.setUint16(2, 2 + 6 + tiff.length);
+  app1.set(new TextEncoder().encode('Exif\0\0'), 4);
+  app1.set(tiff, 10);
+  const out = new Uint8Array(jpeg.length + app1.length);
+  out.set(jpeg.subarray(0, 2));
+  out.set(app1, 2);
+  out.set(jpeg.subarray(2), 2 + app1.length);
+  return out;
 }
 
 /**

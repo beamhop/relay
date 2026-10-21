@@ -12,15 +12,7 @@ import {
   type VariantRecord,
   type VariantsResponse,
 } from '../src/index.ts';
-import {
-  FakeProcessor,
-  loadSharp,
-  setup,
-  sha,
-  sharpProcessor,
-  stubFetch,
-  syntheticImage,
-} from './helpers.ts';
+import { FakeProcessor, imageProcessor, setup, sha, stubFetch, syntheticImage } from './helpers.ts';
 
 const FIXTURE = join(import.meta.dir, 'fixtures', 'test-hashes.txt');
 const LIST_URL = 'https://lists.example/blocked.txt';
@@ -157,23 +149,18 @@ describe('abuse scanning', () => {
   });
 
   test('real pixels: a near-duplicate of a listed synthetic image is blocked', async () => {
-    const sharp = await loadSharp();
-    const proc = await sharpProcessor();
-    if (!sharp || !proc) {
-      console.warn('[media tests] sharp missing: skipping real-pixel quarantine test');
-      return;
-    }
+    const proc = imageProcessor();
     const s = await setup({
       blossom: { scanning: { lists: [FIXTURE] }, optimize: { thumbnails: false, resize: false } },
       module: { processor: proc },
     });
-    const near = await syntheticImage(sharp, 1, {
+    const near = await syntheticImage(1, {
       width: 300,
       height: 300,
       format: 'jpeg',
       quality: 70,
     });
-    const fine = await syntheticImage(sharp, 2);
+    const fine = await syntheticImage(2);
     await s.upload(near, 'image/jpeg');
     await s.upload(fine);
     await media(s).queue.onIdle();
@@ -311,15 +298,10 @@ describe('variants', () => {
     expect(r?.summary).toBe('Made 3 copies');
   });
 
-  test('real pixels: sharp variants have real dimensions', async () => {
-    const sharp = await loadSharp();
-    const proc = await sharpProcessor();
-    if (!sharp || !proc) {
-      console.warn('[media tests] sharp missing: skipping real-pixel variants test');
-      return;
-    }
+  test('real pixels: image codec variants have real dimensions', async () => {
+    const proc = imageProcessor();
     const s = await setup({ module: { processor: proc } });
-    const img = await syntheticImage(sharp, 5, { width: 1000, height: 500 });
+    const img = await syntheticImage(5, { width: 1000, height: 500 });
     const h = await sha(img);
     await s.upload(img);
     await media(s).queue.onIdle();
@@ -342,7 +324,7 @@ describe('health and attention', () => {
     const hc = s.kernel.health.find((h) => h.id === 'media.pipeline');
     const r = await hc?.run('main');
     expect(r?.status).toBe('critical');
-    expect(r?.technical).toContain('bun add sharp');
+    expect(r?.technical).toContain('built-in WebAssembly image codecs');
     const cards = await s.kernel.cards.find((c) => c.id === 'media')?.cards('main');
     expect(cards?.map((c) => c.id)).toEqual([
       'media.scan-unavailable:main',
@@ -350,17 +332,17 @@ describe('health and attention', () => {
     ]);
   });
 
-  test('sharp missing but media goals want it → info card, nothing to approve; tools present → ok', async () => {
+  test('image tools missing (Cloudflare) but media goals want them → info card, nothing to approve; tools present → ok', async () => {
     const s = await setup();
     const cards = await s.kernel.cards.find((c) => c.id === 'media')?.cards(null);
-    expect(cards?.map((c) => c.id)).toEqual(['media.sharp-missing:main']);
+    expect(cards?.map((c) => c.id)).toEqual(['media.image-tools-missing:main']);
     const card = cards?.[0];
     expect(card?.severity).toBe('info');
     expect(card?.body).toBe(
-      'Photos are stored as they are. Thumbnails need an extra component; the standard download includes it.',
+      'Photos are stored as they are. Resizing and thumbnails work when Beamhop runs on its own server.',
     );
-    expect(card?.body).not.toMatch(/sharp|libvips|node_modules/i);
-    expect(card?.technical).toContain('sharp');
+    expect(card?.body).not.toMatch(/wasm|webassembly|codec|ports/i);
+    expect(card?.technical).toContain('ports.media');
     expect(card?.primary).toBeUndefined();
     expect(card?.secondary).toBeUndefined();
     const ok = await setup({ module: { processor: new FakeProcessor() } });

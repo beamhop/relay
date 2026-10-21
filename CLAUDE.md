@@ -10,7 +10,7 @@ Product plan: `PLAN.md` (read the sections relevant to your package). Contracts:
 - SQL: **Drizzle ORM** — sqlite schema shared by `bun:sqlite` and D1; separate pg schema for Postgres (`postgres` driver).
 - Blobs: S3-compatible via `aws4fetch` (works on Bun and Workers); fs adapter Bun-only.
 - Auth: `jose`, `@simplewebauthn/server`, `oauth4webapi`. SCIM: thin, hand-written over Hono.
-- Media: `sharp` (Bun only, optional dependency), ffmpeg via `Bun.spawn` (optional); on CF use Cloudflare Images or skip.
+- Media: jSquash WebAssembly codecs (mozjpeg, libwebp, libavif, PNG, resize) + omggif, embedded in the binary and run in a worker thread on Bun; ffmpeg via `Bun.spawn` (optional); on CF use Cloudflare Images or skip. No native addons: the binary is one file.
 - AI: Vercel AI SDK `ai` + `@ai-sdk/openai-compatible`.
 - Admin PWA: SvelteKit (static adapter) + shadcn-svelte + superforms/formsnap + LayerChart + paraglide. Team client: fork of Flotilla (MIT) + `@welshman/*`.
 - Backups/HA on VMs: Litestream (not LiteFS).

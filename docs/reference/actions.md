@@ -4,7 +4,7 @@
 
 Every admin operation is an action. The admin app, the CLI (`beamhop <group> <name>`), the admin API (`POST /api/v1/nodes/self[/relays/<relay>]/actions/<id>`, see `/api/v1/openapi.json`), the command palette and NIP-86 all run these same actions. Changes show a preview first and can be undone where marked.
 
-[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [logs](#logs) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [system](#system) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
+[access](#access) · [admins](#admins) · [ai-setup](#ai-setup) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [logs](#logs) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [system](#system) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
 
 ## access
 
@@ -132,6 +132,21 @@ Change what a team member may do, for all relays or for one relay.
 | `id` | string |  | The team member |
 | `role` | `owner` \| `admin` \| `moderator` \| `viewer` \| `none` |  | New role ("none" removes access for that scope) |
 | `relayId` | string |  | Only for this relay (empty = all relays) |
+
+## ai-setup
+
+### Find AI models
+
+Ask your AI service which models it offers.
+
+- **id:** `ai-setup.list-models` · **CLI:** `beamhop ai-setup list-models` · **scope:** node · **permission:** `config.write`
+- read-only
+- *Technical:* GET {baseUrl}/models (OpenAI-compatible); returns model ids only. The saved key is sent only to the saved address.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `baseUrl` | string |  |  |
+| `apiKey` | string |  |  |
 
 ## ai
 
@@ -1100,7 +1115,7 @@ Make the thumbnail and phone-sized copies of a photo (or video versions) again.
 
 - **id:** `media.regenerate-variants` · **CLI:** `beamhop media regenerate-variants` · **scope:** relay · **permission:** `media.write`
 - changes settings/data
-- *Technical:* Re-runs thumbnail/resize (sharp) or transcode/poster (ffmpeg) and records results in docs `media.variants` (keyed by original sha256).
+- *Technical:* Re-runs thumbnail/resize (image codecs) or transcode/poster (ffmpeg) and records results in docs `media.variants` (keyed by original sha256).
 
 | Setting | Type | Default | Description |
 |---|---|---|---|

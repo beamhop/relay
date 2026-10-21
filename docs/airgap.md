@@ -19,7 +19,6 @@ You get `dist/airgap/beamhop-airgap-1.4.0.tar.gz` plus `.sha256` (and `.minisig`
 | `releases/` | Beamhop for each chosen CPU, `SHA256SUMS`, and `latest.json` for updates |
 | `web/` | admin app and team client builds |
 | `plugins/` | plugin catalog snapshot (+ packages with `--plugins-dir`) |
-| `media/` | image library (sharp) prebuilds; Beamhop runs without them |
 | `litestream/` | how to add Litestream for backups/HA (third-party; add with `--litestream-dir`) |
 | `config/beamhop.yaml` | settings for a closed network (see below) |
 | `docs/`, `ha/`, `install.sh` | these docs, the standby kit, the installer |

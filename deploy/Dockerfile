@@ -2,14 +2,9 @@
 # Beamhop single-binary image. Build from the repo root:
 #   docker build -f deploy/Dockerfile -t beamhop .
 # Multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .
-# If packages/pwa/build (admin app) or packages/team-client/build (Team app) exist in
-# the build context, they are embedded.
-#
-# Image processing: sharp (native addon + libvips) cannot live inside the single
-# binary. `bun install` installs it for the build platform (optional dependency of
-# @beamhop/media) and the build script copies it to /out/<target>/node_modules by
-# default (`--no-sharp` opts out), which is shipped next to the binary; the binary
-# loads it from there (or BEAMHOP_SHARP_PATH). Without it uploads are stored unchanged.
+# The image holds one file: the `beamhop` binary built by `bun run build` (admin app,
+# team app, image codecs and workers all inside it). Video conversion uses ffmpeg from
+# PATH, which this distroless image does not have; uploads of video are stored as sent.
 
 ARG BUN_VERSION=1.4.3
 
@@ -20,22 +15,18 @@ ARG BEAMHOP_BUILD_VERSION=dev
 WORKDIR /src
 COPY package.json tsconfig.base.json tsconfig.json ./
 COPY packages ./packages
+COPY scripts/build.ts ./scripts/build.ts
 RUN bun install
-# sharp (optional dependency of @beamhop/media) must be installed with its glibc
-# prebuilt for this platform; fail the image build early if it cannot load.
-RUN cd packages/media && bun -e "await import('sharp')"
-RUN BEAMHOP_VERSION="${BEAMHOP_BUILD_VERSION#v}" \
-    bun packages/runtime-bun/scripts/build.ts --host --outdir /out \
- && mv /out/linux-* /out/pkg \
- && mkdir -p /out/pkg/node_modules /data-empty
+RUN BEAMHOP_VERSION="${BEAMHOP_BUILD_VERSION#v}" bun run build -- --outdir /out \
+ && mv /out/beamhop-linux-* /out/beamhop \
+ && mkdir -p /data-empty
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 LABEL org.opencontainers.image.title="Beamhop" \
       org.opencontainers.image.description="Nostr relay + Blossom media server" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/beamhop/beamhop"
-COPY --from=build /out/pkg/beamhop /usr/local/bin/beamhop
-COPY --from=build /out/pkg/node_modules /usr/local/bin/node_modules
+COPY --from=build /out/beamhop /usr/local/bin/beamhop
 COPY --from=build --chown=65532:65532 /data-empty /data
 ENV BEAMHOP_DATA_DIR=/data \
     BEAMHOP_LISTEN=0.0.0.0:3334

@@ -8,7 +8,7 @@ import {
   phashFromGray,
   popcount32,
 } from '../src/hash.ts';
-import { loadSharp, sharpProcessor, syntheticImage } from './helpers.ts';
+import { imageProcessor, syntheticImage } from './helpers.ts';
 
 const gray = (w: number, h: number, f: (x: number, y: number) => number) => {
   const a = new Uint8Array(w * h);
@@ -60,43 +60,43 @@ describe('pure hashes', () => {
   });
 });
 
-describe('sharp-backed hashes', async () => {
-  const sharp = await loadSharp();
-  const proc = await sharpProcessor();
+describe('image-codec hashes', () => {
+  const proc = imageProcessor();
   const hashOf = async (b: Uint8Array, type = 'image/png') => {
-    const [p, d] = await proc!.process(b, type, [
+    const [p, d] = await proc.process(b, type, [
       { op: 'perceptual-hash' },
       { op: 'perceptual-hash', format: 'dhash' },
     ]);
     return { p: p!.hash!, d: d!.hash!, w: p!.width, bh: p!.blurhash };
   };
 
-  test.skipIf(!sharp)('stable across runs and encodings', async () => {
-    const a = await hashOf(await syntheticImage(sharp!, 1));
-    const b = await hashOf(await syntheticImage(sharp!, 1));
+  test('stable across runs and encodings', async () => {
+    const a = await hashOf(await syntheticImage(1));
+    const b = await hashOf(await syntheticImage(1));
     expect(a).toEqual(b);
     expect(a.w).toBe(256);
     expect(a.bh).toMatch(/^[0-9A-Za-z#$%*+,\-.:;=?@[\]^_{|}~]{28}$/);
   });
 
-  test.skipIf(!sharp)('near-duplicates are close, different images are far', async () => {
-    const orig = await hashOf(await syntheticImage(sharp!, 1));
+  test('near-duplicates are close, different images are far', async () => {
+    const orig = await hashOf(await syntheticImage(1));
     const near = await hashOf(
-      await syntheticImage(sharp!, 1, { width: 180, height: 180, format: 'jpeg', quality: 50 }),
+      await syntheticImage(1, { width: 180, height: 180, format: 'jpeg', quality: 50 }),
       'image/jpeg',
     );
     expect(hammingHex(orig.p, near.p)).toBeLessThanOrEqual(8);
     expect(hammingHex(orig.d, near.d)).toBeLessThanOrEqual(8);
     for (const seed of [2, 3, 4, 5]) {
-      const other = await hashOf(await syntheticImage(sharp!, seed));
+      const other = await hashOf(await syntheticImage(seed));
       expect(hammingHex(orig.p, other.p)).toBeGreaterThan(12);
     }
   });
 
-  test.skipIf(!sharp)('fixture list hashes still match the synthetic images', async () => {
-    const s1 = await hashOf(await syntheticImage(sharp!, 1));
-    const s4 = await hashOf(await syntheticImage(sharp!, 4));
-    expect(hammingHex(s1.p, '9be4e19e67998621')).toBeLessThanOrEqual(4);
-    expect(hammingHex(s4.d, '24240c0c0c242424')).toBeLessThanOrEqual(4);
+  test('fixture list hashes still match the synthetic images', async () => {
+    const s1 = await hashOf(await syntheticImage(1));
+    const s4 = await hashOf(await syntheticImage(4));
+    // These were computed with sharp/libvips; the wasm pipeline reproduces them exactly.
+    expect(hammingHex(s1.p, '9be4e19e67998621')).toBeLessThanOrEqual(1);
+    expect(hammingHex(s4.d, '24240c0c0c242424')).toBeLessThanOrEqual(1);
   });
 });

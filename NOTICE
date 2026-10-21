@@ -15,3 +15,19 @@ packages/team-client is a modified fork of Flotilla. Upstream files keep their M
 Beamhop modifications (marked "beamhop", and the src/beamhop/ and scripts/beamhop/
 directories) are licensed under AGPL-3.0-or-later. See packages/team-client/UPSTREAM.md.
 ------------------------------------------------------------------------------
+jSquash image codecs — dependencies of packages/media, embedded in the beamhop binary
+https://github.com/jamsinclair/jSquash (derived from Google's Squoosh)
+@jsquash/jpeg, @jsquash/png, @jsquash/webp, @jsquash/avif, @jsquash/resize
+Licensed under the Apache License, Version 2.0.
+
+They contain WebAssembly builds of: MozJPEG / libjpeg-turbo (IJG and BSD-3-Clause
+licenses; this software is based in part on the work of the Independent JPEG Group),
+libwebp (BSD-3-Clause, Copyright Google Inc.), libavif (BSD-2-Clause, Copyright Joe
+Drago) with libaom and dav1d (BSD-2-Clause), and the Squoosh PNG and resize codecs
+(Apache-2.0). Each package ships its license text in node_modules/@jsquash/<name>/.
+------------------------------------------------------------------------------
+omggif — dependency of packages/media, embedded in the beamhop binary
+https://github.com/deanm/omggif
+Copyright (c) 2013 Dean McNamee
+Licensed under the MIT License.
+------------------------------------------------------------------------------

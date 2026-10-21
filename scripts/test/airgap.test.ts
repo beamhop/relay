@@ -11,7 +11,7 @@ import { join, resolve } from 'node:path';
 import { updateCommand } from '../../packages/cli/src/commands/update.ts';
 import { BufferIo } from '../../packages/cli/src/io.ts';
 import { parseConfig } from '../../packages/core/src/index.ts';
-import { airgapBundle, airgapConfig, parseAirgapArgs, sharpPackages } from '../airgap-bundle.ts';
+import { airgapBundle, airgapConfig, parseAirgapArgs } from '../airgap-bundle.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'beamhop-airgap-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -28,24 +28,6 @@ describe('airgap-bundle.ts', () => {
       'file:///opt/beamhop/bundle/releases/latest.json',
     );
     expect(yaml).not.toMatch(/https:\/\//);
-  });
-
-  test('sharp platform packages follow sharp’s pinned versions', () => {
-    const pkg = {
-      version: '0.35.5',
-      optionalDependencies: {
-        '@img/sharp-linux-x64': '0.35.5',
-        '@img/sharp-libvips-linux-x64': '1.3.4',
-        '@img/sharp-win32-x64': '0.35.5',
-      },
-    };
-    expect(sharpPackages('linux-x64', pkg)).toEqual([
-      { name: '@img/sharp-linux-x64', version: '0.35.5' },
-      { name: '@img/sharp-libvips-linux-x64', version: '1.3.4' },
-    ]);
-    expect(sharpPackages('windows-x64', pkg)).toEqual([
-      { name: '@img/sharp-win32-x64', version: '0.35.5' },
-    ]);
   });
 
   test('bundle → extract → install → offline update', async () => {
@@ -68,7 +50,6 @@ describe('airgap-bundle.ts', () => {
       join(root, 'missing-pwa'),
       '--team-dir',
       join(root, 'missing-team'),
-      '--no-sharp',
       '--out',
       join(root, 'out'),
     ]);
@@ -83,7 +64,6 @@ describe('airgap-bundle.ts', () => {
       'config/beamhop.yaml',
       'plugins/catalog.json',
       'litestream/README.md',
-      'media/README.md',
       'web/admin/NOT-INCLUDED.txt',
       'ha/failover.sh',
       'BUNDLE.json',

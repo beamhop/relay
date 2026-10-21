@@ -9,7 +9,6 @@ export * from './ports.ts';
 export * from './server.ts';
 export * from './runtime-services.ts';
 export * from './services.ts';
-export * from './sharp.ts';
 export * from './storage.ts';
 export * from './team.ts';
 export * from './tls.ts';

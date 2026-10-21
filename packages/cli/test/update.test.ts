@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { join } from 'node:path';
 import { compareVersions, rollbackCommand, updateCommand } from '../src/commands/update.ts';
 import { BufferIo } from '../src/io.ts';
+import { oldPath, replaceBinary } from '../src/updater.ts';
 import { testContext, tmp } from './helpers.ts';
 
 const script = (version: string, healthy = true) =>
@@ -160,5 +161,28 @@ describe('update and rollback', () => {
       ),
     ).rejects.toThrow('not signed');
     expect(readFileSync(bin, 'utf8')).toBe(script('0.1.0'));
+  });
+});
+
+describe('replaceBinary', () => {
+  test('POSIX: renames the new binary over the old one', () => {
+    const dir = tmp();
+    writeFileSync(join(dir, 'beamhop'), 'old');
+    writeFileSync(join(dir, 'new'), 'new');
+    replaceBinary(join(dir, 'new'), join(dir, 'beamhop'), 'linux');
+    expect(readFileSync(join(dir, 'beamhop'), 'utf8')).toBe('new');
+    expect(existsSync(oldPath(join(dir, 'beamhop')))).toBe(false);
+  });
+
+  test('Windows: the running binary is moved aside first, a stale .old is replaced', () => {
+    const dir = tmp();
+    const bin = join(dir, 'beamhop.exe');
+    writeFileSync(bin, 'v1');
+    writeFileSync(oldPath(bin), 'v0');
+    writeFileSync(join(dir, 'staged'), 'v2');
+    replaceBinary(join(dir, 'staged'), bin, 'win32');
+    expect(readFileSync(bin, 'utf8')).toBe('v2');
+    expect(readFileSync(oldPath(bin), 'utf8')).toBe('v1');
+    expect(existsSync(join(dir, 'staged'))).toBe(false);
   });
 });

@@ -13,6 +13,33 @@ bun test             # all unit tests
 bun run typecheck
 ```
 
+## Build the binary
+
+One command builds everything into one file: the admin app, the team app, then the
+`beamhop` binary with both embedded (plus the image codecs and worker threads).
+
+```bash
+bun run build                                  # this platform → packages/runtime-bun/dist/beamhop-<os>-<arch>
+bun run build -- --all                         # linux-x64, linux-arm64, darwin-arm64, windows-x64
+bun run build -- --target linux-x64 --outdir dist
+bun run build -- --skip-ui                     # reuse existing app builds
+```
+
+The build stops if an app build is missing or fails, and checks the host binary with
+`beamhop --build-info`. For a quick server-only binary while developing:
+`bun packages/runtime-bun/scripts/build.ts --host --allow-missing-ui`.
+
+To try the Linux binary on a clean machine, `bun run smoke:linux` boots a Debian microVM
+with [microsandbox](https://microsandbox.dev) (`msb`), runs the binary there with nothing
+else installed, and checks the relay, both apps, the CLI and photo processing. MicroVMs
+use the host's architecture: on Apple Silicon this tests `linux-arm64`; `linux-x64` needs
+an x86-64 Linux host with KVM.
+
+```bash
+bun run build -- --skip-ui --target linux-arm64
+bun run smoke:linux
+```
+
 Package layout, the stack and the contracts every package builds on are described in
 [CLAUDE.md](CLAUDE.md) (engineering conventions) and [PLAN.md](PLAN.md) (product plan).
 Read the contracts in `packages/core/src/` before writing code.

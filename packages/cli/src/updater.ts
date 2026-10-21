@@ -372,6 +372,25 @@ export async function stageRelease(
 // ── on-disk swap / rollback ──
 
 export const previousPath = (bin: string) => `${bin}.previous`;
+/** Where a replaced Windows binary waits until it is no longer running. */
+export const oldPath = (bin: string) => `${bin}.old`;
+
+/**
+ * Put `src` at `bin`. Windows cannot overwrite a running .exe but can rename it, so
+ * there the current binary is first moved to `<bin>.old` (removed on a later swap,
+ * once nothing runs it).
+ */
+export function replaceBinary(src: string, bin: string, platform = process.platform): void {
+  if (platform === 'win32' && existsSync(bin)) {
+    try {
+      rmSync(oldPath(bin), { force: true });
+    } catch {
+      // still running from a previous swap; renaming over it below would fail too
+    }
+    renameSync(bin, existsSync(oldPath(bin)) ? `${oldPath(bin)}-${Date.now()}` : oldPath(bin));
+  }
+  renameSync(src, bin);
+}
 /** Crash-loop guard: written at swap, removed after a healthy boot or a rollback. */
 export const pendingPath = (bin: string) => `${bin}.pending.json`;
 
@@ -397,7 +416,7 @@ export function swapBinary(
       `${previous}.json`,
       JSON.stringify({ version: currentVersion, replacedAt: new Date(nowMs).toISOString() }),
     );
-    renameSync(staged.path, bin);
+    replaceBinary(staged.path, bin);
     writeFileSync(
       pendingPath(bin),
       JSON.stringify({ from: currentVersion, to: staged.version, attempts: 0 } as PendingUpdate),
@@ -428,7 +447,7 @@ export function rollbackBinary(bin: string): { version: string } {
   const previous = previousPath(bin);
   copyFileSync(bin, `${bin}.rolled-back.tmp`);
   renameSync(`${bin}.rolled-back.tmp`, `${bin}.rolled-back`);
-  renameSync(previous, bin);
+  replaceBinary(previous, bin);
   rmSync(`${previous}.json`, { force: true });
   rmSync(pendingPath(bin), { force: true });
   return prev;

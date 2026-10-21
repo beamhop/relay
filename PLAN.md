@@ -85,7 +85,7 @@ Target admin: **pro / infra operators** — but the UX must be simple enough tha
 | `KV/Config` | SQLite table | D1 / KV |
 | `PubSub` (fan-out) | in-process | Durable Object per relay shard |
 | `Scheduler` | timers | Cron Triggers / DO alarms |
-| `MediaProcessor` | sharp/ffmpeg sidecar | Cloudflare Images / deferred queue |
+| `MediaProcessor` | built-in wasm image codecs (worker thread) + ffmpeg on PATH | Cloudflare Images / deferred queue |
 | `PluginHost` | hot-reload, sandboxed worker | compiled into bundle at deploy |
 | `LLM` | Ollama / any OpenAI-compatible URL | remote OpenAI-compatible URL |
 

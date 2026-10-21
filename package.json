@@ -5,6 +5,7 @@
   "type": "module",
   "workspaces": ["packages/*"],
   "scripts": {
+    "build": "bun scripts/build.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
@@ -14,6 +15,7 @@
     "ci:dco": "bun scripts/ci/dco-check.ts main..HEAD",
     "ci:vanilla": "cd packages/pwa && bun run build && cd ../.. && bun scripts/ci/vanilla-check.ts",
     "ci:cf-bundle": "bun scripts/ci/cf-bundle.ts",
+    "smoke:linux": "bun scripts/smoke/linux.ts",
     "bench:load": "bun scripts/bench/load.ts",
     "bench:gate": "bun scripts/bench/gate.ts"
   },

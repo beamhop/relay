@@ -6,6 +6,7 @@
  * SHA-256 and the database row counts, then explain the DNS switch.
  */
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { localPublicIps } from '@beamhop/runtime-bun';
 import { AwsClient } from 'aws4fetch';
@@ -273,7 +274,7 @@ export async function moveCommand(
     let file = resolve(ctx.cwd, arg);
     let downloaded: string | null = null;
     if (s3) {
-      downloaded = join(ctx.env.TMPDIR ?? '/tmp', `beamhop-move-${process.pid}.tar.gz`);
+      downloaded = join(ctx.env.TMPDIR ?? tmpdir(), `beamhop-move-${process.pid}.tar.gz`);
       await s3Download(ctx, flags, s3, downloaded);
       file = downloaded;
     }

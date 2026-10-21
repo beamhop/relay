@@ -8,12 +8,34 @@
  * Serving also adds the in-app updater and doctor (`binarySystemModule`) and
  * runs the crash-loop guard of a pending update.
  */
-import { VERSION, main } from '@beamhop/runtime-bun';
+import { VERSION, embeddedAssets, main } from '@beamhop/runtime-bun';
 import { runCli } from './cli.ts';
 import { binarySystemModule } from './system.ts';
 import { bootGuard } from './updater.ts';
 
+/** What this binary contains (`beamhop --build-info`, checked by the root `bun run build`). */
+export function buildInfo(): {
+  version: string;
+  platform: string;
+  arch: string;
+  assets: { admin: number; team: number };
+} {
+  return {
+    version: VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    assets: {
+      admin: Object.keys(embeddedAssets('admin')).length,
+      team: Object.keys(embeddedAssets('team')).length,
+    },
+  };
+}
+
 export async function runBinary(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === '--build-info') {
+    process.stdout.write(`${JSON.stringify(buildInfo())}\n`);
+    process.exit(0);
+  }
   let serving = false;
   const code = await runCli(argv, {
     serve: async (args) => {

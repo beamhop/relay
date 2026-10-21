@@ -1,51 +1,39 @@
 #!/usr/bin/env bun
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Build single-file `beamhop` binaries with `bun build --compile`.
+ * Build the single-file `beamhop` binary with `bun build --compile`.
  *
- *   bun scripts/build.ts                 # linux-x64, linux-arm64, darwin-arm64
- *   bun scripts/build.ts --host          # only the current platform
+ *   bun scripts/build.ts                       # linux-x64, linux-arm64, darwin-arm64, windows-x64
+ *   bun scripts/build.ts --host                # only the current platform
  *   bun scripts/build.ts --target linux-x64 --outdir dist
- *   bun scripts/build.ts --host --no-sharp   # bare binary, no image processing
+ *   bun scripts/build.ts --host --allow-missing-ui   # server/CLI only (development)
  *
- * If `packages/pwa/build` exists, every file in it is embedded and registered via a
- * generated asset manifest (served at /admin). Otherwise the PWA is skipped.
- * Likewise `packages/team-client/build` is embedded as the `team` bundle (served
- * at /app when `modules.team.enabled`; `--team <dir>` overrides the path).
- * Cross-compiling downloads the target Bun runtime on first use.
+ * One file per target, `<outdir>/beamhop-<target>[.exe]`, holding everything: the
+ * server, the CLI, the admin app (`packages/pwa/build`, served at /admin), the team
+ * app (`packages/team-client/build`, served at /app when `modules.team.enabled`),
+ * the worker threads (signature checks, image processing, plugin sandbox) and the
+ * WebAssembly image codecs. Video conversion uses ffmpeg from PATH when present.
  *
- * Image processing (sharp) is a native addon + libvips and cannot live inside
- * the single file. By default (sharp is part of the standard download) each target
- * is written to `dist/<target>/beamhop` and that platform's sharp,
- * `@img/sharp-<platform>`, `@img/sharp-libvips-<platform>` and their JS dependencies
- * are copied into `dist/<target>/node_modules`; ship the directory as one archive.
- * `--no-sharp` opts out and writes a bare `dist/beamhop-<target>` instead
- * (`--with-sharp` is still accepted; it is the default). At runtime
- * the binary loads sharp from `node_modules` next to itself or from
- * `BEAMHOP_SHARP_PATH` (see src/sharp.ts); without it, media is stored as-is.
- * Cross-target sharp packages must be installed first, e.g.
- * `bun install --os=linux --cpu=arm64`.
+ * Both app builds must exist (`bun run build` at the repo root builds them first);
+ * a missing or empty build stops the build unless `--allow-missing-ui` is given.
+ * `--pwa <dir>` / `--team <dir>` override the paths. Cross-compiling downloads the
+ * target Bun runtime on first use.
  */
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const PKG = resolve(import.meta.dir, '..');
-/** sharp is an optional dependency of @beamhop/media: resolve it from there. */
-const MEDIA_PKG = resolve(PKG, '../media');
 const PWA_BUILD = resolve(PKG, '../pwa/build');
 const TEAM_BUILD = resolve(PKG, '../team-client/build');
-const ALL_TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64'] as const;
+const ALL_TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'windows-x64'] as const;
 /** CLI dispatch (`beamhop serve` + CLI subcommands); falls back to the server-only entry. */
 const CLI_ENTRY = resolve(PKG, '../cli/src/binary.ts');
 /**
@@ -58,10 +46,13 @@ const PLUGIN_SANDBOX = resolve(PKG, '../plugins/src/bun/sandbox.ts');
 /** Signature verification worker (verify-pool.ts), also an extra entrypoint. */
 export const VERIFY_WORKER = resolve(PKG, 'src/verify-worker.ts');
 const VERIFY_POOL = resolve(PKG, 'src/verify-pool.ts');
+/** Image processing worker (media image-pool.ts): runs the wasm codecs off the event loop. */
+export const IMAGE_WORKER = resolve(PKG, '../media/src/image-worker.ts');
+const IMAGE_POOL = resolve(PKG, '../media/src/image-pool.ts');
 
 /** Worker scripts compiled as extra entrypoints (those that exist). */
 export function workerEntries(): string[] {
-  return [PLUGIN_WORKER, VERIFY_WORKER].filter((w) => existsSync(w));
+  return [PLUGIN_WORKER, VERIFY_WORKER, IMAGE_WORKER].filter((w) => existsSync(w));
 }
 
 /** Deepest directory containing every path (the `bun build --root`). */
@@ -83,8 +74,8 @@ export function embeddedWorkerPath(
   return `./${relative(root, worker).split(sep).join('/')}`;
 }
 
-function hostTarget(): string {
-  const os = process.platform === 'darwin' ? 'darwin' : process.platform;
+export function hostTarget(): string {
+  const os = process.platform === 'win32' ? 'windows' : process.platform;
   const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
   return `${os}-${arch}`;
 }
@@ -148,6 +139,12 @@ export function generateEntry(
       `setVerifyWorkerUrl(${JSON.stringify(embeddedWorkerPath(entry, VERIFY_WORKER, workers))});`,
     );
   }
+  if (workers.includes(IMAGE_WORKER)) {
+    lines.push(
+      `import { setImageWorkerUrl } from ${JSON.stringify(IMAGE_POOL)};`,
+      `setImageWorkerUrl(${JSON.stringify(embeddedWorkerPath(entry, IMAGE_WORKER, workers))});`,
+    );
+  }
   const manifest: string[] = [];
   files.forEach((f, i) => {
     lines.push(`import a${i} from ${JSON.stringify(f)} with { type: 'file' };`);
@@ -191,8 +188,6 @@ export function compileArgs(
     '--minify',
     '--sourcemap',
     `--define=__BEAMHOP_VERSION__=${JSON.stringify(releaseVersion())}`,
-    // Lets the binary resolve packages shipped next to it (sharp's own dependencies).
-    '--compile-autoload-package-json',
     `--target=bun-${target}`,
     // Fixed root so the worker's embedded path matches `embeddedWorkerPath()`.
     `--root=${commonRoot(entries.map((e) => dirname(e)))}`,
@@ -217,77 +212,13 @@ async function compile(
   if (code !== 0) throw new Error(`bun build failed for ${target} (exit ${code})`);
 }
 
-/** sharp's platform name for a build target (`windows-x64` → `win32-x64`). */
-export function sharpPlatform(target: string): string {
-  return target.replace(/^windows-/, 'win32-');
-}
-
-/** sharp native packages for a target: `linux-x64` → `@img/sharp-linux-x64` + libvips. */
-function sharpNativeFor(target: string): Set<string> {
-  const p = sharpPlatform(target);
-  return new Set([`@img/sharp-${p}`, `@img/sharp-libvips-${p}`]);
-}
-
-/**
- * The installed packages sharp needs on `target`: sharp, its JS dependencies,
- * and the target's `@img/sharp-*` native packages (other platforms' optional
- * packages are skipped). Returns name → real directory, plus native packages
- * that are not installed (cross-compiling without `bun install --os/--cpu`).
- */
-export function sharpPackages(
-  target: string,
-  fromDir = MEDIA_PKG,
-): { dirs: Map<string, string>; missing: string[] } {
-  const native = sharpNativeFor(target);
-  const dirs = new Map<string, string>();
-  const missing: string[] = [];
-  const queue: Array<{ name: string; from: string; optional: boolean }> = [
-    { name: 'sharp', from: fromDir, optional: false },
-  ];
-  while (queue.length > 0) {
-    const { name, from, optional } = queue.shift() as (typeof queue)[number];
-    if (dirs.has(name)) continue;
-    let dir: string;
-    try {
-      const req = createRequire(join(from, 'package.json'));
-      dir = realpathSync(dirname(req.resolve(`${name}/package.json`)));
-    } catch {
-      if (!optional || native.has(name)) missing.push(name);
-      continue;
-    }
-    dirs.set(name, dir);
-    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
-      dependencies?: Record<string, string>;
-      optionalDependencies?: Record<string, string>;
-    };
-    for (const dep of Object.keys(pkg.dependencies ?? {}))
-      queue.push({ name: dep, from: dir, optional: false });
-    for (const dep of Object.keys(pkg.optionalDependencies ?? {}))
-      if (native.has(dep)) queue.push({ name: dep, from: dir, optional: true });
-  }
-  return { dirs, missing };
-}
-
-/** Copy sharp for `target` into `<dest>/node_modules` (flat npm layout). */
-export function copySharp(target: string, dest: string, fromDir = MEDIA_PKG): string[] {
-  const { dirs, missing } = sharpPackages(target, fromDir);
-  const nm = join(dest, 'node_modules');
-  for (const [name, dir] of dirs) {
-    const to = join(nm, ...name.split('/'));
-    rmSync(to, { recursive: true, force: true });
-    mkdirSync(dirname(to), { recursive: true });
-    cpSync(dir, to, { recursive: true, dereference: true });
-  }
-  return missing;
-}
-
 export interface BuildArgs {
   outDir: string;
   targets: string[];
   pwaDir: string;
   teamDir: string;
-  /** Ship sharp next to each binary (default true; `--no-sharp` turns it off). */
-  withSharp: boolean;
+  /** Build even when an app build is missing (server/CLI-only binary for development). */
+  allowMissingUi: boolean;
 }
 
 export function parseBuildArgs(argv: string[]): BuildArgs {
@@ -296,12 +227,11 @@ export function parseBuildArgs(argv: string[]): BuildArgs {
     targets: [...ALL_TARGETS],
     pwaDir: PWA_BUILD,
     teamDir: TEAM_BUILD,
-    withSharp: true,
+    allowMissingUi: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
-    if (x === '--with-sharp') a.withSharp = true;
-    else if (x === '--no-sharp') a.withSharp = false;
+    if (x === '--allow-missing-ui') a.allowMissingUi = true;
     else if (x === '--host') a.targets = [hostTarget()];
     else if (x === '--target') a.targets = (argv[++i] ?? '').split(',').filter(Boolean);
     else if (x === '--outdir') a.outDir = resolve(argv[++i] ?? a.outDir);
@@ -309,45 +239,52 @@ export function parseBuildArgs(argv: string[]): BuildArgs {
     else if (x === '--team') a.teamDir = resolve(argv[++i] ?? a.teamDir);
     // scripts/release.ts passes `--version` (the binary reads BEAMHOP_VERSION).
     else if (x === '--version') i++;
+    else throw new Error(`unknown option: ${x}`);
   }
   return a;
 }
 
-/** Binary location: `<out>/<target>/beamhop` with sharp, else `<out>/beamhop-<target>`. */
-export function binaryPath(outDir: string, target: string, withSharp: boolean): string {
-  return withSharp ? join(outDir, target, 'beamhop') : join(outDir, `beamhop-${target}`);
+/** Binary location: `<out>/beamhop-<target>`, with `.exe` for Windows targets. */
+export function binaryPath(outDir: string, target: string): string {
+  return join(outDir, `beamhop-${target}${target.startsWith('windows-') ? '.exe' : ''}`);
+}
+
+/**
+ * Why an app build cannot be embedded (missing folder, or no index.html), or null.
+ * `name` is the plain name for the message.
+ */
+export function uiProblem(dir: string, name: string, hint: string): string | null {
+  if (!existsSync(join(dir, 'index.html'))) {
+    return `${name} build not found (${join(dir, 'index.html')} is missing). ${hint}`;
+  }
+  return null;
 }
 
 async function run(argv: string[]): Promise<void> {
-  const { outDir, targets, pwaDir, teamDir, withSharp } = parseBuildArgs(argv);
+  const { outDir, targets, pwaDir, teamDir, allowMissingUi } = parseBuildArgs(argv);
+  const problems = [
+    uiProblem(pwaDir, 'Admin app', 'Build it with `bun run --cwd packages/pwa build`.'),
+    uiProblem(teamDir, 'Team app', 'Build it with `bun run --cwd packages/team-client build`.'),
+  ].filter((p): p is string => p !== null);
+  if (problems.length > 0) {
+    for (const p of problems) console.error(p);
+    if (!allowMissingUi) {
+      console.error(
+        'The binary must contain every user interface. Run `bun run build` at the repo root, or pass --allow-missing-ui for a server-only development build.',
+      );
+      process.exit(1);
+    }
+  }
   mkdirSync(outDir, { recursive: true });
-  const { entry, assets, teamAssets, worker, workers } = generateEntry(outDir, pwaDir, teamDir);
-  if (!worker) console.warn('plugin sandbox worker not found; sandboxed plugins will not load');
-  console.log(
-    assets ? `embedding ${assets} admin app files` : 'admin app build not found; skipping PWA',
-  );
-  console.log(
-    teamAssets
-      ? `embedding ${teamAssets} team app files`
-      : 'team app build not found; skipping /app',
-  );
+  const { entry, assets, teamAssets, workers } = generateEntry(outDir, pwaDir, teamDir);
+  for (const w of [PLUGIN_WORKER, VERIFY_WORKER, IMAGE_WORKER]) {
+    if (!workers.includes(w)) throw new Error(`worker script missing: ${w}`);
+  }
+  console.log(`embedding ${assets} admin app files and ${teamAssets} team app files`);
   for (const t of targets) {
-    // With sharp: dist/<target>/{beamhop,node_modules/} so sharp sits next to the binary.
-    const outfile = binaryPath(outDir, t, withSharp);
-    mkdirSync(dirname(outfile), { recursive: true });
+    const outfile = binaryPath(outDir, t);
     console.log(`compiling ${outfile}`);
     await compile(entry, t, outfile, workers);
-    if (withSharp) {
-      const missing = copySharp(t, join(outDir, t));
-      if (missing.length) {
-        // A partial copy cannot load; ship the bare binary for this target instead.
-        rmSync(join(outDir, t, 'node_modules'), { recursive: true, force: true });
-        const [os, cpu] = sharpPlatform(t).split('-');
-        console.warn(
-          `sharp for ${t} is incomplete (missing ${missing.join(', ')}); install it with \`bun install --os=${os} --cpu=${cpu}\`. Image processing will be off for this target.`,
-        );
-      } else console.log(`copied sharp for ${t} into ${join(outDir, t, 'node_modules')}`);
-    }
   }
 }
 

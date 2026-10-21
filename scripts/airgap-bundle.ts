@@ -19,12 +19,11 @@
  *   --catalog <file>      plugin catalog snapshot (JSON); default: an empty catalog
  *   --plugins-dir <dir>   plugin packages (*.tgz) referenced by the catalog
  *   --litestream-dir <d>  Litestream packages to include (otherwise instructions only)
- *   --no-sharp            skip downloading the sharp image library prebuilds
  *   --out <dir>           output directory (default dist/airgap)
  *
  * Output: <out>/beamhop-airgap-<version>.tar.gz (+ .sha256, + .minisig with MINISIGN_KEY_FILE).
  * Inside: releases/latest/ (binaries + SHA256SUMS, the layout install.sh expects),
- * releases/latest.json (for `beamhop update`), web/, plugins/, media/, litestream/, config/,
+ * releases/latest.json (for `beamhop update`), web/, plugins/, litestream/, config/,
  * docs/, install.sh, SHA256SUMS of every file, BUNDLE.json.
  */
 import {
@@ -110,55 +109,6 @@ On the server: \`sudo dpkg -i litestream-*.deb\`, then follow docs/operations.md
 Replicate to an internal S3-compatible store (e.g. MinIO) or a file path (\`type: file\`).
 `;
 
-const SHARP_PLATFORM: Record<string, string> = {
-  'linux-x64': 'linux-x64',
-  'linux-arm64': 'linux-arm64',
-  'darwin-arm64': 'darwin-arm64',
-  'darwin-x64': 'darwin-x64',
-  'windows-x64': 'win32-x64',
-};
-
-/** sharp + its platform packages (exact versions pinned by sharp's own optionalDependencies). */
-export function sharpPackages(
-  target: string,
-  sharpPkg: { version: string; optionalDependencies?: Record<string, string> },
-) {
-  const plat = SHARP_PLATFORM[target];
-  if (!plat) return [];
-  const deps = sharpPkg.optionalDependencies ?? {};
-  const out: Array<{ name: string; version: string }> = [];
-  for (const name of [`@img/sharp-${plat}`, `@img/sharp-libvips-${plat}`]) {
-    const version = deps[name];
-    if (version) out.push({ name, version });
-  }
-  return out;
-}
-
-function findSharpPackageJson(): string | undefined {
-  const candidates = [join(ROOT, 'packages/media/node_modules/sharp/package.json')];
-  const store = join(ROOT, 'node_modules/.bun');
-  if (existsSync(store))
-    for (const d of readdirSync(store)
-      .filter((n) => /^sharp@\d/.test(n))
-      .sort()
-      .reverse())
-      candidates.push(join(store, d, 'node_modules/sharp/package.json'));
-  return candidates.find((p) => existsSync(p));
-}
-
-async function downloadNpmTarball(name: string, version: string, dest: string): Promise<string> {
-  const meta = (await (await fetch(`https://registry.npmjs.org/${name}/${version}`)).json()) as {
-    dist?: { tarball?: string };
-  };
-  const url = meta.dist?.tarball;
-  if (!url) throw new Error(`npm: no tarball for ${name}@${version}`);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`npm: ${url} → HTTP ${res.status}`);
-  const file = join(dest, url.split('/').pop()!);
-  await Bun.write(file, res);
-  return file;
-}
-
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -192,7 +142,6 @@ export interface AirgapArgs {
   catalog?: string;
   pluginsDir?: string;
   litestreamDir?: string;
-  sharp: boolean;
   outDir: string;
 }
 
@@ -215,7 +164,6 @@ export function parseAirgapArgs(argv: string[]): AirgapArgs {
     catalog: abs(get('catalog')),
     pluginsDir: abs(get('plugins-dir')),
     litestreamDir: abs(get('litestream-dir')),
-    sharp: !argv.includes('--no-sharp'),
     outDir: abs(get('out')) ?? join(ROOT, 'dist/airgap'),
   };
 }
@@ -262,35 +210,13 @@ export async function airgapBundle(args: AirgapArgs, keyFile = process.env.MINIS
   if (args.pluginsDir) cpSync(args.pluginsDir, join(pluginsOut, 'packages'), { recursive: true });
   contents.pluginCatalog = args.catalog ? 'snapshot' : 'empty';
 
-  // 4. Media tools: sharp prebuilds (npm tarballs) for each Linux/macOS target.
-  const mediaOut = join(dir, 'media/sharp');
-  mkdirSync(mediaOut, { recursive: true });
-  const sharpJson = findSharpPackageJson();
-  const sharpFiles: string[] = [];
-  if (args.sharp && sharpJson) {
-    const sharpPkg = JSON.parse(readFileSync(sharpJson, 'utf8'));
-    sharpFiles.push(await downloadNpmTarball('sharp', sharpPkg.version, mediaOut));
-    for (const t of args.targets)
-      for (const p of sharpPackages(t, sharpPkg))
-        sharpFiles.push(await downloadNpmTarball(p.name, p.version, mediaOut));
-  }
-  writeFileSync(
-    join(dir, 'media/README.md'),
-    `# Image processing (sharp)\n\n${
-      sharpFiles.length
-        ? `Included: ${sharpFiles.map((f) => f.split('/').pop()).join(', ')}.`
-        : 'Not included in this bundle (built with --no-sharp or sharp was not installed).'
-    }\n\nInstall next to Beamhop's data directory so resizing and thumbnails work:\n\n\`\`\`bash\ncd /var/lib/beamhop && npm install --offline /opt/beamhop/bundle/media/sharp/*.tgz\n\`\`\`\n\nWithout sharp Beamhop still runs; photos are stored as uploaded.\n`,
-  );
-  contents.sharp = sharpFiles.map((f) => f.split('/').pop());
-
-  // 5. Litestream (third-party binary): instructions, or packages supplied by the operator.
+  // 4. Litestream (third-party binary): instructions, or packages supplied by the operator.
   const lsOut = join(dir, 'litestream');
   mkdirSync(lsOut, { recursive: true });
   writeFileSync(join(lsOut, 'README.md'), LITESTREAM_README);
   if (args.litestreamDir) cpSync(args.litestreamDir, lsOut, { recursive: true });
 
-  // 6. Config, installer, docs.
+  // 5. Config, installer, docs.
   mkdirSync(join(dir, 'config'), { recursive: true });
   writeFileSync(join(dir, 'config/beamhop.yaml'), airgapConfig(args.baseUrl, args.version));
   copyFileSync(join(ROOT, 'scripts/install.sh'), join(dir, 'install.sh'));
@@ -328,7 +254,7 @@ Full guide: docs/airgap.md
     `${JSON.stringify({ name: 'beamhop-airgap', version: args.version, baseUrl: args.baseUrl, contents }, null, 2)}\n`,
   );
 
-  // 7. Checksums of every file, signature, tarball.
+  // 6. Checksums of every file, signature, tarball.
   const sums: Record<string, string> = {};
   for (const f of walk(dir)) {
     const rel = relative(dir, f);

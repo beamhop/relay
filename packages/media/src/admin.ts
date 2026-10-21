@@ -17,12 +17,12 @@ import { MATCHES, type MatchRecord, type MediaService, mediaKind, scanGated } fr
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/, 'must be 64 lowercase hex characters');
 
-const INSTALL_SHARP =
-  'sharp (optional dependency of @beamhop/media) could not be loaded. From source: `bun add sharp`. Single binary: use the standard release archive (beamhop-<os>-<arch>.tar.gz), which ships node_modules/ with sharp next to `beamhop` (scripts/build.ts includes it unless --no-sharp), or point BEAMHOP_SHARP_PATH at a node_modules containing sharp. The Docker image includes it. ffmpeg on PATH enables video transcoding.';
+const NO_IMAGE_TOOLS =
+  'ports.media has no image processor. The Bun runtime (single binary, Docker, from source) always includes the built-in WebAssembly image codecs (@beamhop/media/bun); the Cloudflare runtime has none yet. ffmpeg on PATH enables video transcoding (Bun only).';
 
-/** Plain body of the "sharp missing" card (no technical words). */
-export const SHARP_MISSING_BODY =
-  'Photos are stored as they are. Thumbnails need an extra component; the standard download includes it.';
+/** Plain body of the "image tools missing" card (no technical words). */
+export const IMAGE_TOOLS_MISSING_BODY =
+  'Photos are stored as they are. Resizing and thumbnails work when Beamhop runs on its own server.';
 
 function relaysFor(kernel: Kernel, relayId: string | null): RelayConfig[] {
   const all = kernel.config().relays.filter((r) => r.blossom.enabled);
@@ -76,7 +76,7 @@ export function mediaHealthCheck(kernel: Kernel, svc: MediaService): HealthCheck
           score: 70,
           status: 'warn',
           message:
-            'Photo thumbnails and smaller copies are unavailable (image tools not installed)',
+            'Photo thumbnails and smaller copies are unavailable (no image tools on this platform)',
         });
       }
       if (relays.some((r) => r.blossom.optimize.transcode) && !supports.includes('transcode')) {
@@ -102,7 +102,7 @@ export function mediaHealthCheck(kernel: Kernel, svc: MediaService): HealthCheck
         score: worst.score,
         status: worst.status,
         message: issues.map((i) => i.message).join('. '),
-        technical: supports.includes('resize') ? technical : `${technical} · ${INSTALL_SHARP}`,
+        technical: supports.includes('resize') ? technical : `${technical} · ${NO_IMAGE_TOOLS}`,
       };
     },
   };
@@ -123,19 +123,19 @@ export function mediaCards(kernel: Kernel, svc: MediaService): CardSource {
             severity: 'critical',
             title: 'Uploads are not being checked for abuse images',
             body: 'You set up blocked-image lists, but the image tools needed to check uploads are not installed on this server.',
-            technical: INSTALL_SHARP,
+            technical: NO_IMAGE_TOOLS,
             batchKey: 'media.tools-missing',
             createdAt: now,
           });
         } else if (wantsImages(r) && !supports.includes('resize')) {
           // Information only: nothing to approve (no `primary`), nothing is broken.
           out.push({
-            id: `media.sharp-missing:${r.id}`,
+            id: `media.image-tools-missing:${r.id}`,
             relayId: r.id,
             severity: 'info',
             title: 'Photo resizing is not available',
-            body: SHARP_MISSING_BODY,
-            technical: `Media goals or blossom.optimize ask for thumbnails/resized copies, but the processor does not support "resize". ${INSTALL_SHARP}`,
+            body: IMAGE_TOOLS_MISSING_BODY,
+            technical: `Media goals or blossom.optimize ask for thumbnails/resized copies, but the processor does not support "resize". ${NO_IMAGE_TOOLS}`,
             batchKey: 'media.tools-missing',
             createdAt: now,
           });
@@ -221,7 +221,7 @@ export function registerActions(kernel: Kernel, svc: MediaService): void {
       description:
         'Make the thumbnail and phone-sized copies of a photo (or video versions) again.',
       technical:
-        'Re-runs thumbnail/resize (sharp) or transcode/poster (ffmpeg) and records results in docs `media.variants` (keyed by original sha256).',
+        'Re-runs thumbnail/resize (image codecs) or transcode/poster (ffmpeg) and records results in docs `media.variants` (keyed by original sha256).',
       scope: 'relay',
       permission: 'media.write',
       input: Sha,
