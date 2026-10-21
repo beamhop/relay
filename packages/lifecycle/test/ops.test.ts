@@ -13,6 +13,17 @@ import { cleanupAll, setup } from './helpers.ts';
 
 afterEach(cleanupAll);
 
+describe('service', () => {
+  test('lastBackup() mirrors lifecycle.backups/last; CLI action ids exist', async () => {
+    const t = await setup({ backups: { enabled: true } });
+    expect(await t.svc.lastBackup()).toBeNull();
+    const last = await t.svc.backups.run('manual');
+    expect(await t.svc.lastBackup()).toEqual(last);
+    for (const id of ['backups.run-now', 'backups.list', 'backups.restore'])
+      expect(t.kernel.actions.get(id)).toBeDefined();
+  });
+});
+
 describe('litestream', () => {
   test('config generation snapshot (R2 replica, secrets as env references)', () => {
     const config = parseConfig({
