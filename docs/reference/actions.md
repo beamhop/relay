@@ -4,7 +4,7 @@
 
 Every admin operation is an action. The admin app, the CLI (`beamhop <group> <name>`), the admin API (`POST /api/v1/nodes/self[/relays/<relay>]/actions/<id>`, see `/api/v1/openapi.json`), the command palette and NIP-86 all run these same actions. Changes show a preview first and can be undone where marked.
 
-[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
+[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
 
 ## access
 
@@ -1156,6 +1156,40 @@ Their posts are visible to everyone again.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `pubkeys` | list of string |  |  |
+
+## modules
+
+### Turn off an optional feature
+
+Removes a company feature from this server right away. Its data is kept.
+
+- **id:** `modules.disable` · **CLI:** `beamhop modules disable` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · undoable
+- *Technical:* Removes config.modules[id] as a new config revision; the runtime unloads the module (kernel.disableModule: hooks, routes, actions, jobs…). Stored module data stays; undo restores the section.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Which feature, e.g. enterprise-identity |
+
+### Turn on an optional feature
+
+Adds a company feature to this server right away, without a restart.
+
+- **id:** `modules.enable` · **CLI:** `beamhop modules enable` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · undoable
+- *Technical:* Writes a minimal config.modules[id] section as a new config revision; the runtime hot-loads the module (kernel.enableModule) before the revision is committed. Undo removes the section again.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Which feature, e.g. enterprise-identity |
+
+### Show optional features
+
+Company features this server can turn on, and which are on.
+
+- **id:** `modules.list` · **CLI:** `beamhop modules list` · **scope:** node · **permission:** `node.manage`
+- read-only
+- *Technical:* Optional modules known to the runtime module manager (runtime.modules): available (loadable here), enabled (registered), configured (config.modules[id] present).
 
 ## notes
 
