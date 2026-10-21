@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Beamhop on DigitalOcean App Platform.
+#   doctl apps create --spec deploy/digitalocean/app.yaml
+#
+# App Platform has no persistent disks, so data goes to a managed Postgres database and media
+# to a Spaces bucket (S3-compatible). Create the bucket + access key first and fill the two
+# SECRET values in the dashboard. App Platform terminates HTTPS → proxy mode.
+# For the simplest setup (SQLite on disk) use a Droplet with cloud-init.yaml instead.
+name: beamhop
+region: fra
+services:
+  - name: beamhop
+    image:
+      registry_type: GHCR
+      registry: beamhop
+      repository: beamhop
+      tag: latest
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    http_port: 3334
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 15
+    envs:
+      - key: BEAMHOP_LISTEN
+        value: 0.0.0.0:3334
+      - key: BEAMHOP_DATA_DIR
+        value: /tmp/beamhop
+      - key: BEAMHOP_NODE__TLS__MODE
+        value: proxy
+      - key: BEAMHOP_NODE__TRUST_PROXY
+        value: "true"
+      - key: BEAMHOP_STORAGE__DRIVER
+        value: postgres
+      - key: BEAMHOP_STORAGE__URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: BEAMHOP_BLOB_STORAGE__DRIVER
+        value: s3
+      - key: BEAMHOP_BLOB_STORAGE__ENDPOINT
+        value: https://fra1.digitaloceanspaces.com
+      - key: BEAMHOP_BLOB_STORAGE__REGION
+        value: fra1
+      - key: BEAMHOP_BLOB_STORAGE__BUCKET
+        value: beamhop-media
+      - key: BEAMHOP_BLOB_STORAGE__ACCESS_KEY_ID
+        type: SECRET
+        value: CHANGE_ME
+      - key: BEAMHOP_BLOB_STORAGE__SECRET_ACCESS_KEY
+        type: SECRET
+        value: CHANGE_ME
+databases:
+  - name: db
+    engine: PG
+    version: "17"
+    production: false

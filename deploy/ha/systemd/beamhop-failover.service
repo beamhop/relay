@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Standby watcher. Enabled on the STANDBY only.
+#   sudo install -D -m 0755 ../failover.sh /usr/local/lib/beamhop/failover.sh
+#   sudo install -D -m 0755 ../hooks/<your-provider>.sh /usr/local/lib/beamhop/hooks/
+#   sudo install -m 0600 failover.env.example /etc/beamhop/failover.env   # then edit
+#   sudo systemctl enable --now beamhop-failover
+# Runs as root: it restores the database, starts services and calls the IP/DNS hook.
+[Unit]
+Description=Beamhop standby watcher (promotes this server when the primary is down)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/beamhop/failover.env
+ExecStart=/usr/local/lib/beamhop/failover.sh
+# Exit 0 = promoted (or already promoted): stay stopped. Anything else: try again.
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

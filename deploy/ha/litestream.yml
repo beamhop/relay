@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Litestream for the HA pair (same file on primary and standby). Any S3-compatible bucket works
+# (AWS S3, R2, Spaces, Hetzner Object Storage, MinIO). For GCS use `type: gcs` + `bucket` only.
+# You can also generate this file from your settings: `beamhop backups litestream-config`.
+addr: ":9090"
+dbs:
+  - path: /data/db/beamhop.sqlite
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: beamhop
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        force-path-style: true
+        sync-interval: 1s
+        snapshot-interval: 6h
+        retention: 72h

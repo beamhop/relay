@@ -1,0 +1,62 @@
+#cloud-config
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Rendered by deploy/gcp/main.tf. Container-Optimized OS re-applies this on every boot (/etc is
+# stateless there); the startup script mounts the data disk and starts the units.
+
+write_files:
+  - path: /etc/beamhop/beamhop.env
+    permissions: "0640"
+    content: |
+      ${indent(6, env_file)}
+
+  - path: /etc/systemd/system/beamhop.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Beamhop Nostr relay and media server
+      Requires=docker.service
+      After=docker.service network-online.target
+      RequiresMountsFor=/mnt/disks/beamhop
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker rm -f beamhop
+      ExecStartPre=-/usr/bin/docker pull ${image}
+      ExecStart=/usr/bin/docker run --rm --name beamhop -p 443:3334 -p 80:3380 -v /mnt/disks/beamhop:/data --env-file /etc/beamhop/beamhop.env --ulimit nofile=1048576:1048576 ${image}
+      ExecStop=/usr/bin/docker stop -t 20 beamhop
+      Restart=always
+      RestartSec=5s
+%{ if litestream ~}
+
+  - path: /etc/beamhop/litestream.yml
+    permissions: "0644"
+    content: |
+      dbs:
+        - path: /data/db/beamhop.sqlite
+          replicas:
+            - type: gcs
+              bucket: ${litestream_bucket}
+              path: beamhop
+              sync-interval: 1s
+              snapshot-interval: 24h
+              retention: 168h
+
+  - path: /etc/systemd/system/beamhop-litestream.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Litestream replication of the Beamhop database to GCS
+      Requires=docker.service
+      After=docker.service beamhop.service
+      RequiresMountsFor=/mnt/disks/beamhop
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker rm -f beamhop-litestream
+      ExecStartPre=-/usr/bin/docker pull ${litestream_image}
+      ExecStart=/usr/bin/docker run --rm --name beamhop-litestream --user 65532:65532 -v /mnt/disks/beamhop:/data -v /etc/beamhop/litestream.yml:/etc/litestream.yml:ro ${litestream_image} replicate -config /etc/litestream.yml
+      ExecStop=/usr/bin/docker stop -t 20 beamhop-litestream
+      Restart=always
+      RestartSec=5s
+%{ endif ~}
+
+runcmd:
+  - systemctl daemon-reload

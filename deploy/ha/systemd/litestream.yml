@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# /etc/beamhop/litestream.yml for the systemd variant (same file on both servers).
+# Bucket keys come from /etc/beamhop/litestream.env (LITESTREAM_* variables).
+addr: "127.0.0.1:9090"
+dbs:
+  - path: /var/lib/beamhop/db/beamhop.sqlite
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: beamhop
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        force-path-style: true
+        sync-interval: 1s
+        snapshot-interval: 6h
+        retention: 72h

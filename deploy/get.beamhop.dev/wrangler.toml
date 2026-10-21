@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Project infrastructure (not needed to run Beamhop): serves https://get.beamhop.dev.
+name = "get-beamhop"
+main = "worker.ts"
+compatibility_date = "2026-10-01"
+routes = [{ pattern = "get.beamhop.dev", custom_domain = true }]
