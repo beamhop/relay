@@ -9,6 +9,8 @@
   import HomeActivity from "@app/components/HomeActivity.svelte"
   import HealthCheckList from "@app/components/HealthCheckList.svelte"
   import HomeInboxItem from "@app/components/HomeInboxItem.svelte"
+  import InboxSwipeRow from "@src/beamhop/components/InboxSwipeRow.svelte" // beamhop: swipe actions
+  import {inboxRowHidden} from "@src/beamhop/features/hidden" // beamhop: hidden inbox rows
   import {navigate} from "@app/ui/modal"
   import {
     allNotifications,
@@ -17,7 +19,10 @@
     setChecked,
   } from "@app/ui/notifications"
 
-  const conversations = $derived($inboxConversations.slice(0, 8))
+  // beamhop: rows hidden by a swipe stay out until a newer message arrives
+  const conversations = $derived(
+    $inboxConversations.filter(c => !$inboxRowHidden(c.path, c.event.id)).slice(0, 8),
+  )
 
   const markAllRead = () => setChecked("*")
 
@@ -34,7 +39,9 @@
   {#if conversations.length > 0}
     <div class="flex flex-col divide-y divide-line border-t border-line bg-surface-less">
       {#each conversations as conversation (conversation.path)}
-        <HomeInboxItem {conversation} />
+        <InboxSwipeRow path={conversation.path} event={conversation.event}>
+          <HomeInboxItem {conversation} />
+        </InboxSwipeRow>
       {/each}
     </div>
   {/if}

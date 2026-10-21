@@ -8,14 +8,17 @@ import {installLinkBasePath} from "./base-path"
 import {loadBeamhopConfig} from "./config"
 import {federationPolicy} from "./federation"
 import {loadDirectory} from "./features/directory"
+import {loadOutboundPolicy, outboundPublishPolicy} from "./features/outbound"
 import {installIntranetRelayHosts} from "./relay-url"
 
 appPolicies.push(federationPolicy)
+appPolicies.push(outboundPublishPolicy)
 installIntranetRelayHosts()
 
 if (typeof window !== "undefined") {
   installLinkBasePath()
   loadBeamhopConfig().then(() => loadDirectory())
+  loadOutboundPolicy()
 }
 
 export {default as EscrowNotice} from "./components/EscrowNotice.svelte"
@@ -33,3 +36,10 @@ export {
 } from "./features/sso"
 export {directory, directoryState, isDirectoryEnabled, loadDirectory} from "./features/directory"
 export {legalLinks} from "./features/links"
+export {
+  deriveGroupOutbound,
+  loadOutboundPolicy,
+  outboundPolicy,
+  selectPublishRelays,
+  type OutboundPolicy,
+} from "./features/outbound"

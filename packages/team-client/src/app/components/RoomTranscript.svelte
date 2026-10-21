@@ -21,6 +21,8 @@
   import type {VirtualListController} from "@lib/components/VirtualList.svelte"
   import {navigate} from "@app/ui/modal"
   import RoomItem from "@app/components/RoomItem.svelte"
+  import MessageSwipeRow from "@src/beamhop/components/MessageSwipeRow.svelte" // beamhop: swipe actions
+  import {messageHidden} from "@src/beamhop/features/hidden" // beamhop: hidden messages
   import RoomItemAddMember from "@app/components/RoomItemAddMember.svelte"
   import RoomMembershipButton from "@app/components/RoomMembershipButton.svelte"
   import {user} from "@app/core/app"
@@ -224,7 +226,7 @@
 
   const elements = $derived(
     groupRoomMessages({
-      events: $events,
+      events: $events.filter(e => !$messageHidden(e.id)), // beamhop: hidden messages
       pubkey: $user.pubkey,
       addMemberKind,
       unreadAfter: newMessagesAfter,
@@ -353,14 +355,17 @@
           {:else if item.value.kind === addMemberKind}
             <RoomItemAddMember {url} event={item.value} />
           {:else}
-            <RoomItem
-              {url}
-              {replyTo}
-              {context}
-              {canEdit}
-              {onEdit}
-              event={item.value}
-              showPubkey={item.showPubkey} />
+            <!-- beamhop: swipe actions (reply / hide / remove / remove person) -->
+            <MessageSwipeRow {url} {replyTo} event={item.value}>
+              <RoomItem
+                {url}
+                {replyTo}
+                {context}
+                {canEdit}
+                {onEdit}
+                event={item.value}
+                showPubkey={item.showPubkey} />
+            </MessageSwipeRow>
           {/if}
         {/snippet}
       </VirtualList>

@@ -19,7 +19,10 @@ Beamhop-owned code (new files, AGPL-3.0-or-later):
   escrow banner, company sign-in (`features/sso.ts` + `sso-session.ts`, `TeamSessionGate`,
   `SsoButtons`), company directory (`features/directory.ts`, `Directory.svelte`), legal links
   (`features/links.ts`, `LegalLinks.svelte`), intranet relay hosts (`relay-url.ts`,
-  `relay-url-patch.ts`), unit tests (`*.test.ts`).
+  `relay-url-patch.ts`), swipe rows with undo (`gestures/`, `SwipeRow.svelte`, `features/swipe-*.ts`,
+  `features/hidden.ts`; gestures copied from the admin app), per-group outbound relays
+  (`features/outbound.ts`: `GET /.well-known/beamhop/network`, Publisher wrapper,
+  `GroupRelayNotice.svelte`), unit tests (`*.test.ts`).
 - `src/routes/directory/+page.svelte` — new route, a thin wrapper around
   `src/beamhop/components/Directory.svelte`.
 - `scripts/beamhop/` — `build.mjs` (static build), `dev.mjs`, `env.mjs` (build defaults),
@@ -42,6 +45,10 @@ Upstream files touched (every change is marked with a `beamhop` comment; grep `b
 | `src/routes/+layout.svelte` | `import "@src/beamhop"` (after policies), `<BeamhopOverlay />` (escrow notice + company sign-in), manifest href |
 | `src/app/components/Landing.svelte` | legal links from config.json via `<LegalLinks />` (hidden when absent; unused `Link`/`PLATFORM_TERMS`/`PLATFORM_PRIVACY` imports dropped); `<SsoButtons />` |
 | `src/app/components/PrimaryNav.svelte` | `<DirectoryNavItem />` (desktop + mobile nav) |
+| `src/app/components/RoomTranscript.svelte` | messages wrapped in `<MessageSwipeRow>` (swipe: reply / hide / remove / remove person); hidden messages filtered out |
+| `src/app/components/RoomItemMenu.svelte` | `<MessageMenuItems>` (Hide, Remove person: desktop parity for the swipe actions) |
+| `src/app/components/HomeInbox.svelte` | rows wrapped in `<InboxSwipeRow>` (mark read / hide); hidden rows filtered out |
+| `src/app/components/RoomChat.svelte` | `<GroupRelayNotice>` above the composer (per-group outbound relays, PLAN §12.10) |
 | `src/app/core/session.ts`, `src/app/features/callEngine.ts`, `src/app/components/NewNotificationSound.svelte` | root-absolute asset/redirect paths prefixed with `base` |
 | (many) | payment removal, see "No payments" below |
 
