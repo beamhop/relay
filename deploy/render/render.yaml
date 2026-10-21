@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Beamhop on Render (Blueprint). Dashboard → New → Blueprint → this repo, blueprint path
+# `deploy/render/render.yaml`. A persistent disk needs a paid instance type (starter or above).
+#
+# TLS: Render terminates HTTPS and forwards plain HTTP → proxy mode + trusted proxy headers.
+# Add your domain under Settings → Custom Domains. One instance only (SQLite on the disk).
+services:
+  - type: web
+    name: beamhop
+    runtime: image
+    image:
+      url: ghcr.io/beamhop/beamhop:latest
+    plan: starter
+    numInstances: 1
+    healthCheckPath: /healthz
+    disk:
+      name: beamhop-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: PORT
+        value: "3334"
+      - key: BEAMHOP_LISTEN
+        value: 0.0.0.0:3334
+      - key: BEAMHOP_DATA_DIR
+        value: /data
+      - key: BEAMHOP_NODE__TLS__MODE
+        value: proxy
+      - key: BEAMHOP_NODE__TRUST_PROXY
+        value: "true"
+      - key: BEAMHOP_DOMAIN
+        sync: false

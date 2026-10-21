@@ -1,0 +1,15 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+cat <<EOF
+
+  Beamhop is running.  Finish setup in your browser:
+
+    http://${IP}:3334/admin/        claim code: sudo beamhop claim-code --data-dir /var/lib/beamhop
+
+  Use your own domain with automatic HTTPS (point its DNS here first):
+    beamhop-setup-domain relay.example.com
+
+  Health check: beamhop doctor     Updates: beamhop update     Docs: https://beamhop.dev/docs
+
+EOF

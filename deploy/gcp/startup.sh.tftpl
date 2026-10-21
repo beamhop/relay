@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Rendered by deploy/gcp/main.tf; runs as root on every boot. Formats the data disk on first
+# use, mounts it, grows the filesystem after a disk resize, restores the database from the
+# Litestream replica when the disk is empty (e.g. a rebuilt VM), then starts Beamhop.
+set -euo pipefail
+
+DEV=/dev/disk/by-id/google-beamhop-data
+MNT=/mnt/disks/beamhop
+
+for _ in $(seq 1 60); do [ -e "$DEV" ] && break; sleep 2; done
+[ -e "$DEV" ] || { echo "beamhop: data disk $DEV not found" >&2; exit 1; }
+
+if ! blkid "$DEV" >/dev/null 2>&1; then
+  mkfs.ext4 -m 0 -L beamhop -E lazy_itable_init=0,lazy_journal_init=0,discard "$DEV"
+fi
+mkdir -p "$MNT"
+mountpoint -q "$MNT" || mount -o discard,defaults,nosuid,nodev "$DEV" "$MNT"
+resize2fs "$DEV" >/dev/null 2>&1 || true
+mkdir -p "$MNT/db"
+chown 65532:65532 "$MNT" "$MNT/db"
+
+# cloud-init writes the units; wait for it on first boot.
+for _ in $(seq 1 90); do [ -f /etc/systemd/system/beamhop.service ] && break; sleep 2; done
+systemctl daemon-reload
+%{ if litestream ~}
+
+if [ ! -f "$MNT/db/beamhop.sqlite" ]; then
+  echo "beamhop: empty data disk, restoring the database from the Litestream replica if one exists"
+  docker run --rm --user 65532:65532 -v "$MNT":/data -v /etc/beamhop/litestream.yml:/etc/litestream.yml:ro \
+    ${litestream_image} restore -config /etc/litestream.yml -if-replica-exists /data/db/beamhop.sqlite
+fi
+%{ endif ~}
+
+systemctl start beamhop.service
+%{ if litestream ~}
+systemctl start beamhop-litestream.service
+%{ endif ~}

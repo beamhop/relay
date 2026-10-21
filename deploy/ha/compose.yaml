@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Active-passive pair with Docker Compose. The same file is used on both servers.
+#
+# Primary:  docker compose -f deploy/ha/compose.yaml --profile primary up -d
+# Standby:  docker compose -f deploy/ha/compose.yaml --profile primary pull   (nothing runs)
+#           + the watcher: deploy/ha/systemd/beamhop-failover.service with MODE=compose
+#
+# Settings: deploy/ha/.env (copy .env.example). Both servers need the same bucket settings.
+# TLS: Beamhop gets its own certificate (ACME). With a floating IP the standby gets the same
+# DNS name and requests its certificate on first start (or copy <data>/tls from a backup).
+
+name: beamhop
+
+services:
+  beamhop:
+    image: ghcr.io/beamhop/beamhop:${BEAMHOP_VERSION:-latest}
+    profiles: [primary]
+    restart: unless-stopped
+    ports:
+      - "443:3334"
+      - "80:3380"
+    volumes:
+      - beamhop-data:/data
+    environment:
+      BEAMHOP_DOMAIN: ${BEAMHOP_DOMAIN:?set BEAMHOP_DOMAIN in deploy/ha/.env}
+      BEAMHOP_NODE__TLS__MODE: ${BEAMHOP_TLS_MODE:-acme}
+      BEAMHOP_NODE__TLS__EMAIL: ${BEAMHOP_TLS_EMAIL:-}
+      BEAMHOP_ACME_HTTP_PORT: "3380"
+      # Let the admin app show replication lag (lifecycle.litestream health check).
+      BEAMHOP_MODULES__LIFECYCLE__LITESTREAM__ENABLED: "true"
+      BEAMHOP_MODULES__LIFECYCLE__LITESTREAM__METRICS_URL: http://litestream:9090/metrics
+    stop_grace_period: 20s
+
+  litestream:
+    image: litestream/litestream:0.3.13
+    profiles: [primary]
+    restart: unless-stopped
+    user: "65532:65532"
+    command: replicate -config /etc/litestream.yml
+    depends_on: [beamhop]
+    volumes:
+      - beamhop-data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    environment:
+      LITESTREAM_BUCKET: ${LITESTREAM_BUCKET:?set LITESTREAM_BUCKET in deploy/ha/.env}
+      LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-}
+      LITESTREAM_REGION: ${LITESTREAM_REGION:-us-east-1}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:?set LITESTREAM_ACCESS_KEY_ID}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:?set LITESTREAM_SECRET_ACCESS_KEY}
+
+volumes:
+  beamhop-data:

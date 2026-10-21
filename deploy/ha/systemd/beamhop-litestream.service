@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Continuous replication of the Beamhop database. Enabled on the PRIMARY only; the standby's
+# failover script enables it when it takes over.
+#   sudo install -m 0644 beamhop-litestream.service /etc/systemd/system/
+#   sudo install -m 0644 litestream.yml /etc/beamhop/litestream.yml
+#   sudo install -m 0600 /dev/null /etc/beamhop/litestream.env   # then add the bucket keys
+[Unit]
+Description=Litestream replication for Beamhop
+After=beamhop.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=beamhop
+Group=beamhop
+EnvironmentFile=/etc/beamhop/litestream.env
+ExecStart=/usr/bin/litestream replicate -config /etc/beamhop/litestream.yml
+Restart=always
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/beamhop
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,9 @@
 # Beamhop on Cloudflare
 
 Runs Beamhop as one Worker plus Durable Objects (WebSockets), D1 (data) and R2 (files).
+No server, no certificates to manage (Cloudflare serves HTTPS), and high availability comes
+with the platform. Quickest route: the **Deploy to Cloudflare** button in the main
+[README](../../README.md), which creates the D1 database and R2 bucket for you.
 
 ## Deploy
 

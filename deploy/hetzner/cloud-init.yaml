@@ -1,0 +1,38 @@
+#cloud-config
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Beamhop on a Hetzner Cloud server (Ubuntu 24.04 / Debian 12). Paste into "Cloud config" when
+# creating the server, or: hcloud server create --name relay --type cx22 --image ubuntu-24.04 \
+#   --user-data-from-file deploy/hetzner/cloud-init.yaml
+# Set DOMAIN below first (point its A/AAAA record at the server), or leave it empty and finish
+# in the setup wizard on http://<server-ip>:3334.
+#
+# TLS: Hetzner servers have their public IP on eth0, so with a domain Beamhop listens on :443
+# and gets certificates itself (ACME HTTP-01 on :80). Use a Hetzner Cloud Firewall to allow
+# 22, 80, 443 (and 3334 until the domain is set); the ufw rules below do the same on the host.
+# Setup link + claim code: `journalctl -u beamhop -n 30`.
+
+package_update: true
+packages:
+  - curl
+  - ufw
+
+write_files:
+  - path: /root/beamhop-install.sh
+    permissions: "0700"
+    content: |
+      #!/bin/sh
+      set -eu
+      DOMAIN=""   # e.g. relay.example.com
+      if [ -n "$DOMAIN" ]; then
+        curl -fsSL https://get.beamhop.dev | sh -s -- --systemd --domain "$DOMAIN"
+      else
+        curl -fsSL https://get.beamhop.dev | sh -s -- --systemd
+      fi
+
+runcmd:
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 3334/tcp
+  - ufw --force enable
+  - sh /root/beamhop-install.sh

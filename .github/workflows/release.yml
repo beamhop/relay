@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Tag push (v1.2.3) → test → build binaries → draft GitHub release with checksums (+ minisign
+# signatures when MINISIGN_SECRET_KEY is set) → multi-arch image on GHCR → publish the release,
+# which makes latest.json visible to `beamhop update` and get.beamhop.dev last.
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)release, e.g. v0.2.0'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: '1.4.3'
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun test
+      - name: Build the admin app (embedded in the binary)
+        run: |
+          if [ -f packages/pwa/package.json ]; then
+            (cd packages/pwa && bun run build)
+          fi
+      - name: Load signing key
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          if [ -n "$MINISIGN_SECRET_KEY" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+            printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+            echo "MINISIGN_KEY_FILE=$RUNNER_TEMP/minisign.key" >> "$GITHUB_ENV"
+          fi
+      - name: Build release
+        env:
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          VERSION="${TAG#v}"
+          if [ -f "docs/releases/$TAG.md" ]; then NOTES="--notes-file docs/releases/$TAG.md"; else NOTES=""; fi
+          bun scripts/release.ts --version "$VERSION" --outdir dist/release $NOTES
+          rm -f "$RUNNER_TEMP/minisign.key"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/release/v*/beamhop-*
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRE=""
+          case "$TAG" in *-*) PRE="--prerelease" ;; esac
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --draft $PRE --title "Beamhop $TAG" --notes-file <(jq -r '.notes // ""' dist/release/latest.json)
+          gh release upload "$TAG" --clobber dist/release/v*/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/release
+          retention-days: 30
+
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/beamhop
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
+            type=raw,value=latest,enable=${{ !contains(env.TAG, '-') }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BEAMHOP_BUILD_VERSION=${{ env.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/beamhop
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  publish:
+    needs: [binaries, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: Publish release (makes latest.json the newest manifest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "$TAG" --clobber dist/release/latest.json
+          LATEST="--latest"
+          case "$TAG" in *-*) LATEST="--latest=false" ;; esac
+          gh release edit "$TAG" --draft=false $LATEST

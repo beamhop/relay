@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Beamhop on Fly.io — one machine, one volume (SQLite + media on disk).
+#
+#   fly launch --no-deploy --copy-config --config deploy/fly/fly.toml --name <your-app>
+#   fly volumes create beamhop_data --size 10 --region <region>
+#   fly deploy --config deploy/fly/fly.toml
+#   fly logs            # shows the setup link + claim code on first start
+#
+# TLS: Fly terminates HTTPS at its edge and forwards plain HTTP, so Beamhop runs in proxy mode
+# and trusts Fly's X-Forwarded-* headers. Add your domain with `fly certs add relay.example.com`.
+# Keep exactly ONE machine: SQLite has a single writer (for HA see deploy/ha).
+
+app = "beamhop"
+primary_region = "fra"
+kill_signal = "SIGTERM"
+kill_timeout = "20s"
+
+[build]
+  image = "ghcr.io/beamhop/beamhop:latest"
+
+[env]
+  BEAMHOP_DATA_DIR = "/data"
+  BEAMHOP_LISTEN = "0.0.0.0:3334"
+  BEAMHOP_NODE__TLS__MODE = "proxy"
+  BEAMHOP_NODE__TRUST_PROXY = "true"
+  # BEAMHOP_DOMAIN = "relay.example.com"   # or set it in the setup wizard
+
+[[mounts]]
+  source = "beamhop_data"
+  destination = "/data"
+  initial_size = "10gb"
+
+[http_service]
+  internal_port = 3334
+  force_https = true
+  # A relay holds long-lived WebSockets: never stop the machine when "idle".
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 5000
+    hard_limit = 10000
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
