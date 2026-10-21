@@ -25,6 +25,7 @@ export * from './insights.ts';
 export * from './lists.ts';
 export * from './moderation.ts';
 export * from './personas.ts';
+export * from './quota.ts';
 export * from './runtime.ts';
 export * from './state.ts';
 export * from './util.ts';

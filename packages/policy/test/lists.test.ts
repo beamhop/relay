@@ -106,6 +106,74 @@ describe('list actions', () => {
     expect((recent.result.output as { total: number }).total).toBeGreaterThanOrEqual(3);
   });
 
+  test('users.list: effective quota, used, remaining, over quota (override, tier, goals)', async () => {
+    const MB = 1024 * 1024;
+    const env = await setup({ tiers: [{ id: 'big', name: 'Big', blobQuotaBytes: 50 * MB }] });
+    const { act, kernel, ports } = env;
+    const [a, b, c] = [makeKey(), makeKey(), makeKey()];
+    const own = (pubkey: string, size: number, n: string) =>
+      ports.blobIndex.addOwner({
+        relayId: 'main',
+        sha256: n.repeat(64),
+        pubkey,
+        size,
+        type: 'image/png',
+        uploadedAt: ports.clock.now(),
+      });
+    await own(a.pk, 10 * MB, 'a');
+    await own(b.pk, 30 * MB, 'b');
+    await own(c.pk, 5 * MB, 'c');
+    await act('users.set-tier', { pubkey: b.pk, tier: 'big' });
+    await ports.docs.put('blossom.quotas', `main:${c.pk}`, { quotaBytes: 4 * MB });
+    const goalsQuota = kernel.limits('main').defaultBlobQuotaBytes;
+
+    const out = (await act('users.list', {})).result.output as {
+      users: Array<Record<string, unknown>>;
+    };
+    const by = new Map(out.users.map((u) => [u.pubkey, u]));
+    expect(by.get(a.pk)).toMatchObject({
+      quotaBytes: goalsQuota,
+      usedBytes: 10 * MB,
+      storageBytes: 10 * MB,
+      remainingBytes: goalsQuota - 10 * MB,
+      overQuota: false,
+    });
+    expect(by.get(b.pk)).toMatchObject({
+      quotaBytes: 50 * MB,
+      remainingBytes: 20 * MB,
+      overQuota: false,
+    });
+    expect(by.get(c.pk)).toMatchObject({ quotaBytes: 4 * MB, remainingBytes: 0, overQuota: true });
+  });
+
+  test('explain-limits what-if reports who would be near or over their storage limit', async () => {
+    const MB = 1024 * 1024;
+    const { act, kernel, ports } = await setup({ goals: { storage: 50 } });
+    const [a, b, c] = [makeKey(), makeKey(), makeKey()];
+    const own = (pubkey: string, size: number, n: string) =>
+      ports.blobIndex.addOwner({
+        relayId: 'main',
+        sha256: n.repeat(64),
+        pubkey,
+        size,
+        type: 'image/png',
+        uploadedAt: ports.clock.now(),
+      });
+    await own(a.pk, 90 * MB, 'a'); // near 100 MB
+    await own(b.pk, 600 * MB, 'b'); // over 100 MB
+    await own(c.pk, 1024, 'c');
+    await own('anonymous', 900 * MB, 'd'); // not a person
+    expect(kernel.limits('main').defaultBlobQuotaBytes).toBeGreaterThan((600 * MB) / 0.8);
+    const res = await act('policy.explain-limits', { goals: { storage: 0 } });
+    const out = res.result.output as {
+      limits: { defaultBlobQuotaBytes: number };
+      quotaImpact: { nearQuota: number; overQuota: number; before: unknown };
+    };
+    expect(out.limits.defaultBlobQuotaBytes).toBe(100 * MB);
+    expect(out.quotaImpact).toMatchObject({ nearQuota: 1, overQuota: 1 });
+    expect(out.quotaImpact.before).toEqual({ nearQuota: 0, overQuota: 0 });
+  });
+
   test('NIP-86 backing lists: banned, muted, allowed, invites', async () => {
     const { act, ports } = await setup();
     const [a, b, c] = [makeKey(), makeKey(), makeKey()];

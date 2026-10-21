@@ -264,6 +264,11 @@ export class BackupService {
 
   // ── run ──
 
+  /** True while a backup is being made. */
+  inProgress(): boolean {
+    return this.running !== null;
+  }
+
   /** Make a backup now (single-flight). Never throws: failures land in `last`. */
   run(trigger: 'scheduled' | 'manual' = 'manual'): Promise<BackupLast> {
     this.running ??= this.doRun(trigger).finally(() => {

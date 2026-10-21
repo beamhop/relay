@@ -7,9 +7,9 @@
 #
 # Image processing: sharp (native addon + libvips) cannot live inside the single
 # binary. `bun install` installs it for the build platform (optional dependency of
-# @beamhop/media) and `--with-sharp` copies it to /out/<target>/node_modules, which is
-# shipped next to the binary; the binary loads it from there (or BEAMHOP_SHARP_PATH).
-# Without it uploads are stored unchanged.
+# @beamhop/media) and the build script copies it to /out/<target>/node_modules by
+# default (`--no-sharp` opts out), which is shipped next to the binary; the binary
+# loads it from there (or BEAMHOP_SHARP_PATH). Without it uploads are stored unchanged.
 
 ARG BUN_VERSION=1.4.3
 
@@ -25,7 +25,7 @@ RUN bun install
 # prebuilt for this platform; fail the image build early if it cannot load.
 RUN cd packages/media && bun -e "await import('sharp')"
 RUN BEAMHOP_VERSION="${BEAMHOP_BUILD_VERSION#v}" \
-    bun packages/runtime-bun/scripts/build.ts --host --with-sharp --outdir /out \
+    bun packages/runtime-bun/scripts/build.ts --host --outdir /out \
  && mv /out/linux-* /out/pkg \
  && mkdir -p /out/pkg/node_modules /data-empty
 

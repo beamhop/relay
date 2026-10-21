@@ -350,10 +350,19 @@ describe('health and attention', () => {
     ]);
   });
 
-  test('sharp missing but media goals want it → warning card; tools present → ok', async () => {
+  test('sharp missing but media goals want it → info card, nothing to approve; tools present → ok', async () => {
     const s = await setup();
     const cards = await s.kernel.cards.find((c) => c.id === 'media')?.cards(null);
     expect(cards?.map((c) => c.id)).toEqual(['media.sharp-missing:main']);
+    const card = cards?.[0];
+    expect(card?.severity).toBe('info');
+    expect(card?.body).toBe(
+      'Photos are stored as they are. Thumbnails need an extra component; the standard download includes it.',
+    );
+    expect(card?.body).not.toMatch(/sharp|libvips|node_modules/i);
+    expect(card?.technical).toContain('sharp');
+    expect(card?.primary).toBeUndefined();
+    expect(card?.secondary).toBeUndefined();
     const ok = await setup({ module: { processor: new FakeProcessor() } });
     const r = await ok.kernel.health.find((h) => h.id === 'media.pipeline')?.run(null);
     expect(r?.status).toBe('ok');

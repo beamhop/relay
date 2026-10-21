@@ -28,6 +28,7 @@ import {
   personaInfo,
   personaPresets,
 } from './personas.ts';
+import { quotaImpact, usageByOwner } from './quota.ts';
 import type { PolicyRuntime } from './runtime.ts';
 import type { AllowEntry, BanEntry, InviteEntry, MuteEntry, TierEntry } from './state.ts';
 import { HEX64, plural, shortKey } from './util.ts';
@@ -894,6 +895,12 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
           text: l.text,
           technical: l.technical,
         }));
+      // Who would be near or over their storage limit with these values.
+      const usage = await usageByOwner(rt, relay.id);
+      const [impact, before] = await Promise.all([
+        quotaImpact(rt, hypo, usage, (t) => deriveLimits(hypo, t)),
+        quotaImpact(rt, relay, usage, (t) => rt.kernel.limits(relay.id, t)),
+      ]);
       return {
         output: {
           limits,
@@ -901,6 +908,7 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
           whatIf: { goals: hypo.goals, persona: hypo.persona },
           current: current,
           changes,
+          quotaImpact: { ...impact, before },
         },
         summary: changes.length
           ? `${plural(changes.length, 'value')} would change`

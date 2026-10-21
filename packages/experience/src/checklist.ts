@@ -20,8 +20,13 @@ export interface DirectoryLike {
  * When present, "backups configured" also requires one successful backup.
  */
 export interface LifecycleLike {
-  lastBackup?(): Promise<{ at: number; ok: boolean } | null>;
+  lastBackup?(): Promise<{ at: number; ok: boolean; error?: string } | null>;
+  /** True while a backup is being made (lifecycle starts the first one when backups turn on). */
+  backupInProgress?(): boolean;
 }
+
+/** Finer state of a checklist item, for a status chip next to it. */
+export type ChecklistItemState = 'done' | 'todo' | 'in-progress' | 'failed';
 
 export type ChecklistItemId =
   | 'recovery-codes'
@@ -41,6 +46,10 @@ export interface ChecklistItem {
   available: boolean;
   /** Extra state, e.g. "Backups are on, waiting for the first one to finish". */
   status?: string;
+  /** Finer state than `done` (e.g. a backup still running, or one that failed). */
+  state?: ChecklistItemState;
+  /** Plain text describing `state`, e.g. "Backups are on — making the first copy…". */
+  detail?: string;
   technical: string;
   /**
    * Where to complete it: a real admin-app route (see {@link PWA_ROUTES}) and/or an
@@ -115,11 +124,24 @@ export async function buildChecklist(
 
   // 2. Backups.
   let backupsDone = cfg.backups.enabled;
+  let backupState: ChecklistItemState = backupsDone ? 'done' : 'todo';
   let backupStatus: string | undefined;
+  let backupTech = '';
   if (cfg.backups.enabled && lifecycle?.lastBackup) {
     const last = await lifecycle.lastBackup().catch(() => null);
+    const running = lifecycle.backupInProgress?.() ?? false;
     backupsDone = !!last?.ok;
-    if (!backupsDone) backupStatus = 'Backups are on — waiting for the first one to finish.';
+    if (backupsDone) backupState = 'done';
+    else if (running || !last) {
+      backupState = 'in-progress';
+      backupStatus = running
+        ? 'Backups are on — making the first copy…'
+        : 'Backups are on — waiting for the first one to finish.';
+    } else {
+      backupState = 'failed';
+      backupStatus = `The last backup failed: ${last.error ?? 'unknown error'}`;
+    }
+    backupTech = `; last = ${last ? (last.ok ? 'ok' : 'failed') : 'none'}; running = ${running}`;
   }
   const backupItem: ChecklistItem = {
     id: 'backups',
@@ -127,10 +149,14 @@ export async function buildChecklist(
     body: 'A daily copy of your relay means a broken disk is a small problem, not a disaster.',
     done: backupsDone,
     available: true,
-    technical: `backups.enabled = ${cfg.backups.enabled}; schedule = ${cfg.backups.schedule}${lifecycle?.lastBackup ? '; lifecycle.lastBackup checked' : ''}`,
+    state: backupState,
+    technical: `backups.enabled = ${cfg.backups.enabled}; schedule = ${cfg.backups.schedule}${lifecycle?.lastBackup ? `; lifecycle.lastBackup checked${backupTech}` : ''}`,
     link: { screen: PWA_ROUTES.backups },
   };
-  if (backupStatus) backupItem.status = backupStatus;
+  if (backupStatus) {
+    backupItem.status = backupStatus;
+    backupItem.detail = backupStatus;
+  }
   items.push(backupItem);
 
   // 3. Alerts channel.
@@ -189,6 +215,7 @@ export async function buildChecklist(
     },
   });
 
+  for (const i of items) i.state ??= i.done ? 'done' : 'todo';
   const counted = items.filter((i) => i.available);
   const done = counted.filter((i) => i.done).length;
   const complete = counted.length > 0 && done === counted.length;

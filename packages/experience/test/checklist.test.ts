@@ -101,6 +101,53 @@ describe('setup checklist', () => {
     expect(c.hidden).toBe(true);
   });
 
+  test('backups item: in-progress while the first copy runs, failed with the reason, then done', async () => {
+    const st: { last: { at: number; ok: boolean; error?: string } | null; running: boolean } = {
+      last: null,
+      running: true,
+    };
+    const lc: LifecycleLike = {
+      lastBackup: async () => st.last,
+      backupInProgress: () => st.running,
+    };
+    const { act, kernel, ports } = await setup({
+      config: { backups: { enabled: true } },
+      modules: [
+        defineModule({ id: 'fake-lifecycle', register: (k) => k.provide('lifecycle', lc) }),
+      ],
+    });
+    const item = async () =>
+      (await act('experience.checklist', {})).output.items.find(
+        (i: { id: string }) => i.id === 'backups',
+      );
+    let b = await item();
+    expect(b.state).toBe('in-progress');
+    expect(b.done).toBe(false);
+    expect(b.detail).toBe('Backups are on — making the first copy…');
+
+    st.running = false;
+    st.last = { at: ports.clock.now(), ok: false, error: 'disk full' };
+    b = await item();
+    expect(b.state).toBe('failed');
+    expect(b.detail).toBe('The last backup failed: disk full');
+
+    st.last = { at: ports.clock.now(), ok: true };
+    b = await item();
+    expect(b.state).toBe('done');
+    expect(b.done).toBe(true);
+    expect(b.detail).toBeUndefined();
+
+    await kernel.applyConfig({
+      ...kernel.config(),
+      backups: { ...kernel.config().backups, enabled: false },
+    });
+    b = await item();
+    expect(b.state).toBe('todo');
+    // Every item carries a state.
+    const all = (await act('experience.checklist', {})).output.items;
+    for (const i of all) expect(['done', 'todo', 'in-progress', 'failed']).toContain(i.state);
+  });
+
   test('items whose module is missing are not counted', async () => {
     const { act } = await setup();
     const c = (await act('experience.checklist', {})).output;

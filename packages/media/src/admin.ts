@@ -18,7 +18,11 @@ import { MATCHES, type MatchRecord, type MediaService, mediaKind, scanGated } fr
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/, 'must be 64 lowercase hex characters');
 
 const INSTALL_SHARP =
-  'sharp (optional dependency of @beamhop/media) could not be loaded. From source: `bun add sharp`. Single binary: use the release archive that ships node_modules/ next to `beamhop` (scripts/build.ts --with-sharp), or point BEAMHOP_SHARP_PATH at a node_modules containing sharp. The Docker image includes it. ffmpeg on PATH enables video transcoding.';
+  'sharp (optional dependency of @beamhop/media) could not be loaded. From source: `bun add sharp`. Single binary: use the standard release archive (beamhop-<os>-<arch>.tar.gz), which ships node_modules/ with sharp next to `beamhop` (scripts/build.ts includes it unless --no-sharp), or point BEAMHOP_SHARP_PATH at a node_modules containing sharp. The Docker image includes it. ffmpeg on PATH enables video transcoding.';
+
+/** Plain body of the "sharp missing" card (no technical words). */
+export const SHARP_MISSING_BODY =
+  'Photos are stored as they are. Thumbnails need an extra component; the standard download includes it.';
 
 function relaysFor(kernel: Kernel, relayId: string | null): RelayConfig[] {
   const all = kernel.config().relays.filter((r) => r.blossom.enabled);
@@ -124,13 +128,14 @@ export function mediaCards(kernel: Kernel, svc: MediaService): CardSource {
             createdAt: now,
           });
         } else if (wantsImages(r) && !supports.includes('resize')) {
+          // Information only: nothing to approve (no `primary`), nothing is broken.
           out.push({
             id: `media.sharp-missing:${r.id}`,
             relayId: r.id,
-            severity: 'warning',
+            severity: 'info',
             title: 'Photo resizing is not available',
-            body: 'Your media goals ask for thumbnails and smaller copies of photos, but the image tools are not installed. Photos are still stored and shared as they are.',
-            technical: INSTALL_SHARP,
+            body: SHARP_MISSING_BODY,
+            technical: `Media goals or blossom.optimize ask for thumbnails/resized copies, but the processor does not support "resize". ${INSTALL_SHARP}`,
             batchKey: 'media.tools-missing',
             createdAt: now,
           });

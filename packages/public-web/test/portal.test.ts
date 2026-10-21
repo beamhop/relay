@@ -95,6 +95,29 @@ describe('portal sign-in (NIP-98)', () => {
 });
 
 describe('portal account features', () => {
+  test('storage shows used, limit and space left; full and over-limit are explained', async () => {
+    const h = await setup({ relay: { blossom: { defaultQuotaBytes: 100 } } });
+    const key = makeKey();
+    await addBlob(h, key.pk, 'x'.repeat(40), h.ports.clock.now());
+    const { cookie } = await h.login(key);
+    let page = (await h.html('/portal', { headers: { cookie } })).body;
+    expect(page).toContain('40 B of 100 B used · 60 B left');
+    expect(page).toMatch(
+      /<progress[^>]*max="100"[^>]*value="40"|<progress[^>]*value="40"[^>]*max="100"/,
+    );
+    expect(page).not.toContain('storage is full');
+
+    await addBlob(h, key.pk, 'y'.repeat(60), h.ports.clock.now());
+    page = (await h.html('/portal', { headers: { cookie } })).body;
+    expect(page).toContain('100 B of 100 B used · 0 B left');
+    expect(page).toContain('Your storage is full.');
+
+    await addBlob(h, key.pk, 'z'.repeat(30), h.ports.clock.now());
+    page = (await h.html('/portal', { headers: { cookie } })).body;
+    expect(page).toContain('130 B of 100 B used · 0 B left');
+    expect(page).toContain('more than your limit (30 B over)');
+  });
+
   test('lists files with quota and deletes one (CSRF protected)', async () => {
     const h = await setup();
     const key = makeKey();
@@ -102,7 +125,8 @@ describe('portal account features', () => {
     const { cookie } = await h.login(key);
     const page = (await h.html('/portal', { headers: { cookie } })).body;
     expect(page).toContain(sha.slice(0, 10));
-    expect(page).toMatch(/10 B of [0-9.]+ GB used/);
+    expect(page).toMatch(/10 B of [0-9.]+ GB used · [0-9.]+ GB left/);
+    expect(page).toContain('data-testid="storage-bar"');
 
     const bad = await h.post('/portal/files/delete', cookie, { sha256: sha, csrf: 'nope' });
     expect(bad.status).toBe(303);

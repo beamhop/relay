@@ -3,6 +3,7 @@
 import {
   type ActionContext,
   type ActionDef,
+  type ActionResult,
   type DiffLine,
   type Kernel,
   type RelayConfig,
@@ -15,7 +16,12 @@ import type { AdminTimeTracker } from './admin-time.ts';
 import { buildChecklist } from './checklist.ts';
 import type { CardStateEntry, InboxCard, SuggestionsEngine } from './inbox.ts';
 import {
+  type LaunchKit,
+  type LaunchKitNeedsDomain,
+  type LearnedUrlSource,
   type OutsideDialer,
+  type ResolveUrlInput,
+  type TestRelayNeedsDomain,
   type TestRelayReport,
   buildLaunchKit,
   testRelay,
@@ -70,9 +76,21 @@ interface CardStatePayload {
   prev?: CardStateEntry;
 }
 
+/** Optional `baseUrl` input shared by the launch kit and "Test my relay". */
+const baseUrlInput = z
+  .string()
+  .max(2048)
+  .optional()
+  .describe('The web address you are using right now, e.g. http://localhost:3334');
+
 export function createActions(deps: ActionDeps): ActionDef[] {
   const { kernel, engine } = deps;
   const now = () => kernel.ports.clock.now();
+  /** URL resolution inputs: explicit baseUrl → last route.publicUrl (Blossom) → config hosts. */
+  const resolveInput = (relay: RelayConfig, baseUrl: string | undefined): ResolveUrlInput => {
+    const blossom = kernel.use<LearnedUrlSource>('blossom');
+    return { baseUrl, learned: blossom?.learnedPublicUrl?.(relay.id) ?? null };
+  };
 
   /** Resolve the action behind a card and check the admin may run it there. */
   const resolvePrimary = (card: InboxCard, ctx: ActionContext) => {
@@ -364,15 +382,22 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     description:
       'Everything to share your relay: addresses, a QR code, a draft announcement and tips to polish your relay’s profile.',
     technical:
-      'URLs from relay.hosts + node.tls; QR via @beamhop/public-web; unsigned kind 1 draft (never published); NIP-11 field suggestions.',
+      'URLs from input.baseUrl, else the last route.publicUrl seen, else the first non-wildcard relay.hosts entry + node.tls (ws/wss follows http/https); `needsDomain: true` when none is usable. QR via @beamhop/public-web; unsigned kind 1 draft (never published); NIP-11 field suggestions.',
     scope: 'relay',
     permission: 'relay.read',
     readOnly: true,
     keywords: ['share', 'qr', 'announce', 'launch', 'nip-11'],
-    input: z.object({}),
-    async run(_input, ctx) {
+    input: z.object({ baseUrl: baseUrlInput }),
+    async run(input, ctx): Promise<ActionResult<LaunchKit | LaunchKitNeedsDomain>> {
       const relay = relayOf(kernel, ctx);
-      const kit = buildLaunchKit(kernel.config(), relay, now(), ctx.principal.pubkey);
+      const kit = buildLaunchKit(
+        kernel.config(),
+        relay,
+        now(),
+        ctx.principal.pubkey,
+        resolveInput(relay, input.baseUrl),
+      );
+      if (kit.needsDomain) return { output: kit, summary: kit.summary };
       return {
         output: kit,
         summary: kit.polish.length
@@ -388,13 +413,13 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     description:
       'Checks your relay from the outside the way people will use it: connect, post, read back and upload.',
     technical:
-      'NIP-11 GET, WebSocket EVENT (kind 30078, throwaway key, NIP-40 expiry) → OK, REQ ids → EVENT/EOSE, BUD-02 PUT /upload + GET; cleans up with kind 5 and DELETE.',
+      'Address: input.baseUrl → last route.publicUrl → first non-wildcard host (`needsDomain: true` when none). NIP-11 GET, WebSocket EVENT (kind 30078, throwaway key, NIP-40 expiry) → OK, REQ ids → EVENT/EOSE, BUD-02 PUT /upload + GET; cleans up with kind 5 and DELETE.',
     scope: 'relay',
     permission: 'config.write',
     readOnly: true,
     keywords: ['test', 'check', 'reachable', 'diagnose'],
-    input: z.object({ skipUpload: z.boolean().default(false) }),
-    async run(input, ctx) {
+    input: z.object({ skipUpload: z.boolean().default(false), baseUrl: baseUrlInput }),
+    async run(input, ctx): Promise<ActionResult<TestRelayReport | TestRelayNeedsDomain>> {
       const relay = relayOf(kernel, ctx);
       const report = await testRelay(kernel.config(), relay, {
         dialer: deps.dialer(),
@@ -403,7 +428,10 @@ export function createActions(deps: ActionDeps): ActionDef[] {
         nowMs: () => kernel.ports.clock.nowMs(),
         sha256Hex: (d) => kernel.ports.crypto.sha256Hex(d),
         skipUpload: input.skipUpload,
+        resolve: resolveInput(relay, input.baseUrl),
       });
+      // Nothing was checked without an address: keep the last real run.
+      if (report.needsDomain) return { output: report, summary: report.summary };
       await kernel.ports.docs.put<TestRelayReport>(COL.testRuns, relay.id, report);
       return { output: report, summary: report.summary };
     },

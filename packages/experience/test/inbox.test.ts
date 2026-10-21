@@ -52,6 +52,12 @@ describe('suggestions inbox', () => {
     expect(spam.createdAt).toBe(now - 100);
     expect(spam.primary.inputs).toEqual([{ name: 'b' }, { name: 'a' }]);
     expect(spam.primary.label).toBe('Block (all 2)');
+    expect(spam.approvable).toBe(true);
+    // Information-only cards have nothing to approve.
+    const info = output.cards.find((c: { key: string }) => c.key === 'card:old-info');
+    expect(info.primary).toBeUndefined();
+    expect(info.approvable).toBe(false);
+    expect(output.cards[0].approvable).toBe(false);
     expect(output.counts).toEqual({ critical: 1, warning: 1, info: 2 });
     expect(output.allClear).toBe(false);
   });

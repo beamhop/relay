@@ -239,6 +239,37 @@ export function registerActions(kernel: Kernel, svc: BlossomService): void {
     }),
   );
 
+  kernel.actions.register(
+    defineAction({
+      id: 'media.usage-summary',
+      title: 'Storage use',
+      description:
+        'How much space people use on this relay, who is close to or over their storage limit, and who stores the most.',
+      technical: `BlobIndex.list scan (synthetic owners like "anonymous"/"media-variant" count toward totalUsedBytes only); per-pubkey quota = docs blossom.quotas override → tier.blobQuotaBytes → blossom.defaultQuotaBytes → kernel.limits().defaultBlobQuotaBytes (goals). nearQuota: ≥${NEAR_QUOTA_RATIO * 100}% and not over; overQuota: used > quota.`,
+      scope: 'relay',
+      permission: 'relay.read',
+      readOnly: true,
+      keywords: ['quota', 'storage', 'space', 'usage', 'disk', 'media'],
+      input: z.object({
+        top: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(10)
+          .describe('How many of the largest to list'),
+      }),
+      async run(input, ctx) {
+        const relay = relayOf(kernel, ctx);
+        const s = await usageSummary(kernel, svc, relay, input.top);
+        return {
+          output: s,
+          summary: `${formatBytes(s.totalUsedBytes)} used by ${s.people} ${s.people === 1 ? 'person' : 'people'}${s.overQuota ? `, ${s.overQuota} over their limit` : ''}`,
+        };
+      },
+    }),
+  );
+
   /** Quota the person would have without an override. */
   async function defaultQuota(relay: RelayConfig, pubkey: string): Promise<number> {
     const tier = await svc.tierOf(relay, pubkey);
@@ -249,6 +280,62 @@ export function registerActions(kernel: Kernel, svc: BlossomService): void {
       kernel.limits(relay.id, tier).defaultBlobQuotaBytes
     );
   }
+}
+
+/** "Near" a storage limit from this share of it on. */
+export const NEAR_QUOTA_RATIO = 0.8;
+const PERSON = /^[0-9a-f]{64}$/;
+const MAX_USAGE_SCAN = 50_000;
+
+export interface UsageSummary {
+  /** Bytes stored on this relay (everyone, including anonymous uploads and media copies). */
+  totalUsedBytes: number;
+  /** People with at least one stored file. */
+  people: number;
+  /** People at ≥80% of their limit (but not over). */
+  nearQuota: number;
+  /** People storing more than their limit. */
+  overQuota: number;
+  /** Who stores the most, largest first. */
+  largest: Array<{ pubkey: string; usedBytes: number; quotaBytes: number }>;
+}
+
+export async function usageSummary(
+  kernel: Kernel,
+  svc: BlossomService,
+  relay: RelayConfig,
+  top = 10,
+): Promise<UsageSummary> {
+  const used = new Map<string, number>();
+  let total = 0;
+  let cursor: string | undefined;
+  let scanned = 0;
+  do {
+    const page = await kernel.ports.blobIndex.list(relay.id, { cursor, limit: 1000 });
+    for (const o of page.items) {
+      total += o.size;
+      if (PERSON.test(o.pubkey)) used.set(o.pubkey, (used.get(o.pubkey) ?? 0) + o.size);
+    }
+    scanned += page.items.length;
+    cursor = page.items.length ? page.cursor : undefined;
+  } while (cursor && scanned < MAX_USAGE_SCAN);
+  const rows: UsageSummary['largest'] = [];
+  let near = 0;
+  let over = 0;
+  for (const [pubkey, usedBytes] of used) {
+    const { quotaBytes } = await svc.quotaFor(relay, pubkey);
+    if (usedBytes > quotaBytes) over++;
+    else if (usedBytes >= quotaBytes * NEAR_QUOTA_RATIO) near++;
+    rows.push({ pubkey, usedBytes, quotaBytes });
+  }
+  rows.sort((a, b) => b.usedBytes - a.usedBytes || a.pubkey.localeCompare(b.pubkey));
+  return {
+    totalUsedBytes: total,
+    people: used.size,
+    nearQuota: near,
+    overQuota: over,
+    largest: rows.slice(0, top),
+  };
 }
 
 export function blossomHealthCheck(kernel: Kernel): HealthCheck {

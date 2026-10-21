@@ -4,15 +4,17 @@
  * `beamhop update` code accepts what release.ts produces (file:// URLs, no network).
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { updateCommand } from '../../packages/cli/src/commands/update.ts';
 import { BufferIo } from '../../packages/cli/src/io.ts';
 import {
+  archiveName,
   assetName,
   buildManifest,
   checksumsText,
+  collectTargetDirs,
   defaultBaseUrl,
   parseReleaseArgs,
   release,
@@ -110,5 +112,45 @@ describe('release.ts', () => {
     expect(code).toBe(0);
     expect(readFileSync(bin, 'utf8')).toBe(fake('0.5.0'));
     expect(io.stdout).toContain('Installed 0.5.0');
+  });
+
+  test('sharp ships in the standard download: <target>/ folders become archive + bare binary', async () => {
+    const out = join(root, 'sharp-rel');
+    const dir = join(out, 'v0.6.0');
+    // As the build script leaves it: one target with sharp, one without (cross-compiled).
+    mkdirSync(join(dir, 'linux-x64', 'node_modules', 'sharp'), { recursive: true });
+    writeFileSync(join(dir, 'linux-x64', 'beamhop'), fake('0.6.0'));
+    writeFileSync(join(dir, 'linux-x64', 'node_modules', 'sharp', 'package.json'), '{}');
+    writeFileSync(join(dir, 'linux-x64', 'beamhop.map'), '{}');
+    mkdirSync(join(dir, 'test-os'), { recursive: true });
+    writeFileSync(join(dir, 'test-os', 'beamhop'), fake('0.6.0'));
+    collectTargetDirs(dir, ['linux-x64', 'test-os']);
+    expect(existsSync(join(dir, 'linux-x64'))).toBe(false);
+    expect(readFileSync(join(dir, assetName('linux-x64')), 'utf8')).toBe(fake('0.6.0'));
+    expect(existsSync(join(dir, archiveName('test-os')))).toBe(false);
+    const list = Bun.spawnSync([
+      'tar',
+      '-tzf',
+      join(dir, archiveName('linux-x64')),
+    ]).stdout.toString();
+    expect(list).toContain('beamhop');
+    expect(list).toContain('node_modules/sharp/package.json');
+    expect(list).not.toContain('.map');
+    expect(existsSync(join(dir, 'linux-x64-beamhop.map'))).toBe(true);
+    const res = await release(
+      {
+        version: '0.6.0',
+        targets: ['linux-x64', 'test-os'],
+        outDir: out,
+        baseUrl: 'https://x',
+        skipBuild: true,
+      },
+      undefined,
+    );
+    expect(res.files).toContain('beamhop-linux-x64.tar.gz');
+    const sums = readFileSync(join(dir, 'SHA256SUMS'), 'utf8');
+    expect(sums).toContain('  beamhop-linux-x64.tar.gz\n');
+    expect(sums).toContain('  beamhop-linux-x64\n');
+    expect(res.manifest.assets['linux-x64']?.url).toBe('https://x/beamhop-linux-x64');
   });
 });

@@ -7,6 +7,7 @@
  */
 import { type ActionContext, type ActionDef, type RelayId, defineAction } from '@beamhop/core';
 import { z } from 'zod';
+import { effectiveQuota, quotaStatus } from './quota.ts';
 import type { PolicyRuntime } from './runtime.ts';
 import { plural } from './util.ts';
 
@@ -19,6 +20,14 @@ export interface UserRow {
   lastSeen?: number;
   storageBytes: number;
   files: number;
+  /** Effective storage limit for this person (admin override → tier → media setting → goals). */
+  quotaBytes: number;
+  /** Bytes stored (same as `storageBytes`). */
+  usedBytes: number;
+  /** Bytes left before uploads are refused (0 when full or over). */
+  remainingBytes: number;
+  /** Storing more than the limit (e.g. after the limit was lowered). */
+  overQuota: boolean;
   banned: boolean;
   muted: boolean;
   allowlisted: boolean;
@@ -68,7 +77,7 @@ export function createListActions(rt: PolicyRuntime): ActionDef[] {
     title: 'People',
     description: 'Everyone seen here recently, with their tier, activity, storage and status.',
     technical:
-      'Union of policy state (first-seen, last activity, tiers, bans, mutes, allowlist) and blob owners (BlobIndex); sorted by last activity; offset cursor. Activity is recorded at most every 15 minutes per pubkey.',
+      'Union of policy state (first-seen, last activity, tiers, bans, mutes, allowlist) and blob owners (BlobIndex); sorted by last activity; offset cursor. Activity is recorded at most every 15 minutes per pubkey. quotaBytes = docs blossom.quotas override ?? kernel.limits(relay, tier).defaultBlobQuotaBytes (tier.blobQuotaBytes → blossom.defaultQuotaBytes → goals).',
     scope: 'relay',
     permission: 'relay.read',
     readOnly: true,
@@ -161,13 +170,24 @@ export function createListActions(rt: PolicyRuntime): ActionDef[] {
       const offset = Math.max(0, Number.parseInt(input.cursor ?? '0', 10) || 0);
       const page = filtered.slice(offset, offset + input.limit);
       const users: UserRow[] = [];
+      const relay = rt.kernel.relay(relayId);
       for (const r of page) {
+        const tier = await rt.resolveTier(relayId, r.pubkey);
+        const used = r.storageBytes ?? 0;
+        const quota = relay
+          ? await effectiveQuota(rt, relay, r.pubkey, tier)
+          : rt.kernel.limits(relayId, tier).defaultBlobQuotaBytes;
+        const q = quotaStatus(used, quota);
         const u: UserRow = {
           pubkey: r.pubkey,
-          tier: await rt.resolveTier(relayId, r.pubkey),
+          tier,
           tierExplicit: !!r.tierExplicit,
-          storageBytes: r.storageBytes ?? 0,
+          storageBytes: used,
           files: r.files ?? 0,
+          quotaBytes: q.quotaBytes,
+          usedBytes: q.usedBytes,
+          remainingBytes: q.remainingBytes,
+          overQuota: q.overQuota,
           banned: !!r.banned,
           muted: !!r.muted,
           allowlisted: !!r.allowlisted,

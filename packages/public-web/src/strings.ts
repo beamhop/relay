@@ -87,6 +87,10 @@ const en = {
   'portal.plan.access.notMember': 'You can read, but cannot post yet.',
   'portal.storage.title': 'Storage',
   'portal.storage.used': '{used} of {quota} used',
+  'portal.storage.left': '{used} of {quota} used · {left} left',
+  'portal.storage.full': 'Your storage is full. Delete some files to upload new ones.',
+  'portal.storage.over':
+    'You are storing more than your limit ({over} over). Delete some files to upload new ones.',
   'portal.files.title': 'Your files',
   'portal.files.none': 'You have not uploaded any files here.',
   'portal.files.delete': 'Delete',
