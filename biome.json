@@ -3,6 +3,8 @@
   "files": {
     "ignore": [
       "node_modules",
+      ".claude/worktrees",
+      "data",
       "dist",
       "build",
       ".svelte-kit",
