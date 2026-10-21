@@ -3,7 +3,7 @@
  * `beamhop update` / `beamhop rollback` for the single binary.
  *
  * update: release manifest → download next to the binary → verify SHA-256
- * (+ signature hook) → smoke test the new binary (`--version` must report the
+ * and the minisign signature → smoke test the new binary (`--version` must report the
  * release; `--healthcheck` must pass when a server is running) → keep the
  * current binary as `<bin>.previous` → atomic rename over `<bin>`.
  * rollback: put `<bin>.previous` back (the replaced one is kept as `<bin>.rolled-back`).
@@ -11,6 +11,13 @@
  * Manifest URL: --manifest, $BEAMHOP_UPDATE_MANIFEST, `modules.updates.manifestUrl`
  * in beamhop.yaml, else the default below. Format:
  *   { "version": "0.2.0", "notes": "…", "assets": { "linux-x64": { "url", "sha256", "signature"? } } }
+ * Asset and signature URLs may be relative to the manifest URL. `signature` is the
+ * minisign `.minisig` text, or a URL/path of it.
+ *
+ * Signatures (minisign, Ed25519): the release public key comes from
+ * $BEAMHOP_UPDATE_PUBLIC_KEY, `modules.updates.publicKey`, else the built-in
+ * {@link RELEASE_PUBLIC_KEY}. Once a key is known, unsigned downloads are refused
+ * unless `--allow-unsigned` is given; a bad signature is always refused.
  */
 import {
   chmodSync,
@@ -29,8 +36,16 @@ import { type CliContext, localOptions } from '../context.ts';
 import { json } from '../format.ts';
 import { CliError, EXIT, UsageError, line, paint } from '../io.ts';
 import { resolveLocalConfig, serverRunning } from '../local.ts';
+import { verifyMinisign } from '../minisign.ts';
 
 export const DEFAULT_MANIFEST_URL = 'https://get.beamhop.dev/releases/latest.json';
+
+/**
+ * Built-in release signing key (minisign public key line, `RW…`). Placeholder:
+ * empty until the project publishes its release key; set `modules.updates.publicKey`
+ * (or $BEAMHOP_UPDATE_PUBLIC_KEY) to require signatures today.
+ */
+export const RELEASE_PUBLIC_KEY = '';
 
 export interface ReleaseAsset {
   url: string;
@@ -51,8 +66,12 @@ export interface UpdateDeps {
     args: string[],
     env: Record<string, string | undefined>,
   ) => Promise<{ code: number; stdout: string }>;
-  /** Signature check hook. Default: accept (no release signing key is published yet) with a note. */
-  verifySignature?: (asset: ReleaseAsset, sha256: string) => Promise<'ok' | 'unsigned' | 'bad'>;
+  /** Signature check override (tests). Default: minisign with the configured public key. */
+  verifySignature?: (
+    asset: ReleaseAsset,
+    sha256: string,
+    data: Uint8Array,
+  ) => Promise<'ok' | 'unsigned' | 'bad'>;
   /** Is a server running (decides whether --healthcheck must pass). */
   serverUrl?: () => Promise<string | null>;
   platform?: string;
@@ -64,6 +83,11 @@ const FLAGS: FlagSpec[] = [
   { name: 'binary', type: 'string', description: 'Binary to update (default: this one)' },
   { name: 'check', type: 'boolean', description: 'Only check for a newer version' },
   { name: 'force', type: 'boolean', description: 'Install even if not newer' },
+  {
+    name: 'allow-unsigned',
+    type: 'boolean',
+    description: 'Install a release without a signature even though a release key is set',
+  },
 ];
 
 export function hostPlatform(): string {
@@ -97,18 +121,74 @@ async function defaultRun(bin: string, args: string[], env: Record<string, strin
   return { code, stdout };
 }
 
+interface UpdatesSettings {
+  manifestUrl?: string;
+  publicKey?: string;
+}
+
+function updatesSettings(ctx: CliContext, globals: FlagValues): UpdatesSettings {
+  try {
+    return (
+      (resolveLocalConfig(localOptions(ctx, globals)).config.modules.updates as
+        | UpdatesSettings
+        | undefined) ?? {}
+    );
+  } catch {
+    return {}; // no settings file
+  }
+}
+
 function manifestUrl(ctx: CliContext, flags: FlagValues, globals: FlagValues): string {
   const flag = str(flags.manifest) ?? ctx.env.BEAMHOP_UPDATE_MANIFEST;
   if (flag) return flag;
+  return updatesSettings(ctx, globals).manifestUrl || DEFAULT_MANIFEST_URL;
+}
+
+/** Release public key: env, then `modules.updates.publicKey`, then the built-in one. */
+export function releasePublicKey(ctx: CliContext, globals: FlagValues): string | null {
+  const k =
+    ctx.env.BEAMHOP_UPDATE_PUBLIC_KEY?.trim() ||
+    updatesSettings(ctx, globals).publicKey?.trim() ||
+    RELEASE_PUBLIC_KEY;
+  return k || null;
+}
+
+/** Resolve an asset/signature URL that may be relative to the manifest URL. */
+export function resolveAgainst(url: string, base: string): string {
   try {
-    const raw = resolveLocalConfig(localOptions(ctx, globals)).config.modules.updates as
-      | { manifestUrl?: string }
-      | undefined;
-    if (raw?.manifestUrl) return raw.manifestUrl;
+    return new URL(url, base).href;
   } catch {
-    // no settings file: default
+    return url;
   }
-  return DEFAULT_MANIFEST_URL;
+}
+
+const looksLikeLocation = (s: string) =>
+  !s.includes('\n') &&
+  (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /\.minisig(\?.*)?$/.test(s) || /^\.{0,2}\//.test(s));
+
+/** The `.minisig` text for an asset (inline, or fetched from a URL relative to the manifest). */
+export async function signatureText(
+  fetchFn: FetchLike,
+  asset: ReleaseAsset,
+  manifest: string,
+): Promise<string | null> {
+  const s = asset.signature?.trim();
+  if (!s) return null;
+  if (!looksLikeLocation(s)) return s;
+  const url = resolveAgainst(s, manifest);
+  let res: Response;
+  try {
+    res = await fetchFn(url);
+  } catch (err) {
+    throw new CliError('Could not download the release signature.', 1, `${url}: ${String(err)}`);
+  }
+  if (!res.ok)
+    throw new CliError(
+      'Could not download the release signature.',
+      1,
+      `${url}: HTTP ${res.status}`,
+    );
+  return res.text();
 }
 
 export async function fetchManifest(fetchFn: FetchLike, url: string): Promise<ReleaseManifest> {
@@ -148,7 +228,8 @@ export async function updateCommand(
   const p = paint(io);
   const { flags } = parseFlags(argv, FLAGS);
   const current = deps.currentVersion ?? VERSION;
-  const manifest = await fetchManifest(ctx.fetch, manifestUrl(ctx, flags, globals));
+  const mUrl = manifestUrl(ctx, flags, globals);
+  const manifest = await fetchManifest(ctx.fetch, mUrl);
   const newer = compareVersions(manifest.version, current) > 0;
   if (bool(flags.check) || (!newer && !bool(flags.force))) {
     if (bool(globals.json))
@@ -166,9 +247,18 @@ export async function updateCommand(
     return EXIT.ok;
   }
   const platform = deps.platform ?? hostPlatform();
-  const asset = manifest.assets[platform];
-  if (!asset)
+  const listed = manifest.assets[platform];
+  if (!listed)
     throw new CliError(`There is no ${manifest.version} download for this system (${platform}).`);
+  const asset: ReleaseAsset = { ...listed, url: resolveAgainst(listed.url, mUrl) };
+  const publicKey = releasePublicKey(ctx, globals);
+  const sigText = deps.verifySignature ? null : await signatureText(ctx.fetch, asset, mUrl);
+  if (!deps.verifySignature && publicKey && !sigText && !bool(flags['allow-unsigned']))
+    throw new CliError(
+      'This release is not signed, so it was not installed. Use --allow-unsigned to install it anyway.',
+      1,
+      `manifest ${mUrl}: assets.${platform}.signature is missing`,
+    );
   const bin = binaryPath(ctx, flags);
   if (!existsSync(bin)) throw new UsageError(`${bin} does not exist`);
   const tmp = join(dirname(bin), `.${basename(bin)}.download-${process.pid}`);
@@ -201,13 +291,31 @@ export async function updateCommand(
         1,
         `sha256 ${sha} ≠ ${asset.sha256}`,
       );
-    // Placeholder until release signing keys are published: report as unsigned.
-    const verify = deps.verifySignature ?? (async () => 'unsigned' as const);
-    const sig = await verify(asset, sha);
+    let why = '';
+    const verify =
+      deps.verifySignature ??
+      (async (): Promise<'ok' | 'unsigned' | 'bad'> => {
+        if (!publicKey || !sigText) return 'unsigned';
+        const r = verifyMinisign(data, sigText, publicKey);
+        if (!r.ok) why = r.reason;
+        return r.ok ? 'ok' : 'bad';
+      });
+    const sig = await verify(asset, sha, data);
     if (sig === 'bad')
-      throw new CliError('The download is not signed by Beamhop; nothing was changed.');
+      throw new CliError(
+        'The download is not signed by Beamhop; nothing was changed.',
+        1,
+        why || 'signature check failed',
+      );
     if (sig === 'unsigned')
-      line(io, p.dim('  Checksum verified (release signatures are not checked yet).'));
+      line(
+        io,
+        p.dim(
+          publicKey
+            ? '  Checksum verified; the release is NOT signed (--allow-unsigned).'
+            : '  Checksum verified (no release key is set, so signatures are not checked).',
+        ),
+      );
     else line(io, p.dim('  Checksum and signature verified.'));
     chmodSync(tmp, 0o755);
     // 3. Smoke test the new binary before it replaces anything.
