@@ -1,53 +1,31 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  /** User detail bottom sheet: plan, storage, quick actions and internal team notes (§6.12). */
+  /** User detail bottom sheet: plan, storage, quick actions, "Why?" for blocks and internal team notes (§6.12). */
   import { app } from '$lib/stores/app.svelte';
-  import { flow, query, runNow } from '$lib/stores/actions.svelte';
-  import { prefs } from '$lib/stores/prefs.svelte';
+  import { flow } from '$lib/stores/actions.svelte';
   import { ago, formatBytes } from '$lib/utils';
   import { names } from '$lib/stores/names.svelte';
   import Sheet from '../Sheet.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
-  import { quotaOf, type UserRow } from './users';
+  import WhyButton from '../WhyButton.svelte';
+  import ItemLens from '../ItemLens.svelte';
+  import { isRestricted, quotaOf, userLensLines, type UserRow } from './users';
   import QuotaBar from './QuotaBar.svelte';
+  import PersonNotes from './PersonNotes.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
-  let { user = $bindable(null), onchange }: { user: UserRow | null; onchange?: () => void } = $props();
-
-  interface Note {
-    id: string;
-    text: string;
-    authorName: string;
-    at: number;
-  }
+  let {
+    user = $bindable(null),
+    accessMode,
+    onchange,
+  }: { user: UserRow | null; accessMode?: string; onchange?: () => void } = $props();
 
   let open = $state(false);
-  let notes = $state<Note[]>([]);
-  let draft = $state('');
-  let saving = $state(false);
 
   $effect(() => {
     open = !!user;
-    if (user) void loadNotes(user.pubkey);
   });
-
-  async function loadNotes(pubkey: string) {
-    const r = await query<{ notes: Note[] }>('notes.list', { subject: { type: 'user', id: pubkey } });
-    notes = r?.notes ?? [];
-  }
-
-  async function addNote() {
-    if (!user || !draft.trim()) return;
-    saving = true;
-    const pk = user.pubkey;
-    const r = await runNow('notes.add', { subject: { type: 'user', id: pk }, text: draft.trim() }, { afterUndo: () => loadNotes(pk) });
-    saving = false;
-    if (r) {
-      draft = '';
-      await loadNotes(pk);
-    }
-  }
 
   function start(id: string, input: Record<string, unknown>, form = false) {
     const def = app.action(id);
@@ -64,6 +42,8 @@
         {#if user.muted}<Badge tone="warn">{m.people_muted()}</Badge>{/if}
         {#if user.tier}<Badge tone="accent">{user.tier}</Badge>{/if}
         {#if user.admin}<Badge>{m.people_team_member()}</Badge>{/if}
+        {#if accessMode === 'allowlist' && user.allowlisted === false && !user.admin}<Badge tone="warn">{m.ppl_not_member()}</Badge>{/if}
+        {#if isRestricted(user, accessMode)}<WhyButton subject={{ subject: 'block', pubkey: user.pubkey }} />{/if}
       </div>
       <dl class="grid grid-cols-2 gap-3 text-sm">
         <div class="rounded-lg bg-muted/50 p-3">
@@ -82,7 +62,7 @@
           <QuotaBar {q} />
         </div>
       {/if}
-      {#if prefs.lens}<p class="break-all font-mono text-[11px] text-muted-foreground" data-lens>{user.pubkey}</p>{/if}
+      <ItemLens lines={userLensLines(user)} />
 
       <div class="grid grid-cols-2 gap-2">
         {#if app.hasAction('users.set-tier')}
@@ -103,32 +83,7 @@
         {/if}
       </div>
 
-      <section aria-labelledby="notes-title">
-        <h3 id="notes-title" class="mb-2 text-sm font-medium">{m.notes_title()}</h3>
-        <p class="mb-2 text-xs text-muted-foreground">{m.notes_private()}</p>
-        <ul class="space-y-2" data-testid="notes">
-          {#each notes as n (n.id)}
-            <li class="rounded-lg bg-muted/50 p-3 text-sm">
-              <p class="whitespace-pre-wrap">{n.text}</p>
-              <p class="mt-1 text-xs text-muted-foreground">{n.authorName} · {ago(n.at)}</p>
-            </li>
-          {:else}
-            <li class="text-xs text-muted-foreground">{m.notes_empty()}</li>
-          {/each}
-        </ul>
-        {#if app.hasAction('notes.add') && app.can('moderation.write')}
-          <form
-            class="mt-3 flex gap-2"
-            onsubmit={(e) => {
-              e.preventDefault();
-              void addNote();
-            }}
-          >
-            <input class="h-10 min-w-0 flex-1 rounded-lg border bg-background px-3 text-sm" placeholder={m.notes_placeholder()} aria-label={m.notes_placeholder()} bind:value={draft} />
-            <Button type="submit" disabled={saving || !draft.trim()}>{m.notes_add()}</Button>
-          </form>
-        {/if}
-      </section>
+      {#key user.pubkey}<PersonNotes pubkey={user.pubkey} />{/key}
     </div>
   {/if}
 </Sheet>

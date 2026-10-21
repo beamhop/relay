@@ -1,24 +1,30 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  /** People (§6.1): users, team & roles, invites, access mode. */
+  /** People (§6.1): users (swipe rows, multi-select bulk actions), team & roles, invites, access mode. */
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import UserPlus from '@lucide/svelte/icons/user-plus';
   import Ticket from '@lucide/svelte/icons/ticket';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Check from '@lucide/svelte/icons/check';
   import { app } from '$lib/stores/app.svelte';
   import { flow, query, runNow } from '$lib/stores/actions.svelte';
   import { live } from '$lib/stores/live.svelte';
-  import { prefs } from '$lib/stores/prefs.svelte';
   import type { BlobItem, RelayConfig, RunResult } from '$lib/api/types';
-  import { mergeUsers, quotaOf, type UserRow } from '$lib/components/people/users';
+  import { isRestricted, mergeUsers, quotaOf, userLensLines, type UserRow } from '$lib/components/people/users';
+  import { rangeSelect, type BulkKind } from '$lib/components/people/bulk';
+  import { longpress } from '$lib/components/people/longpress';
   import QuotaBar from '$lib/components/people/QuotaBar.svelte';
-  import { ago, formatBytes } from '$lib/utils';
+  import { ago, cn, formatBytes } from '$lib/utils';
+  import { haptic } from '$lib/haptics';
   import { names } from '$lib/stores/names.svelte';
   import { to } from '$lib/nav';
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import SwipeRow from '$lib/components/SwipeRow.svelte';
   import UserSheet from '$lib/components/people/UserSheet.svelte';
+  import BulkSheet from '$lib/components/people/BulkSheet.svelte';
+  import WhyButton from '$lib/components/WhyButton.svelte';
+  import ItemLens from '$lib/components/ItemLens.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
@@ -88,6 +94,70 @@
 
   const sectionLinks = $derived(app.uiRoutes.filter((r) => r.placement === 'people-section'));
   const accessMode = $derived(relayCfg?.access.mode);
+
+  // ── Multi-select (§6.13): long-press on phone, checkbox / shift-click on desktop. Swipe is off while selecting. ──
+  let selecting = $state(false);
+  let picked = $state<Set<string>>(new Set());
+  let anchor = $state<string | null>(null);
+  let bulkKind = $state<BulkKind | null>(null);
+  let bulkKeys = $state<string[]>([]);
+  /** The row a long-press just picked: the click that follows the release must not un-pick it. */
+  let pressed: { pk: string; at: number } | null = null;
+
+  const canModerate = $derived(app.can('moderation.write'));
+  const canUsers = $derived(app.can('users.write'));
+  const canBulk = $derived(canModerate || canUsers);
+  const allPicked = $derived(shown.length > 0 && shown.every((u) => picked.has(u.pubkey)));
+  const pickedRows = $derived((users ?? []).filter((u) => picked.has(u.pubkey)));
+  const showUnallow = $derived(
+    canUsers && app.hasAction('access.remove-allowlist') && (accessMode === 'allowlist' || pickedRows.some((u) => u.allowlisted)),
+  );
+
+  function startSelect(pk: string) {
+    if (!canBulk) return;
+    haptic('tap');
+    selecting = true;
+    picked = new Set([...picked, pk]);
+    anchor = pk;
+    pressed = { pk, at: Date.now() };
+  }
+  function stopSelect() {
+    selecting = false;
+    picked = new Set();
+    anchor = null;
+  }
+  function togglePick(pk: string, e?: MouseEvent) {
+    if (pressed && pressed.pk === pk && Date.now() - pressed.at < 800) {
+      pressed = null;
+      return;
+    }
+    pressed = null;
+    if (e?.shiftKey && anchor)
+      picked = rangeSelect(
+        shown.map((u) => u.pubkey),
+        picked,
+        anchor,
+        pk,
+      );
+    else {
+      const next = new Set(picked);
+      if (next.has(pk)) next.delete(pk);
+      else next.add(pk);
+      picked = next;
+    }
+    anchor = pk;
+  }
+  function pickAll() {
+    picked = allPicked ? new Set() : new Set(shown.map((u) => u.pubkey));
+  }
+  function bulk(kind: BulkKind) {
+    bulkKeys = [...picked];
+    bulkKind = kind;
+  }
+  function afterBulk() {
+    stopSelect();
+    void load();
+  }
 </script>
 
 <svelte:head><title>{m.nav_people()} · {m.app_name()}</title></svelte:head>
@@ -132,7 +202,7 @@
                     .map(([scope, r]) => (scope === '*' ? roleLabel(r) : `${roleLabel(r)} · ${scope}`))
                     .join(', ')}
                 </p>
-                {#if prefs.lens}<p class="truncate font-mono text-[10px] text-muted-foreground">{a.id}</p>{/if}
+                <ItemLens lines={[a.id, ...Object.entries(a.roles).map(([scope, r]) => `roles[${scope}] = ${r}`)]} />
               </div>
               {#if a.id === app.me?.id}<Badge>{m.team_you()}</Badge>{/if}
             </div>
@@ -183,54 +253,127 @@
     {/if}
   {:else}
     <PullToRefresh onrefresh={load}>
-      <input
-        type="search"
-        class="mb-3 h-10 w-full rounded-lg border bg-background px-3 text-sm"
-        placeholder={m.people_search()}
-        aria-label={m.people_search()}
-        bind:value={filter}
-      />
+      <div class="mb-3 flex gap-2">
+        <input
+          type="search"
+          class="h-10 min-w-0 flex-1 rounded-lg border bg-background px-3 text-sm"
+          placeholder={m.people_search()}
+          aria-label={m.people_search()}
+          bind:value={filter}
+        />
+        {#if canBulk && users?.length}
+          <Button
+            size="sm"
+            class="h-10"
+            variant={selecting ? 'default' : 'secondary'}
+            onclick={() => (selecting ? stopSelect() : (selecting = true))}
+            data-testid="people-select"
+          >
+            {selecting ? m.common_done() : m.common_select()}
+          </Button>
+        {/if}
+      </div>
       {#if !fromModule && users}
         <p class="mb-2 text-xs text-muted-foreground">{m.people_derived_note()}</p>
+      {/if}
+      {#if selecting && shown.length}
+        <button type="button" class="mb-2 flex items-center gap-2 text-sm" role="checkbox" aria-checked={allPicked} onclick={pickAll} data-testid="people-select-all">
+          <span class={cn('flex size-5 items-center justify-center rounded border', allPicked && 'border-primary bg-primary text-primary-foreground')}>
+            {#if allPicked}<Check class="size-3.5" />{/if}
+          </span>
+          {m.ppl_select_all()}
+        </button>
       {/if}
       {#if users === null}
         <div class="space-y-2"><Skeleton class="h-14 w-full" /><Skeleton class="h-14 w-full" /><Skeleton class="h-14 w-full" /></div>
       {:else if shown.length === 0}
         <p class="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">{m.people_empty()}</p>
       {:else}
-        <ul class="divide-y overflow-hidden rounded-xl border" data-testid="users-list">
+        <ul class="divide-y overflow-hidden rounded-xl border" data-testid="users-list" data-selecting={selecting ? 'true' : undefined}>
           {#each shown as u (u.pubkey)}
+            {@const q = quotaOf(u)}
+            {@const isPicked = picked.has(u.pubkey)}
+            {#snippet body()}
+              <div class="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px]">{u.pubkey.slice(0, 2)}</div>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium">{u.name ?? names.label(u.pubkey)}</p>
+                <p class="text-xs text-muted-foreground">
+                  {u.tier ?? m.people_default_tier()} · {u.lastSeen ? ago(u.lastSeen) : m.people_not_seen()}
+                  {#if u.storageBytes && !q}· {formatBytes(u.storageBytes)}{/if}
+                </p>
+                {#if q}<QuotaBar {q} compact />{/if}
+              </div>
+              {#if u.banned}<Badge tone="critical">{m.people_banned()}</Badge>{/if}
+              {#if u.muted}<Badge tone="warn">{m.people_muted()}</Badge>{/if}
+              {#if accessMode === 'allowlist' && u.allowlisted === false && !u.admin}<Badge tone="warn">{m.ppl_not_member()}</Badge>{/if}
+              {#if u.admin}<Badge>{m.people_team_member()}</Badge>{/if}
+            {/snippet}
+            {#snippet detail()}
+              <div class="flex flex-wrap items-center gap-x-3 px-3 pb-2 pl-15">
+                {#if isRestricted(u, accessMode)}<WhyButton subject={{ subject: 'block', pubkey: u.pubkey }} />{/if}
+                <ItemLens lines={userLensLines(u)} />
+              </div>
+            {/snippet}
             <li>
-              <SwipeRow
-                testid="user-row"
-                left={[{ id: 'inspect', label: m.people_inspect(), tone: 'neutral', run: () => (selected = u) }]}
-                right={app.can('moderation.write')
-                  ? [
-                      { id: 'tier', label: m.people_tier(), tone: 'accent', run: () => start('users.set-tier', { pubkey: u.pubkey, tier: null }, true) },
-                      { id: 'mute', label: m.people_mute(), tone: 'warn', run: () => runNow('moderation.mute-pubkey', { pubkeys: [u.pubkey] }, { afterUndo: load }) },
-                      { id: 'ban', label: m.people_ban(), tone: 'critical', run: () => runNow('moderation.ban-pubkey', { pubkeys: [u.pubkey] }, { afterUndo: load }) },
-                    ]
-                  : []}
-              >
-                {@const q = quotaOf(u)}
-                <button class="flex w-full items-center gap-3 p-3 text-left" onclick={() => (selected = u)}>
-                  <div class="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px]">{u.pubkey.slice(0, 2)}</div>
-                  <div class="min-w-0 flex-1">
-                    <p class="truncate text-sm font-medium">{u.name ?? names.label(u.pubkey)}</p>
-                    <p class="text-xs text-muted-foreground">
-                      {u.tier ?? m.people_default_tier()} · {u.lastSeen ? ago(u.lastSeen) : m.people_not_seen()}
-                      {#if u.storageBytes && !q}· {formatBytes(u.storageBytes)}{/if}
-                    </p>
-                    {#if q}<QuotaBar {q} compact />{/if}
+              {#if selecting}
+                <div data-testid="user-row" data-picked={isPicked ? 'true' : undefined} class={cn(isPicked && 'bg-primary/5')}>
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-3 p-3 text-left"
+                    role="checkbox"
+                    aria-checked={isPicked}
+                    onclick={(e) => togglePick(u.pubkey, e)}
+                    data-testid="user-pick"
+                  >
+                    <span class={cn('flex size-5 shrink-0 items-center justify-center rounded border', isPicked && 'border-primary bg-primary text-primary-foreground')}>
+                      {#if isPicked}<Check class="size-3.5" />{/if}
+                    </span>
+                    {@render body()}
+                  </button>
+                  {@render detail()}
+                </div>
+              {:else}
+                <SwipeRow
+                  testid="user-row"
+                  left={[{ id: 'inspect', label: m.people_inspect(), tone: 'neutral', run: () => (selected = u) }]}
+                  right={canModerate
+                    ? [
+                        { id: 'tier', label: m.people_tier(), tone: 'accent', run: () => start('users.set-tier', { pubkey: u.pubkey, tier: null }, true) },
+                        { id: 'mute', label: m.people_mute(), tone: 'warn', run: () => runNow('moderation.mute-pubkey', { pubkeys: [u.pubkey] }, { afterUndo: load }) },
+                        { id: 'ban', label: m.people_ban(), tone: 'critical', run: () => runNow('moderation.ban-pubkey', { pubkeys: [u.pubkey] }, { afterUndo: load }) },
+                      ]
+                    : []}
+                >
+                  <div class="flex items-center">
+                    {#if canBulk}
+                      <button
+                        type="button"
+                        class="hidden items-center self-stretch pl-3 md:flex"
+                        role="checkbox"
+                        aria-checked="false"
+                        aria-label={m.common_select()}
+                        onclick={() => startSelect(u.pubkey)}
+                        data-testid="user-check"
+                      >
+                        <span class="flex size-5 items-center justify-center rounded border"></span>
+                      </button>
+                    {/if}
+                    <button
+                      class="flex min-w-0 flex-1 items-center gap-3 p-3 text-left"
+                      use:longpress={{ onpress: () => startSelect(u.pubkey) }}
+                      onclick={() => (selected = u)}
+                    >
+                      {@render body()}
+                    </button>
                   </div>
-                  {#if u.banned}<Badge tone="critical">{m.people_banned()}</Badge>{/if}
-                  {#if u.admin}<Badge>{m.people_team_member()}</Badge>{/if}
-                </button>
-              </SwipeRow>
+                  {@render detail()}
+                </SwipeRow>
+              {/if}
             </li>
           {/each}
         </ul>
         <p class="mt-2 text-center text-[11px] text-muted-foreground md:hidden">{m.people_swipe_hint()}</p>
+        {#if canBulk && !selecting}<p class="mt-1 text-center text-[11px] text-muted-foreground">{m.ppl_select_hint()}</p>{/if}
       {/if}
     </PullToRefresh>
   {/if}
@@ -240,4 +383,25 @@
   {/each}
 </div>
 
-<UserSheet bind:user={selected} onchange={load} />
+{#if tab === 'users' && selecting && picked.size}
+  <div class="fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 flex justify-center px-4 md:bottom-6">
+    <div class="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border bg-card px-3 py-2 shadow-xl" data-testid="bulk-bar">
+      <span class="text-sm" data-testid="bulk-count">{m.ppl_selected({ count: picked.size })}</span>
+      {#if canModerate && app.hasAction('moderation.ban-pubkey')}
+        <Button size="sm" variant="destructive" onclick={() => bulk('ban')} data-testid="bulk-ban">{m.people_ban()}</Button>
+      {/if}
+      {#if canModerate && app.hasAction('moderation.mute-pubkey')}
+        <Button size="sm" variant="secondary" onclick={() => bulk('mute')} data-testid="bulk-mute">{m.people_mute()}</Button>
+      {/if}
+      {#if canUsers && app.hasAction('users.set-tier')}
+        <Button size="sm" variant="secondary" onclick={() => bulk('tier')} data-testid="bulk-tier">{m.people_tier()}</Button>
+      {/if}
+      {#if showUnallow}
+        <Button size="sm" variant="secondary" onclick={() => bulk('unallow')} data-testid="bulk-unallow">{m.ppl_unallow()}</Button>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<BulkSheet bind:kind={bulkKind} pubkeys={bulkKeys} tiers={relayCfg?.tiers ?? []} onapplied={afterBulk} onundone={load} />
+<UserSheet bind:user={selected} {accessMode} onchange={load} />

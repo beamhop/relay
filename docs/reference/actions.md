@@ -99,6 +99,14 @@ Get a fresh set of one-time codes that let an owner back in if they lose their k
 - changes settings/data · needs a second approver when approvals are on
 - *Technical:* Replaces the hashed recovery code set; a code redeemed at login grants the owner role to that principal.
 
+### Check how you would get back in
+
+Shows whether this relay can be recovered if an owner loses their key: recovery codes, a second owner and passkeys.
+
+- **id:** `admins.recovery-status` · **CLI:** `beamhop admins recovery-status` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* Counts remaining hashed recovery codes, principals with roles["*"] = owner, and WebAuthn credentials bound to the caller.
+
 ### Remove an admin
 
 Take away all of someone’s admin access. Their API tokens stop working too.
@@ -1452,6 +1460,7 @@ Your API tokens (owners see everyone’s).
 
 - **id:** `tokens.list` · **CLI:** `beamhop tokens list` · **scope:** node · **permission:** `relay.read`
 - read-only
+- *Technical:* Token metadata only (id, name, scopes, createdAt, expiresAt, lastUsedAt); secrets are never returned.
 
 ### Revoke an API token
 
