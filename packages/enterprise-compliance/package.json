@@ -4,8 +4,17 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "description": "Enterprise: SIEM export, legal hold, eDiscovery, approvals, escrow, reports",
+  "description": "Enterprise: approvals (two-person rule), SIEM export, legal hold, eDiscovery, retention by group, residency, encryption at rest, usage reports, network controls",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "@peculiar/x509": "^1.14.0",
+    "hono": "^4.13.13",
+    "jose": "^6.2.13",
+    "reflect-metadata": "^0.2.2",
+    "zod": "^4.6.7"
+  },
   "devDependencies": { "@beamhop/testkit": "workspace:*" }
 }

@@ -22,6 +22,7 @@ import {
   defineModule,
   parseConfig,
   resolveRelay,
+  runRequestGates,
 } from '@beamhop/core';
 import { type AdapterImporters, type LoadedStores, loadStores } from './adapters.ts';
 import type {
@@ -227,6 +228,25 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     }
     const ip = req.headers.get('cf-connecting-ip');
     const ipHash = ip ? services.crypto.hashIp(ip) : 'unknown';
+    const route: RouteContext = {
+      relayId: relay.id,
+      publicUrl: `${url.protocol}//${url.host}${relay.pathPrefix ?? ''}`,
+      ipHash,
+    };
+    // Opt-in request gates (network controls); no-op and no raw IP exposure without gates.
+    if (kernel.gates?.length) {
+      try {
+        const denied = await runRequestGates(kernel, req, {
+          route,
+          upgrade: isUpgrade(req),
+          clientIp: () => ip ?? undefined,
+        });
+        if (denied) return denied;
+      } catch (err) {
+        services.logger.log('error', 'Request gate failed', { error: String(err) });
+        return new Response('Access check failed.', { status: 503 });
+      }
+    }
 
     if (isUpgrade(req)) {
       const shard = randomShard(services.shards);
@@ -242,11 +262,6 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
       return stub.fetch(new Request(req.url, { method: req.method, headers }));
     }
 
-    const route: RouteContext = {
-      relayId: relay.id,
-      publicUrl: `${url.protocol}//${url.host}${relay.pathPrefix ?? ''}`,
-      ipHash,
-    };
     try {
       return await kernel.http.fetch(
         req,
