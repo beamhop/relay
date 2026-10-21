@@ -92,6 +92,8 @@ export const DEFAULT_MODULE_PACKAGES: ModulePackage[] = [
   { name: '@beamhop/experience', load: () => import('@beamhop/experience') },
   { name: '@beamhop/public-web', load: () => import('@beamhop/public-web') },
   { name: '@beamhop/media', load: () => import('@beamhop/media') },
+  // "Find models" on the AI settings screen works while the assistant is still off.
+  { name: '@beamhop/ai/setup', load: () => import('@beamhop/ai/setup') },
   {
     name: '@beamhop/ai',
     load: () => import('@beamhop/ai'),

@@ -24,6 +24,7 @@
     onchange,
     footer,
     doc,
+    suggestions,
   }: {
     fields: FieldSpec[];
     initial?: Record<string, unknown>;
@@ -33,6 +34,8 @@
     onsubmit: (values: Record<string, unknown>) => void | Promise<void>;
     onchange?: (values: Record<string, unknown>) => void;
     footer?: Snippet;
+    /** Values to offer on text fields, keyed by dotted path (pick one or type your own). */
+    suggestions?: Record<string, readonly string[]>;
   } = $props();
 
   const flat = $derived(leaves(fields));
@@ -167,15 +170,22 @@
                   }}
                 ></textarea>
               {:else}
+                {@const offer = f.secret ? undefined : suggestions?.[f.path.join('.')]}
                 <input
                   {...props}
                   data-setting-input
+                  list={offer?.length ? `${id}-${key}-options` : undefined}
                   type={f.secret ? 'password' : f.format === 'email' ? 'email' : f.format === 'uri' ? 'url' : 'text'}
                   autocomplete="off"
                   class="h-10 w-full rounded-lg border bg-background px-3 text-sm"
                   bind:value={($data as Record<string, unknown>)[key]}
                   placeholder={f.example ?? (f.default !== undefined ? String(f.default) : '')}
                 />
+                {#if offer?.length}
+                  <datalist id={`${id}-${key}-options`} data-setting-options>
+                    {#each offer as o (o)}<option value={o}></option>{/each}
+                  </datalist>
+                {/if}
               {/if}
               {#if prefs.lens}<p class="mt-1 font-mono text-[11px] text-muted-foreground" data-lens>{f.technical}{f.technicalNote ? ` · ${f.technicalNote}` : ''}</p>{/if}
             {/if}

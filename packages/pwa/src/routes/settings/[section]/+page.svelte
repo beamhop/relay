@@ -6,6 +6,7 @@
    * propose → plain-language diff → apply → 5-minute undo.
    */
   import { page } from '$app/state';
+  import { onDestroy } from 'svelte';
   import Bell from '@lucide/svelte/icons/bell';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import Sparkles from '@lucide/svelte/icons/sparkles';
@@ -116,6 +117,43 @@
     if (ok) advancedOpen = false;
   }
 
+  // AI screen: ask the endpoint being typed which models it offers (debounced), for the Model field.
+  type ModelsState = { status: 'idle' | 'loading' | 'ok' | 'error'; models: string[]; error?: string };
+  let models = $state<ModelsState>({ status: 'idle', models: [] });
+  let modelsFor = '';
+  let modelsTimer: ReturnType<typeof setTimeout> | undefined;
+  const canListModels = $derived(app.hasAction('ai-setup.list-models'));
+  const suggestions = $derived(models.models.length ? { 'ai.model': models.models } : undefined);
+
+  function watchEndpoint(values: Record<string, unknown>) {
+    if (id !== 'ai' || !canListModels) return;
+    const baseUrl = typeof values.ai__baseUrl === 'string' ? values.ai__baseUrl.trim() : '';
+    const apiKey = typeof values.ai__apiKey === 'string' ? values.ai__apiKey : '';
+    const key = `${baseUrl}|${apiKey}`;
+    if (key === modelsFor) return;
+    modelsFor = key;
+    clearTimeout(modelsTimer);
+    if (baseUrl && !/^https?:\/\/\S+$/.test(baseUrl)) {
+      models = { status: 'idle', models: [] };
+      return;
+    }
+    modelsTimer = setTimeout(() => void findModels(baseUrl, apiKey, key), 500);
+  }
+
+  async function findModels(baseUrl: string, apiKey: string, key: string) {
+    models = { ...models, status: 'loading' };
+    const input: Record<string, string> = {};
+    if (baseUrl) input.baseUrl = baseUrl;
+    if (apiKey) input.apiKey = apiKey;
+    try {
+      const r = await app.api.run<{ models: string[] }>('ai-setup.list-models', input, 'node');
+      if (key === modelsFor) models = { status: 'ok', models: r.output?.models ?? [] };
+    } catch (err) {
+      if (key === modelsFor) models = { status: 'error', models: [], error: asApiError(err).message };
+    }
+  }
+  onDestroy(() => clearTimeout(modelsTimer));
+
   async function phoneAlerts() {
     try {
       const r = await enablePush(app.api, app.catalog);
@@ -171,10 +209,25 @@
             fields={simpleFields}
             initial={data.initial}
             doc={data.doc}
+            {suggestions}
+            onchange={watchEndpoint}
             onsubmit={(v) => save(simpleFields, v)}
           />
         </div>
       {/key}
+      {#if id === 'ai' && models.status !== 'idle'}
+        <p class={models.status === 'error' ? 'mt-2 text-xs text-warning' : 'mt-2 text-xs text-muted-foreground'} data-testid="ai-models-status" data-status={models.status}>
+          {models.status === 'loading'
+            ? m.section_ai_models_loading()
+            : models.status === 'error'
+              ? models.error
+              : models.models.length === 1
+                ? m.section_ai_models_found_one()
+                : models.models.length
+                ? m.section_ai_models_found({ count: models.models.length })
+                : m.section_ai_models_none()}
+        </p>
+      {/if}
       <div class="mt-4 flex gap-2">
         {#if data.advanced.length}
           <Button variant="secondary" class="flex-1" onclick={() => (advancedOpen = true)} data-testid="advanced-open">{m.settings_advanced()}</Button>
