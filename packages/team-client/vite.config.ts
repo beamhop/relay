@@ -5,6 +5,7 @@ import {defineConfig} from "vite"
 import {SvelteKitPWA} from "@vite-pwa/sveltekit"
 import {sveltekit} from "@sveltejs/kit/vite"
 import svg from "@poppanator/sveltekit-svg"
+import {beamhop} from "./scripts/beamhop/vite-plugin" // beamhop
 
 config({path: ".env.local"})
 config({path: ".env"})
@@ -55,6 +56,7 @@ export default defineConfig({
   },
   worker: {format: "es"},
   plugins: [
+    beamhop(), // beamhop: base-path shims, see scripts/beamhop/vite-plugin.ts
     sveltekit(),
     process.env.FLOTILLA_DESKTOP !== "1" &&
       SvelteKitPWA({
@@ -65,7 +67,7 @@ export default defineConfig({
         // fallback something to bind to.
         kit: {
           spa: true,
-          adapterFallback: "/",
+          adapterFallback: `${process.env.BEAMHOP_BASE ?? "/app"}/`, // beamhop: base path (upstream "/")
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 5 * 1024 ** 2,
@@ -90,6 +92,7 @@ export default defineConfig({
           name: process.env.VITE_PLATFORM_NAME,
           short_name: process.env.VITE_PLATFORM_NAME,
           theme_color: process.env.VITE_PLATFORM_ACCENT,
+          background_color: process.env.VITE_BEAMHOP_BACKGROUND || undefined, // beamhop: dark splash
           description: process.env.VITE_PLATFORM_DESCRIPTION,
           // @ts-ignore
           permissions: ["clipboardRead", "clipboardWrite", "unlimitedStorage"],

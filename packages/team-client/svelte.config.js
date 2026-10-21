@@ -3,6 +3,9 @@ import {vitePreprocess} from "@sveltejs/vite-plugin-svelte"
 import {createHash} from "node:crypto"
 import {readFileSync} from "node:fs"
 
+// beamhop: served by Beamhop at /app by default (BEAMHOP_BASE="" for the domain root)
+const beamhopBase = process.env.BEAMHOP_BASE ?? "/app"
+
 // Sveltekit hashes the scripts it injects itself, but not the ones app.html carries, so those
 // have to be named in script-src by hand. Hashing them here rather than pasting a literal is
 // what stops an edit to app.html silently violating the policy.
@@ -16,6 +19,8 @@ const appHtmlScripts = [
 export default {
   preprocess: vitePreprocess(),
   kit: {
+    // beamhop: base path + absolute asset URLs (the SPA fallback is served for deep links)
+    paths: {base: beamhopBase, relative: false},
     serviceWorker: {
       register: process.env.FLOTILLA_DESKTOP !== "1",
     },
@@ -31,10 +36,12 @@ export default {
       "@app": "src/app",
       "@lib": "src/lib",
       "@assets": "src/assets",
+      // beamhop: Android-only NIP-55 bridge, installed from GitHub upstream; stubbed for the web build
+      "nostr-signer-capacitor-plugin": "src/beamhop/shims/nostr-signer-capacitor-plugin.ts",
     },
     csp: {
       directives: {
-        "script-src": ["self", "wasm-unsafe-eval", "https://plausible.coracle.social", ...appHtmlScripts],
+        "script-src": ["self", "wasm-unsafe-eval", ...appHtmlScripts], // beamhop: no third-party analytics
         "worker-src": ["self", "blob:"],
         "style-src": ["self", "unsafe-inline"],
         "frame-src": ["none"],

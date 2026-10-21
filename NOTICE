@@ -1,0 +1,17 @@
+Beamhop
+Copyright (C) Beamhop contributors
+Licensed under the GNU Affero General Public License v3.0 or later (see LICENSE).
+
+This product includes third-party software:
+
+------------------------------------------------------------------------------
+Flotilla — packages/team-client
+https://github.com/coracle-social/flotilla
+Upstream commit 10cf8244e3d21d98c5281add0b4655bdbcb97639
+Copyright (c) Jon Staab and Flotilla contributors
+Licensed under the MIT License; the full text is in packages/team-client/LICENSE-FLOTILLA.
+
+packages/team-client is a modified fork of Flotilla. Upstream files keep their MIT terms;
+Beamhop modifications (marked "beamhop", and the src/beamhop/ and scripts/beamhop/
+directories) are licensed under AGPL-3.0-or-later. See packages/team-client/UPSTREAM.md.
+------------------------------------------------------------------------------

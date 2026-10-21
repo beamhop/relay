@@ -1,0 +1,88 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Beamhop Team theme: calm, minimal, dark-first. Same token set as upstream's themes
+   (src/lib/components/navy.css etc.), selected with data-fl-theme="beamhop" (VITE_THEME). */
+
+[data-fl-theme="beamhop"] {
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.625rem;
+  --radius-3xl: 0.875rem;
+
+  &[data-theme="light"] {
+    --primary: #2f7fc1;
+    --primary-soft: #4b95d2;
+    --primary-bold: #1f679f;
+    --primary-content: #f6f9fc;
+
+    --secondary: #5f6b7a;
+    --secondary-soft: #7a8594;
+    --secondary-bold: #475261;
+    --secondary-content: #f6f9fc;
+
+    --success: oklch(72% 0.13 160);
+    --success-content: oklch(18% 0.03 160);
+    --warning: oklch(80% 0.13 80);
+    --warning-content: oklch(20% 0.03 80);
+    --error: oklch(62% 0.19 25);
+    --error-content: oklch(98% 0.01 25);
+
+    --backdrop: oklch(95.5% 0.006 250);
+    --surface: oklch(99.5% 0.002 250);
+    --surface-more: oklch(94% 0.007 250);
+    --surface-less: oklch(97.5% 0.004 250);
+
+    --content: oklch(28% 0.02 255);
+    --content-muted: color-mix(in oklab, var(--content) 66%, var(--surface));
+    --content-subtle: color-mix(in oklab, var(--content) 42%, var(--surface));
+
+    --line: color-mix(in oklab, var(--content) 14%, transparent);
+    --line-more: color-mix(in oklab, var(--content) 26%, transparent);
+    --line-less: color-mix(in oklab, var(--content) 7%, transparent);
+
+    --shadow-color: 15, 23, 42;
+    --shadow-sm: 0 1px 2px rgba(var(--shadow-color), 0.06);
+    --shadow: 0 2px 8px rgba(var(--shadow-color), 0.08);
+    --shadow-lg: 0 8px 24px rgba(var(--shadow-color), 0.1);
+    --shadow-inset: inset 0 -2px 0 rgba(0, 0, 0, 0.04);
+    --shadow-inset-strong: inset 0 -2px 0 rgba(0, 0, 0, 0.08);
+  }
+
+  &[data-theme="dark"],
+  & .primary-nav {
+    --primary: #5aa9e6;
+    --primary-soft: #3f8fcf;
+    --primary-bold: #7dbcef;
+    --primary-content: #0b1220;
+
+    --secondary: #8b98a9;
+    --secondary-soft: #6f7c8d;
+    --secondary-bold: #a9b4c2;
+    --secondary-content: #0b1220;
+
+    --success: oklch(74% 0.12 160);
+    --success-content: oklch(18% 0.03 160);
+    --warning: oklch(82% 0.12 80);
+    --warning-content: oklch(20% 0.03 80);
+    --error: oklch(66% 0.18 25);
+    --error-content: oklch(99% 0.01 25);
+
+    --backdrop: #0b1017;
+    --surface: #111821;
+    --surface-more: #0d131b;
+    --surface-less: #161f2a;
+
+    --content: oklch(90% 0.012 250);
+    --content-muted: color-mix(in oklab, var(--content) 68%, var(--surface));
+    --content-subtle: color-mix(in oklab, var(--content) 44%, var(--surface));
+
+    --line: color-mix(in oklab, var(--content) 12%, transparent);
+    --line-more: color-mix(in oklab, var(--content) 22%, transparent);
+    --line-less: color-mix(in oklab, var(--content) 6%, transparent);
+
+    --shadow-color: 0, 0, 0;
+    --shadow-sm: 0 1px 2px rgba(var(--shadow-color), 0.3);
+    --shadow: 0 2px 8px rgba(var(--shadow-color), 0.35);
+    --shadow-lg: 0 8px 24px rgba(var(--shadow-color), 0.45);
+    --shadow-inset: inset 0 -2px 0 rgba(0, 0, 0, 0.2);
+    --shadow-inset-strong: inset 0 -2px 0 rgba(0, 0, 0, 0.3);
+  }
+}

@@ -1,13 +1,15 @@
 {
-  "name": "flotilla",
+  "name": "@beamhop/team-client",
   "version": "1.13.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "description": "Beamhop Team: Slack-like team client, a fork of Flotilla (MIT, see LICENSE-FLOTILLA and UPSTREAM.md)",
   "author": {
     "name": "Jon Staab"
   },
-  "private": true,
   "scripts": {
-    "dev": "vite dev",
-    "build": "./scripts/build/app.sh",
+    "dev": "bun scripts/beamhop/dev.mjs",
+    "build": "bun scripts/beamhop/build.mjs",
     "build:desktop": "bash scripts/desktop/build.sh",
     "dev:desktop": "node scripts/desktop/dev.mjs",
     "start:desktop": "npm --prefix electron start",
@@ -28,13 +30,13 @@
     "test:desktop-storage": "node --test packages/desktop-secure-storage/test/*.test.mjs",
     "format": "git diff head --name-only --diff-filter d | grep -E '(js|ts|svelte|css)$' | xargs -r prettier --write",
     "format:all": "prettier --write src",
-    "prepare": "husky",
     "package:desktop:linux": "node scripts/desktop/package.mjs linux",
     "package:desktop:windows": "node scripts/desktop/package.mjs windows",
-    "package:desktop:macos": "node scripts/desktop/package.mjs macos"
+    "package:desktop:macos": "node scripts/desktop/package.mjs macos",
+    "build:upstream": "./scripts/build/app.sh",
+    "dev:upstream": "vite dev"
   },
   "devDependencies": {
-    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.5.2",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.49.1",
@@ -119,12 +121,10 @@
     "focus-trap": "8.2.2",
     "fuse.js": "^7.1.0",
     "hono": "^4.12.23",
-    "husky": "^9.1.7",
     "idb": "^8.0.3",
     "leaflet": "^1.9.4",
     "livekit-client": "^2.17.2",
     "marked": "^18.0.9",
-    "nostr-signer-capacitor-plugin": "github:coracle-social/nostr-signer-capacitor-plugin#main",
     "nostr-tools": "^2.25.2",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "prosemirror-model": "^1.25.11",
@@ -135,6 +135,5 @@
     "qrcode": "^1.5.4",
     "throttle-debounce": "^5.0.2",
     "tippy.js": "^6.3.7"
-  },
-  "packageManager": "pnpm@11.25.0"
+  }
 }

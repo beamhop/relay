@@ -1,5 +1,6 @@
 <script lang="ts">
   import {onMount} from "svelte"
+  import {base} from "$app/paths" // beamhop: base path
   import {Capacitor} from "@capacitor/core"
   import {notificationSettings, onNotification} from "@app/features/push"
 
@@ -37,4 +38,4 @@
   })
 </script>
 
-<audio bind:this={audioElement} src="/new-notification-3-398649.mp3"></audio>
+<audio bind:this={audioElement} src="{base}/new-notification-3-398649.mp3"></audio>

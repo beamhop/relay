@@ -2,10 +2,12 @@
    system first, then the families for flotilla's own components. */
 
 @import "../../lib/components/theme.css";
+@import "../../beamhop/theme.css"; /* beamhop */
 @import "../components/chat.css";
 @import "../components/role-badge.css";
 @import "../components/room.css";
 @import "../components/space-menu.css";
 @import "../components/space-notify.css";
 
-@config "../../tailwind.config.js";
+/* beamhop: path is relative to this file under @tailwindcss/postcss >= 4.3.3 (upstream "../../") */
+@config "../../../tailwind.config.js";

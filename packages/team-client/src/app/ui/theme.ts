@@ -32,7 +32,7 @@ const colors = [
 export const colorFor = (value: string) => colors[hash(value) % colors.length]
 
 // Every theme with token values in lib/components/theme.css
-export const flThemes = ["clay", "flat", "navy", "nature"]
+export const flThemes = ["clay", "flat", "navy", "nature", "beamhop"] // beamhop: + "beamhop"
 
 export const flTheme = synced({
   key: "flTheme",
@@ -42,7 +42,7 @@ export const flTheme = synced({
 
 export const theme = synced({
   key: "theme",
-  defaultValue: "system",
+  defaultValue: "dark", // beamhop: dark-first (upstream: "system")
   storage: kv,
 })
 
@@ -70,9 +70,9 @@ export const applySavedTheme = () => {
   const initialTheme =
     savedTheme === "light" || savedTheme === "dark"
       ? savedTheme
-      : get(prefersDark)
-        ? "dark"
-        : "light"
+      : savedTheme === "system" && !get(prefersDark) // beamhop: dark-first when unset
+        ? "light"
+        : "dark"
 
   document.documentElement.style.fontSize = `${localStorage.getItem("font-size") || 1.1}rem`
   document.documentElement.style.colorScheme = initialTheme

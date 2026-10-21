@@ -1,4 +1,5 @@
 import {writable} from "svelte/store"
+import {base} from "$app/paths" // beamhop: base path
 import type {ClientOptions} from "@pomade/core"
 import type {Maybe} from "@welshman/lib"
 import {withGetter} from "@welshman/store"
@@ -121,7 +122,7 @@ export const resetSession = async () => {
 
   localStorage.clear()
 
-  window.location.href = "/"
+  window.location.href = `${base}/`
 }
 
 export const logout = async () => {

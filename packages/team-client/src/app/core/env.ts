@@ -3,12 +3,13 @@ import * as nip19 from "nostr-tools/nip19"
 import {identity} from "@welshman/lib"
 import {normalizeRelayUrl} from "@welshman/util"
 import {maybeGetTestEnv} from "@lib/test/env"
+import {beamhopEnv} from "@src/beamhop/env" // beamhop: runtime defaults (home relay etc.)
 
 const fromCsv = (s: string) => (s || "").split(",").filter(identity)
 
 // Test-only: vite folds DEV to false in a production build, stripping the branch and the import.
 const env = (key: string): string =>
-  (import.meta.env.DEV ? maybeGetTestEnv(key) : undefined) ?? import.meta.env[key]
+  beamhopEnv(key, (import.meta.env.DEV ? maybeGetTestEnv(key) : undefined) ?? import.meta.env[key]) // beamhop
 
 export const PUSH_SERVER = env("VITE_PUSH_SERVER")
 
@@ -69,7 +70,7 @@ export const HOSTING_BACKEND_URL = env("VITE_HOSTING_BACKEND_URL")
 
 export const HOSTING_RELAY_DOMAIN = env("VITE_HOSTING_RELAY_DOMAIN")
 
-export const DUFFLEPUD_URL = "https://dufflepud.coracle.social"
+export const DUFFLEPUD_URL = env("VITE_DUFFLEPUD_URL") || "https://dufflepud.coracle.social" // beamhop: configurable
 
 export const THUMBNAIL_URL = env("VITE_THUMBNAIL_URL")
 

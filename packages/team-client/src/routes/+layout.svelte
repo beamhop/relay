@@ -26,6 +26,8 @@
   import {setupAnalytics} from "@app/features/analytics"
   import {setupLogging} from "@app/core/logger"
   import "@app/core/policies"
+  import {EscrowNotice} from "@src/beamhop" // beamhop: must follow @app/core/policies
+  import {base} from "$app/paths" // beamhop
   import * as coreSession from "@app/core/session"
   import {restoreSession} from "@app/core/session"
   import {syncSignerAlerts} from "@app/core/signer"
@@ -180,7 +182,7 @@
 
 <svelte:head>
   {#if !dev}
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="manifest" href="{base}/manifest.webmanifest" /><!-- beamhop: base path -->
   {/if}
 </svelte:head>
 
@@ -194,6 +196,7 @@
     <ModalContainer />
     <div class="tippy-target"></div>
     <NewNotificationSound />
+    <EscrowNotice /><!-- beamhop -->
   {:catch error}
     <Startup {error} />
   {/await}

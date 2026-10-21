@@ -16,15 +16,15 @@
     <meta name="twitter:site" content="{URL}" />
     <meta name="twitter:title" content="{NAME}" />
     <meta name="twitter:description" content="{DESCRIPTION}" />
-    <meta name="twitter:image" content="/maskable-icon-512x512.png" />
-    <link rel="icon" href="/favicon.ico" sizes="48x48" />
-    <link rel="icon" href="/pwa-64x64.png" sizes="any" type="image/png" />
-    <link rel="icon" href="/pwa-192x192.png" sizes="any" type="image/png" />
-    <link rel="icon" href="/pwa-512x512.png" sizes="any" type="image/png" />
-    <link rel="icon" href="/pwa-64x64.png" sizes="64x64" type="image/png" />
-    <link rel="icon" href="/pwa-192x192.png" sizes="192x192" type="image/png" />
-    <link rel="icon" href="/pwa-512x512.png" sizes="512x512" type="image/png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png" />
+    <meta name="twitter:image" content="%sveltekit.assets%/maskable-icon-512x512.png" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="%sveltekit.assets%/pwa-64x64.png" sizes="any" type="image/png" />
+    <link rel="icon" href="%sveltekit.assets%/pwa-192x192.png" sizes="any" type="image/png" />
+    <link rel="icon" href="%sveltekit.assets%/pwa-512x512.png" sizes="any" type="image/png" />
+    <link rel="icon" href="%sveltekit.assets%/pwa-64x64.png" sizes="64x64" type="image/png" />
+    <link rel="icon" href="%sveltekit.assets%/pwa-192x192.png" sizes="192x192" type="image/png" />
+    <link rel="icon" href="%sveltekit.assets%/pwa-512x512.png" sizes="512x512" type="image/png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="%sveltekit.assets%/apple-touch-icon-180x180.png" />
     <!-- Android's WebView can go arbitrarily long without an idle period, and both
          emoji-picker-element and our own storage writes hand work to requestIdleCallback
          without a timeout, so on a phone that work never ran. Giving one to every caller
@@ -42,9 +42,6 @@
   </head>
   <body data-sveltekit-preload-data="hover" data-sveltekit-preload-code="eager">
     <div style="display: contents">%sveltekit.body%</div>
-    <script
-      defer
-      data-domain="app.flotilla.social"
-      src="https://plausible.coracle.social/js/script.manual.js"></script>
+    <!-- beamhop: upstream plausible analytics script removed (no telemetry) -->
   </body>
 </html>

@@ -1,4 +1,5 @@
 /** Voice rooms via LiveKit. Voice does not work on localhost in Firefox, where ICE candidate gathering fails. */
+import {base} from "$app/paths" // beamhop: base path
 import {
   DisconnectReason,
   Room as LiveKitRoom,
@@ -220,7 +221,7 @@ export const leaveVoiceRoom = async () => {
     return
   }
 
-  const audio = new Audio("/leave-voice-room.mp3")
+  const audio = new Audio(`${base}/leave-voice-room.mp3`)
   audio.play().catch(() => {})
 
   if (session.cameraOn) {
@@ -629,7 +630,7 @@ const onActiveSpeakersChanged = (participants: {identity: string}[]) => {
 }
 
 const playJoinSound = () => {
-  const audio = new Audio("/join-voice-room.mp3")
+  const audio = new Audio(`${base}/join-voice-room.mp3`)
   audio.play().catch(() => {})
 }
 
