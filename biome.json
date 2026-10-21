@@ -8,7 +8,12 @@
       ".svelte-kit",
       "*.lock",
       "LICENSE",
-      "packages/team-client"
+      "packages/team-client",
+      "packages/pwa/**/*.svelte",
+      "packages/pwa/src/lib/paraglide",
+      "packages/pwa/project.inlang",
+      "packages/pwa/test-results",
+      "packages/pwa/playwright-report"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
