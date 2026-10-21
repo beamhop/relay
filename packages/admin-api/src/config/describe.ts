@@ -90,6 +90,15 @@ export function labelFrom(description: string): string {
   return description.split(/: |\s\(|, e\.g\.|\. /)[0]!.trim();
 }
 
+/**
+ * Short label for a field: the first phrase of its description when that is short,
+ * otherwise the humanized key — longer descriptions are help text, not names.
+ */
+export function fieldLabel(key: string, description: string | undefined): string {
+  const phrase = description ? labelFrom(description).replace(/\.$/, '') : '';
+  return phrase && phrase.length <= 40 ? phrase : humanize(key || 'value');
+}
+
 function fmt(v: unknown, key: string): string {
   if (v === undefined || v === null) return 'not set';
   if (isSecretKey(key)) return '•••';
@@ -182,7 +191,7 @@ function walk(
     const ia = a.map(idOf);
     const ib = b.map(idOf);
     if (ia.every(Boolean) && ib.every(Boolean) && (a.length > 0 || b.length > 0)) {
-      const noun = labelFrom(u.description ?? humanize(key)).replace(/s$/, '');
+      const noun = fieldLabel(key, u.description).replace(/s$/, '');
       const singular = humanize(key).replace(/s$/, '');
       const byA = new Map(a.map((x) => [idOf(x)!, x]));
       const byB = new Map(b.map((x) => [idOf(x)!, x]));
@@ -228,7 +237,7 @@ function walk(
       return;
     }
   }
-  const label = u.description ? labelFrom(u.description) : humanize(key || 'value');
+  const label = fieldLabel(key, u.description);
   const head = [...ctx.prefix, label].join(' · ');
   const kind: DiffLine['kind'] = a === undefined ? 'add' : b === undefined ? 'remove' : 'change';
   const text =

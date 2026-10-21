@@ -8,129 +8,155 @@ Every setting can be changed in the admin app (with preview and undo), in `beamh
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `version`<br><sub>env `BEAMHOP_VERSION`</sub> | `1` | `1` |  |
-| `node.id`<br><sub>env `BEAMHOP_NODE__ID`</sub> | string | `"local"` |  |
-| `node.listen`<br><sub>env `BEAMHOP_NODE__LISTEN`</sub> | string | `"0.0.0.0:3334"` |  |
-| `node.dataDir`<br><sub>env `BEAMHOP_NODE__DATA_DIR`</sub> | string | `"./data"` |  |
-| `node.tls.mode`<br><sub>env `BEAMHOP_NODE__TLS__MODE`</sub> | `auto` \| `acme` \| `proxy` \| `off` | `"auto"` |  |
-| `node.tls.email`<br><sub>env `BEAMHOP_NODE__TLS__EMAIL`</sub> | string |  |  |
-| `node.trustProxy`<br><sub>env `BEAMHOP_NODE__TRUST_PROXY`</sub> | boolean | `false` |  |
-| `node.countryHeader`<br><sub>env `BEAMHOP_NODE__COUNTRY_HEADER`</sub> | string |  | *Technical:* Header set by the trusted reverse proxy with the ISO 3166 country of the client (e.g. cf-ipcountry). Read only when trustProxy is on; never derived from IPs. |
-| `storage.driver`<br><sub>env `BEAMHOP_STORAGE__DRIVER`</sub> | `sqlite` \| `postgres` \| `d1` \| `memory` | `"sqlite"` |  |
+| `version`<br><sub>env `BEAMHOP_VERSION`</sub> | `1` | `1` | Settings format version. |
+| `node`<br><sub>env `BEAMHOP_NODE`</sub> | section |  | This server |
+| `node.id`<br><sub>env `BEAMHOP_NODE__ID`</sub> | string | `"local"` | A name for this server. Only matters when you run more than one. |
+| `node.listen`<br><sub>env `BEAMHOP_NODE__LISTEN`</sub> | string | `"0.0.0.0:3334"` | Network address and port the server listens on. Change it if the port is taken. *Technical:* host:port to bind; 443 with a public IP enables automatic certificates in `auto` mode. |
+| `node.dataDir`<br><sub>env `BEAMHOP_NODE__DATA_DIR`</sub> | string | `"./data"` | Folder where the database, uploads and keys are kept. Back this folder up. |
+| `node.tls`<br><sub>env `BEAMHOP_NODE__TLS`</sub> | section |  | Secure connections (certificates) |
+| `node.tls.mode`<br><sub>env `BEAMHOP_NODE__TLS__MODE`</sub> | `auto` \| `acme` \| `proxy` \| `off` | `"auto"` | How secure connections (https/wss) are set up. *Technical:* auto: ACME on :443 with a public IP and configured hosts, otherwise proxy. acme: HTTP-01 via ACME. proxy: plain HTTP behind a TLS-terminating reverse proxy. off: no TLS (ws:// URLs). |
+| `node.tls.email`<br><sub>env `BEAMHOP_NODE__TLS__EMAIL`</sub> | string |  | Email for certificate expiry notices. Optional but helpful. |
+| `node.trustProxy`<br><sub>env `BEAMHOP_NODE__TRUST_PROXY`</sub> | boolean | `false` | Turn on only if a reverse proxy or CDN (e.g. Caddy, nginx, Cloudflare) sits in front of this server. *Technical:* Trust X-Forwarded-For / X-Forwarded-Proto and the country header from the proxy. |
+| `node.countryHeader`<br><sub>env `BEAMHOP_NODE__COUNTRY_HEADER`</sub> | string |  | Name of the header your proxy uses to say which country a visitor is from. Used for country statistics. *Technical:* Header set by the trusted reverse proxy with the ISO 3166 country of the client (e.g. cf-ipcountry). Read only when trustProxy is on; never derived from IPs. |
+| `storage`<br><sub>env `BEAMHOP_STORAGE`</sub> | section |  | The database for posts and settings |
+| `storage.driver`<br><sub>env `BEAMHOP_STORAGE__DRIVER`</sub> | `sqlite` \| `postgres` \| `d1` \| `memory` | `"sqlite"` | Where posts and settings are stored. Change it only when moving to a separate database server or to Cloudflare. |
 | `storage.url`<br><sub>env `BEAMHOP_STORAGE__URL`</sub> | string |  | Database file path or connection URL |
-| `blobStorage.driver`<br><sub>env `BEAMHOP_BLOB_STORAGE__DRIVER`</sub> | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` |  |
-| `blobStorage.path`<br><sub>env `BEAMHOP_BLOB_STORAGE__PATH`</sub> | string |  |  |
-| `blobStorage.bucket`<br><sub>env `BEAMHOP_BLOB_STORAGE__BUCKET`</sub> | string |  |  |
-| `blobStorage.endpoint`<br><sub>env `BEAMHOP_BLOB_STORAGE__ENDPOINT`</sub> | string |  |  |
-| `blobStorage.region`<br><sub>env `BEAMHOP_BLOB_STORAGE__REGION`</sub> | string |  |  |
-| `blobStorage.accessKeyId`<br><sub>env `BEAMHOP_BLOB_STORAGE__ACCESS_KEY_ID`</sub> | string |  |  |
-| `blobStorage.secretAccessKey`<br><sub>env `BEAMHOP_BLOB_STORAGE__SECRET_ACCESS_KEY`</sub> | string |  |  |
-| `relays`<br><sub>env `BEAMHOP_RELAYS`</sub> | list | `[]` |  |
+| `blobStorage`<br><sub>env `BEAMHOP_BLOB_STORAGE`</sub> | section |  | Where uploaded files (photos, video) are stored |
+| `blobStorage.driver`<br><sub>env `BEAMHOP_BLOB_STORAGE__DRIVER`</sub> | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` | Which storage service to use. Pick cloud storage when this server's disk is too small or you want copies kept elsewhere. |
+| `blobStorage.path`<br><sub>env `BEAMHOP_BLOB_STORAGE__PATH`</sub> | string |  | Folder on this server where the files go. Empty = a folder inside the data folder. |
+| `blobStorage.bucket`<br><sub>env `BEAMHOP_BLOB_STORAGE__BUCKET`</sub> | string |  | Name of the storage bucket you created with your provider. |
+| `blobStorage.endpoint`<br><sub>env `BEAMHOP_BLOB_STORAGE__ENDPOINT`</sub> | string |  | Your provider's storage address. Leave empty for Amazon S3 and Google Cloud; needed for R2, MinIO and others. *Technical:* S3 API endpoint (path-style). Defaults: https://s3.<region>.amazonaws.com, https://storage.googleapis.com. |
+| `blobStorage.region`<br><sub>env `BEAMHOP_BLOB_STORAGE__REGION`</sub> | string |  | Data-center region of the bucket. Empty = us-east-1 for S3, auto otherwise. *Technical:* SigV4 signing region. |
+| `blobStorage.accessKeyId`<br><sub>env `BEAMHOP_BLOB_STORAGE__ACCESS_KEY_ID`</sub> | string |  | The access key ID from your storage provider. |
+| `blobStorage.secretAccessKey`<br><sub>env `BEAMHOP_BLOB_STORAGE__SECRET_ACCESS_KEY`</sub> | string |  | The secret that goes with the access key. Stored privately, never shown again. |
+| `relays`<br><sub>env `BEAMHOP_RELAYS`</sub> | list | `[]` | The relays this server runs. Each has its own domain, rules and members. |
 | `relays[].id` | string |  | Internal id of this virtual relay |
-| `relays[].hosts` | list of string |  | Domain names this relay answers on |
-| `relays[].pathPrefix` | string |  |  |
+| `relays[].hosts` | list of string |  | Domain names this relay answers on. Point these names at this server first. |
+| `relays[].pathPrefix` | string |  | Serve this relay under a path instead of the whole domain. Only needed to run several relays on one domain. |
 | `relays[].persona` | `public-social` \| `private-team` \| `wot-community` \| `media-host` \| `organization` | `"public-social"` | What kind of relay this is. Sets sensible goals and defaults. |
 | `relays[].goals` | section |  | Simple goals. Beamhop turns these into the exact settings for you. |
-| `relays[].goals.openness` | number | `70` | How open the relay is: 0 = very strict, 100 = anyone can post |
-| `relays[].goals.spamTolerance` | number | `40` | 0 = aggressive spam blocking, 100 = relaxed |
-| `relays[].goals.storage` | number | `60` | 0 = keep it lean (short retention), 100 = keep everything |
-| `relays[].goals.media` | number | `50` | 0 = basic media, 100 = rich media (resizing, video) |
-| `relays[].goals.speedVsCost` | number | `50` | 0 = cheapest to run, 100 = fastest |
-| `relays[].info.name` | string | `"Beamhop Relay"` |  |
-| `relays[].info.description` | string | `""` |  |
-| `relays[].info.icon` | string |  |  |
-| `relays[].info.banner` | string |  |  |
-| `relays[].info.contact` | string |  |  |
-| `relays[].info.pubkey` | string |  | Owner's public key |
+| `relays[].goals.openness` | number | `70` | How open the relay is: 0 = very strict, 100 = anyone can post. Move it down if strangers cause trouble. |
+| `relays[].goals.spamTolerance` | number | `40` | 0 = aggressive spam blocking, 100 = relaxed. Lower it during a spam wave; raise it if real posts get blocked. |
+| `relays[].goals.storage` | number | `60` | 0 = keep it lean (short retention), 100 = keep everything. Lower it when the disk fills up. |
+| `relays[].goals.media` | number | `50` | 0 = basic media, 100 = rich media (resizing, video). Higher uses more disk and processing. |
+| `relays[].goals.speedVsCost` | number | `50` | 0 = cheapest to run, 100 = fastest. Raise it if the relay feels slow and you can afford more resources. |
+| `relays[].info` | section |  | How your relay presents itself |
+| `relays[].info.name` | string | `"Beamhop Relay"` | The name people see in their apps and on your landing page. |
+| `relays[].info.description` | string | `""` | A sentence or two about what this relay is for. |
+| `relays[].info.icon` | string |  | Web address of a square logo shown in apps. |
+| `relays[].info.banner` | string |  | Web address of a wide banner image for your page. |
+| `relays[].info.contact` | string |  | How people can reach the admin (email or web address). |
+| `relays[].info.pubkey` | string |  | Owner's public key *Technical:* NIP-11 `pubkey` (hex); also the root of the trust graph. |
 | `relays[].info.rules` | string |  | Community rules, shown on your landing page |
+| `relays[].access` | section |  | Who can read and post on this relay |
 | `relays[].access.mode` | `open` \| `allowlist` \| `wot` | `"open"` | Who can post *Technical:* open: any pubkey; allowlist: explicit pubkeys/invites; wot: follow graph of owner (kind 3) to N hops. |
-| `relays[].access.authRequired` | section |  | *Technical:* NIP-42 AUTH required for REQ (read) and/or EVENT (write). |
-| `relays[].access.authRequired.read` | boolean | `false` | People must sign in to read |
-| `relays[].access.authRequired.write` | boolean | `false` | People must sign in to post |
-| `relays[].access.wot.depth` | number | `2` | How many follow hops count as trusted |
-| `relays[].access.wot.minFollowers` | number | `1` | Minimum trusted followers to be let in |
-| `relays[].access.wot.seeds` | list of string | `[]` | Extra trusted people (pubkeys) besides the owner |
-| `relays[].access.wot.refreshMinutes` | number | `360` |  |
-| `relays[].tiers` | list | `[{"id":"default","name":"Default"}]` |  |
-| `relays[].tiers[].id` | string |  |  |
+| `relays[].access.authRequired` | section |  | Whether people have to sign in with their key first *Technical:* NIP-42 AUTH required for REQ (read) and/or EVENT (write). |
+| `relays[].access.authRequired.read` | boolean | `false` | People must sign in to read. Turn on for private relays. |
+| `relays[].access.authRequired.write` | boolean | `false` | People must sign in to post. Needed for invite-only or trust-based access to work reliably. |
+| `relays[].access.wot` | section |  | Settings for "people my network trusts" access |
+| `relays[].access.wot.depth` | number | `2` | How many follow hops count as trusted: 1 = people you follow, 2 = also people they follow. |
+| `relays[].access.wot.minFollowers` | number | `1` | Minimum trusted followers to be let in. Raise it to make it harder for strangers to slip in. |
+| `relays[].access.wot.seeds` | list of string | `[]` | Extra trusted people besides the owner. Their follows count as trusted too. *Technical:* Hex pubkeys used as additional roots of the follow graph. |
+| `relays[].access.wot.refreshMinutes` | number | `360` | How often the list of trusted people is rebuilt, in minutes. Lower means new follows count sooner. *Technical:* Interval for re-fetching contact lists (kind 3) and recomputing the trust graph. |
+| `relays[].tiers` | list | `[{"id":"default","name":"Default"}]` | Membership levels with their own limits, e.g. a paid "Plus" level. |
+| `relays[].tiers[]` | section |  | A membership level with its own limits |
+| `relays[].tiers[].id` | string |  | Short internal name (lowercase letters, digits, dashes), e.g. "plus". |
 | `relays[].tiers[].name` | string |  | Shown to admins and users, e.g. "Plus" |
-| `relays[].tiers[].eventsPerMinute` | number |  |  |
-| `relays[].tiers[].maxEventBytes` | number |  |  |
-| `relays[].tiers[].allowedKinds` | list of number |  |  |
-| `relays[].tiers[].blobQuotaBytes` | number |  |  |
-| `relays[].tiers[].maxBlobBytes` | number |  |  |
-| `relays[].tiers[].retentionDays` | number |  |  |
-| `relays[].defaultTier` | string | `"default"` |  |
-| `relays[].limits.maxEventBytes` | number |  |  |
-| `relays[].limits.maxSubscriptions` | number |  |  |
-| `relays[].limits.maxFilters` | number |  |  |
-| `relays[].limits.maxLimit` | number |  |  |
-| `relays[].limits.eventsPerMinute` | number |  |  |
-| `relays[].limits.reqPerMinute` | number |  |  |
-| `relays[].limits.minPowDifficulty` | number |  | *Technical:* NIP-13 leading zero bits |
-| `relays[].limits.newKeyPowDifficulty` | number |  |  |
-| `relays[].limits.maxCreatedAtFutureSeconds` | number |  |  |
-| `relays[].limits.maxCreatedAtPastSeconds` | number |  |  |
-| `relays[].limits.allowedKinds` | list of number |  |  |
-| `relays[].limits.blockedKinds` | list of number |  |  |
-| `relays[].retention` | list | `[]` |  |
-| `relays[].retention[].kinds` | list of number |  |  |
-| `relays[].retention[].days` | number |  |  |
+| `relays[].tiers[].eventsPerMinute` | number |  | How many posts per minute people in this tier may send. Empty = relay default. |
+| `relays[].tiers[].maxEventBytes` | number |  | Largest single post allowed, in bytes. Empty = relay default. |
+| `relays[].tiers[].allowedKinds` | list of number |  | Only these types of posts are allowed for this tier. Empty = all types. *Technical:* Event kinds accepted for members of this tier. |
+| `relays[].tiers[].blobQuotaBytes` | number |  | Total storage for uploaded files per person, in bytes. Empty = relay default. |
+| `relays[].tiers[].maxBlobBytes` | number |  | Largest single file upload, in bytes. Empty = relay default. |
+| `relays[].tiers[].retentionDays` | number |  | Posts from this tier are kept for this many days. Empty = relay default. |
+| `relays[].defaultTier` | string | `"default"` | The membership level new people get (its short internal name). |
+| `relays[].limits` | section |  | Exact numbers that override what your goals chose. Leave empty unless you need a specific value. |
+| `relays[].limits.maxEventBytes` | number |  | Largest single post allowed, in bytes. Leave empty to follow your goals. |
+| `relays[].limits.maxSubscriptions` | number |  | How many live feeds one app connection may keep open at once. *Technical:* Max concurrent REQ subscriptions per connection (NIP-11 max_subscriptions). |
+| `relays[].limits.maxFilters` | number |  | How many search conditions one feed request may use. *Technical:* Max filters per REQ (NIP-11 max_filters). |
+| `relays[].limits.maxLimit` | number |  | Most posts returned for one request. *Technical:* Upper bound for a filter `limit` (NIP-11 max_limit). |
+| `relays[].limits.eventsPerMinute` | number |  | How many posts per minute one person may send. |
+| `relays[].limits.reqPerMinute` | number |  | How many feed requests per minute one app may make. *Technical:* REQ messages per minute per connection. |
+| `relays[].limits.minPowDifficulty` | number |  | Extra computing work every post must prove before it is accepted. Higher stops spam bots but slows posting. 0 = off. *Technical:* NIP-13 leading zero bits |
+| `relays[].limits.newKeyPowDifficulty` | number |  | Like the above, but only for brand-new accounts. Raise it during a spam wave from fresh accounts. *Technical:* NIP-13 leading zero bits required from pubkeys first seen recently. |
+| `relays[].limits.maxCreatedAtFutureSeconds` | number |  | How far in the future a post may be dated, in seconds. *Technical:* Reject events with created_at more than this many seconds ahead of now. |
+| `relays[].limits.maxCreatedAtPastSeconds` | number |  | How old a newly sent post may be dated, in seconds. *Technical:* Reject events with created_at more than this many seconds before now. |
+| `relays[].limits.allowedKinds` | list of number |  | Only accept these types of posts. Leave empty to accept every type. *Technical:* Event kind allowlist. |
+| `relays[].limits.blockedKinds` | list of number |  | Never accept these types of posts. *Technical:* Event kind denylist. |
+| `relays[].retention` | list | `[]` | Delete some types of posts after a while. Empty = follow your storage goal. |
+| `relays[].retention[]` | section |  | How long to keep a type of post |
+| `relays[].retention[].kinds` | list of number |  | Which types of posts this rule is for. Empty = all posts. *Technical:* Event kinds this rule applies to. |
+| `relays[].retention[].days` | number |  | Delete matching posts after this many days. |
+| `relays[].blossom` | section |  | Media hosting (photos, video, files) |
 | `relays[].blossom.enabled` | boolean | `true` | Host media (images, video, files) for your users |
-| `relays[].blossom.maxBlobBytes` | number |  |  |
-| `relays[].blossom.defaultQuotaBytes` | number |  |  |
-| `relays[].blossom.allowedTypes` | list of string |  | Allowed file types, e.g. image/* |
-| `relays[].blossom.requireAuth` | boolean | `true` | *Technical:* BUD-02 kind 24242 auth required for upload |
-| `relays[].blossom.mirror` | boolean | `true` | Allow copying files from other media servers |
+| `relays[].blossom.maxBlobBytes` | number |  | Largest single file upload, in bytes. Empty = follow your media goal. |
+| `relays[].blossom.defaultQuotaBytes` | number |  | Total storage each person gets for uploads, in bytes. Empty = follow your goals. |
+| `relays[].blossom.allowedTypes` | list of string |  | Allowed file types, e.g. image/*. Empty = all types. |
+| `relays[].blossom.requireAuth` | boolean | `true` | People must sign in with their key to upload. Turning this off lets anyone upload anonymously. *Technical:* BUD-02 kind 24242 auth required for upload |
+| `relays[].blossom.mirror` | boolean | `true` | Allow copying files from other media servers *Technical:* BUD-04 PUT /mirror |
+| `relays[].blossom.optimize` | section |  | Automatic processing of uploaded photos and videos |
 | `relays[].blossom.optimize.stripMetadata` | boolean | `true` | Remove location/camera info from photos |
-| `relays[].blossom.optimize.thumbnails` | boolean | `true` |  |
-| `relays[].blossom.optimize.resize` | boolean | `true` |  |
-| `relays[].blossom.optimize.transcode` | boolean | `false` |  |
+| `relays[].blossom.optimize.thumbnails` | boolean | `true` | Make small preview images so feeds load faster. |
+| `relays[].blossom.optimize.resize` | boolean | `true` | Shrink very large photos to save space and data. |
+| `relays[].blossom.optimize.transcode` | boolean | `false` | Convert videos to a widely playable format. Uses a lot of processing power; needs ffmpeg. |
+| `relays[].blossom.scanning` | section |  | Abuse scanning of uploaded images |
 | `relays[].blossom.scanning.enabled` | boolean | `true` | Check uploads against known-abuse image lists |
-| `relays[].blossom.scanning.lists` | list of string | `[]` |  |
-| `relays[].public.landing` | boolean | `true` |  |
-| `relays[].public.portal` | boolean | `true` |  |
-| `relays[].public.status` | boolean | `true` |  |
-| `alerts.channels`<br><sub>env `BEAMHOP_ALERTS__CHANNELS`</sub> | list | `[]` |  |
+| `relays[].blossom.scanning.lists` | list of string | `[]` | Where the known-abuse lists come from (file paths or web addresses). Scanning does nothing until at least one is added. *Technical:* Perceptual-hash (pHash/dHash) lists, local paths or http(s) URLs. |
+| `relays[].public` | section |  | Public web pages for this relay |
+| `relays[].public.landing` | boolean | `true` | Show a public welcome page with your relay name, description and rules. |
+| `relays[].public.portal` | boolean | `true` | Let members sign in to a self-service page to see their account and uploads. |
+| `relays[].public.status` | boolean | `true` | Show a public page with uptime and current health. |
+| `alerts`<br><sub>env `BEAMHOP_ALERTS`</sub> | section |  | Alerts and summaries |
+| `alerts.channels`<br><sub>env `BEAMHOP_ALERTS__CHANNELS`</sub> | list | `[]` | Where urgent alerts are sent (app push, Nostr message, chat apps, email). |
+| `alerts.channels[](type=webpush)` | section |  | Push to the admin app |
 | `alerts.channels[](type=webpush).type` | `"webpush"` |  |  |
-| `alerts.channels[](type=webpush).id` | string |  |  |
+| `alerts.channels[](type=webpush).id` | string |  | A short name for this channel, used to refer to it. |
+| `alerts.channels[](type=nostr-dm)` | section |  | Private Nostr message |
 | `alerts.channels[](type=nostr-dm).type` | `"nostr-dm"` |  |  |
-| `alerts.channels[](type=nostr-dm).id` | string |  |  |
-| `alerts.channels[](type=nostr-dm).pubkey` | string |  |  |
+| `alerts.channels[](type=nostr-dm).id` | string |  | A short name for this channel, used to refer to it. |
+| `alerts.channels[](type=nostr-dm).pubkey` | string |  | Public key of the person who should get the private messages. *Technical:* Recipient pubkey for NIP-17 direct messages. |
+| `alerts.channels[](type=telegram)` | section |  | Telegram |
 | `alerts.channels[](type=telegram).type` | `"telegram"` |  |  |
-| `alerts.channels[](type=telegram).id` | string |  |  |
-| `alerts.channels[](type=telegram).botToken` | string |  |  |
-| `alerts.channels[](type=telegram).chatId` | string |  |  |
+| `alerts.channels[](type=telegram).id` | string |  | A short name for this channel, used to refer to it. |
+| `alerts.channels[](type=telegram).botToken` | string |  | The token Telegram gave you when you created your bot. |
+| `alerts.channels[](type=telegram).chatId` | string |  | The Telegram chat the bot should write to. |
+| `alerts.channels[](type=discord)` | section |  | Discord |
 | `alerts.channels[](type=discord).type` | `"discord"` |  |  |
-| `alerts.channels[](type=discord).id` | string |  |  |
-| `alerts.channels[](type=discord).webhookUrl` | string |  |  |
+| `alerts.channels[](type=discord).id` | string |  | A short name for this channel, used to refer to it. |
+| `alerts.channels[](type=discord).webhookUrl` | string |  | The webhook address from your Discord channel settings. |
+| `alerts.channels[](type=slack)` | section |  | Slack |
 | `alerts.channels[](type=slack).type` | `"slack"` |  |  |
-| `alerts.channels[](type=slack).id` | string |  |  |
-| `alerts.channels[](type=slack).webhookUrl` | string |  |  |
+| `alerts.channels[](type=slack).id` | string |  | A short name for this channel, used to refer to it. |
+| `alerts.channels[](type=slack).webhookUrl` | string |  | The incoming-webhook address from your Slack app. |
+| `alerts.channels[](type=email)` | section |  | Email |
 | `alerts.channels[](type=email).type` | `"email"` |  |  |
-| `alerts.channels[](type=email).id` | string |  |  |
-| `alerts.channels[](type=email).to` | string |  |  |
-| `alerts.channels[](type=email).smtpUrl` | string |  |  |
-| `alerts.digest`<br><sub>env `BEAMHOP_ALERTS__DIGEST`</sub> | `off` \| `daily` \| `weekly` | `"daily"` |  |
-| `ai.enabled`<br><sub>env `BEAMHOP_AI__ENABLED`</sub> | boolean | `false` |  |
-| `ai.baseUrl`<br><sub>env `BEAMHOP_AI__BASE_URL`</sub> | string |  | OpenAI-compatible endpoint, e.g. Ollama |
-| `ai.model`<br><sub>env `BEAMHOP_AI__MODEL`</sub> | string |  |  |
-| `ai.apiKey`<br><sub>env `BEAMHOP_AI__API_KEY`</sub> | string |  |  |
-| `backups.enabled`<br><sub>env `BEAMHOP_BACKUPS__ENABLED`</sub> | boolean | `false` |  |
-| `backups.schedule`<br><sub>env `BEAMHOP_BACKUPS__SCHEDULE`</sub> | `hourly` \| `daily` \| `weekly` | `"daily"` |  |
-| `backups.target.driver`<br><sub>env `BEAMHOP_BACKUPS__TARGET__DRIVER`</sub> | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` |  |
-| `backups.target.path`<br><sub>env `BEAMHOP_BACKUPS__TARGET__PATH`</sub> | string |  |  |
-| `backups.target.bucket`<br><sub>env `BEAMHOP_BACKUPS__TARGET__BUCKET`</sub> | string |  |  |
-| `backups.target.endpoint`<br><sub>env `BEAMHOP_BACKUPS__TARGET__ENDPOINT`</sub> | string |  |  |
-| `backups.target.region`<br><sub>env `BEAMHOP_BACKUPS__TARGET__REGION`</sub> | string |  |  |
-| `backups.target.accessKeyId`<br><sub>env `BEAMHOP_BACKUPS__TARGET__ACCESS_KEY_ID`</sub> | string |  |  |
-| `backups.target.secretAccessKey`<br><sub>env `BEAMHOP_BACKUPS__TARGET__SECRET_ACCESS_KEY`</sub> | string |  |  |
-| `backups.keep`<br><sub>env `BEAMHOP_BACKUPS__KEEP`</sub> | number | `14` |  |
-| `privacy.ipLogging`<br><sub>env `BEAMHOP_PRIVACY__IP_LOGGING`</sub> | `hashed` \| `truncated` \| `off` | `"hashed"` |  |
-| `plugins`<br><sub>env `BEAMHOP_PLUGINS`</sub> | list | `[]` |  |
-| `plugins[].id` | string |  |  |
-| `plugins[].enabled` | boolean | `true` |  |
-| `plugins[].config` | unknown |  |  |
+| `alerts.channels[](type=email).id` | string |  | A short name for this channel, used to refer to it. |
+| `alerts.channels[](type=email).to` | string |  | Who gets the alert emails. |
+| `alerts.channels[](type=email).smtpUrl` | string |  | The mail server used to send, including login. |
+| `alerts.digest`<br><sub>env `BEAMHOP_ALERTS__DIGEST`</sub> | `off` \| `daily` \| `weekly` | `"daily"` | How often you get a summary of how the relay is doing. |
+| `ai`<br><sub>env `BEAMHOP_AI`</sub> | section |  | AI assistant |
+| `ai.enabled`<br><sub>env `BEAMHOP_AI__ENABLED`</sub> | boolean | `false` | Turn on the assistant that answers questions and suggests changes. Off by default. |
+| `ai.baseUrl`<br><sub>env `BEAMHOP_AI__BASE_URL`</sub> | string |  | OpenAI-compatible endpoint, e.g. Ollama *Technical:* Base URL of an OpenAI-compatible chat completions API. |
+| `ai.model`<br><sub>env `BEAMHOP_AI__MODEL`</sub> | string |  | Name of the AI model to use, as your provider calls it. |
+| `ai.apiKey`<br><sub>env `BEAMHOP_AI__API_KEY`</sub> | string |  | Key for your AI provider. Leave empty for local models like Ollama. |
+| `backups`<br><sub>env `BEAMHOP_BACKUPS`</sub> | section |  | Automatic backups |
+| `backups.enabled`<br><sub>env `BEAMHOP_BACKUPS__ENABLED`</sub> | boolean | `false` | Make automatic backups of your relay. |
+| `backups.schedule`<br><sub>env `BEAMHOP_BACKUPS__SCHEDULE`</sub> | `hourly` \| `daily` \| `weekly` | `"daily"` | How often a backup is made. More often means less to lose. |
+| `backups.target`<br><sub>env `BEAMHOP_BACKUPS__TARGET`</sub> | section |  | Where backups are stored. Somewhere other than this server is safest. |
+| `backups.target.driver`<br><sub>env `BEAMHOP_BACKUPS__TARGET__DRIVER`</sub> | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` | Which storage service to use. Pick cloud storage when this server's disk is too small or you want copies kept elsewhere. |
+| `backups.target.path`<br><sub>env `BEAMHOP_BACKUPS__TARGET__PATH`</sub> | string |  | Folder on this server where the files go. Empty = a folder inside the data folder. |
+| `backups.target.bucket`<br><sub>env `BEAMHOP_BACKUPS__TARGET__BUCKET`</sub> | string |  | Name of the storage bucket you created with your provider. |
+| `backups.target.endpoint`<br><sub>env `BEAMHOP_BACKUPS__TARGET__ENDPOINT`</sub> | string |  | Your provider's storage address. Leave empty for Amazon S3 and Google Cloud; needed for R2, MinIO and others. *Technical:* S3 API endpoint (path-style). Defaults: https://s3.<region>.amazonaws.com, https://storage.googleapis.com. |
+| `backups.target.region`<br><sub>env `BEAMHOP_BACKUPS__TARGET__REGION`</sub> | string |  | Data-center region of the bucket. Empty = us-east-1 for S3, auto otherwise. *Technical:* SigV4 signing region. |
+| `backups.target.accessKeyId`<br><sub>env `BEAMHOP_BACKUPS__TARGET__ACCESS_KEY_ID`</sub> | string |  | The access key ID from your storage provider. |
+| `backups.target.secretAccessKey`<br><sub>env `BEAMHOP_BACKUPS__TARGET__SECRET_ACCESS_KEY`</sub> | string |  | The secret that goes with the access key. Stored privately, never shown again. |
+| `backups.keep`<br><sub>env `BEAMHOP_BACKUPS__KEEP`</sub> | number | `14` | How many backups to keep before the oldest is deleted. |
+| `privacy`<br><sub>env `BEAMHOP_PRIVACY`</sub> | section |  | Privacy |
+| `privacy.ipLogging`<br><sub>env `BEAMHOP_PRIVACY__IP_LOGGING`</sub> | `hashed` \| `truncated` \| `off` | `"hashed"` | How visitor network addresses are recorded. Addresses are never stored as-is; "off" weakens abuse protection. *Technical:* hashed: salted SHA-256 of the IP, salt rotates daily; truncated: same, of the /24 (IPv4) or /48 (IPv6) network; off: constant placeholder. Raw IPs are never stored. |
+| `plugins`<br><sub>env `BEAMHOP_PLUGINS`</sub> | list | `[]` | Installed plugins that add extra rules or features. |
+| `plugins[]` | section |  | An installed plugin |
+| `plugins[].id` | string |  | Which plugin this is. |
+| `plugins[].enabled` | boolean | `true` | Turn the plugin on or off. |
+| `plugins[].config` | unknown |  | The plugin's own settings. |
 
 ## Feature settings (`modules.<id>`)
 
@@ -140,15 +166,18 @@ Each section exists only when that feature is turned on; enterprise features are
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `sessionTtlSeconds` | number | `43200` | How long a sign-in lasts before admins must sign in again |
+| `sessionTtlSeconds` | number | `43200` | How long a sign-in lasts before admins must sign in again. Shorter is safer on shared devices. |
 | `sessionMaxAgeSeconds` | number | `604800` | Longest time someone can stay signed in without signing in again *Technical:* Absolute max age of a session JWT across sliding refreshes (POST …/session/refresh); measured from auth_time. |
-| `keyRotationDays` | number | `7` | How often the sign-in signing key is replaced *Technical:* HS256 session signing key rotation period; previous keys stay valid for one session lifetime. |
-| `undoWindowSeconds` | number | `300` | How long you can undo a change |
-| `passkeys.rpId` | string |  | Domain passkeys are tied to *Technical:* WebAuthn relying party id; defaults to the request host name. |
-| `passkeys.rpName` | string | `"Beamhop"` | Name shown when creating a passkey |
-| `passkeys.origins` | list of string | `[]` | Extra web addresses allowed to use passkeys *Technical:* Extra allowed WebAuthn origins (e.g. the admin app origin when served elsewhere). |
-| `tokens.maxDays` | number | `365` | Longest allowed lifetime for API tokens |
-| `live.heartbeatSeconds` | number | `25` |  |
+| `keyRotationDays` | number | `7` | How often the secret key that protects sign-ins is replaced. The default suits almost everyone. *Technical:* HS256 session signing key rotation period; previous keys stay valid for one session lifetime. |
+| `undoWindowSeconds` | number | `300` | How long after a change you can still undo it with one tap. |
+| `passkeys` | section |  | Passkeys (sign in with your fingerprint, face or device PIN) |
+| `passkeys.rpId` | string |  | The domain passkeys are tied to. Leave empty unless the admin app is reached under several names. *Technical:* WebAuthn relying party id; defaults to the request host name. |
+| `passkeys.rpName` | string | `"Beamhop"` | Name shown by your device when you create a passkey. |
+| `passkeys.origins` | list of string | `[]` | Extra web addresses allowed to use passkeys. Only needed when the admin app is hosted elsewhere. *Technical:* Extra allowed WebAuthn origins (e.g. the admin app origin when served elsewhere). |
+| `tokens` | section |  | API tokens for scripts and integrations |
+| `tokens.maxDays` | number | `365` | Longest allowed lifetime for API tokens used by scripts and other tools. |
+| `live` | section |  | Live updates in the admin app |
+| `live.heartbeatSeconds` | number | `25` | How often the admin app's live view checks the connection is still alive, in seconds. Lower it if a proxy cuts idle connections. *Technical:* Interval of SSE keep-alive comments on the live stream. |
 
 ### `modules.ai`
 
@@ -159,122 +188,146 @@ Each section exists only when that feature is turned on; enterprise features are
 | `maxTokensPerRequest` | number | `24000` | Upper limit on how much text one question may use (keeps costs predictable) *Technical:* Budget across all rounds: provider-reported usage when available, else ~4 chars per token. |
 | `maxOutputTokens` | number | `1200` | Longest answer the assistant may write |
 | `timeoutSeconds` | number | `90` | Give up on a question after this long |
-| `maxToolResultChars` | number | `8000` |  |
+| `maxToolResultChars` | number | `8000` | How much of each lookup result the assistant gets to read. Larger can help with big relays but costs more. *Technical:* Tool results are truncated to this many characters before being sent to the model. |
 | `maxProposals` | number | `5` | How many suggested changes one answer may contain |
+| `labeling` | section |  | Automatic label suggestions for the review queue |
 | `labeling.enabled` | boolean | `true` | Suggest a label (spam / abusive / fine) for new items waiting for review |
-| `labeling.intervalSeconds` | number | `60` |  |
-| `labeling.perRun` | number | `10` | *Technical:* Max queue items labeled per scheduler tick (rate limit). |
+| `labeling.intervalSeconds` | number | `60` | How often new items waiting for review are looked at, in seconds. |
+| `labeling.perRun` | number | `10` | Most items labeled each time. *Technical:* Max queue items labeled per scheduler tick (rate limit). |
 | `labeling.perHour` | number | `200` | Most items labeled per hour (rate limit) |
-| `labeling.maxAttempts` | number | `2` |  |
+| `labeling.maxAttempts` | number | `2` | How often to retry an item when the AI gives no usable answer. |
 
 ### `modules.alerts`
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `evaluateSeconds` | number | `60` |  |
+| `evaluateSeconds` | number | `60` | How often Beamhop checks for problems, in seconds. |
 | `minSeverity` | `info` \| `warning` \| `critical` | `"warning"` | Only send notifications at or above this level (the rest wait for the digest) |
 | `renotifyMinutes` | number | `360` | Remind again about an ongoing problem after this many minutes |
 | `digestHourUtc` | number | `9` | Hour the digest is sent |
 | `digestWeekday` | number | `1` | Day of the weekly digest (0 = Sunday) |
 | `digestTips` | boolean | `true` | Add one short tip to each digest |
 | `channelSeverity` | map |  | Per channel: lowest level it receives |
-| `vapidSubject` | string |  | *Technical:* VAPID `sub` claim (RFC 8292): mailto: or https: contact for push services. |
-| `nostrDm` | section |  | *Technical:* NIP-17 gift-wrapped DMs (kind 1059) are always stored in the local relay; these relays also receive them. |
+| `vapidSubject` | string |  | Contact address given to phone and browser push services, in case they need to reach you. Empty = a default. *Technical:* VAPID `sub` claim (RFC 8292): mailto: or https: contact for push services. |
+| `nostrDm` | section |  | Alerts sent as private Nostr messages *Technical:* NIP-17 gift-wrapped DMs (kind 1059) are always stored in the local relay; these relays also receive them. |
 | `nostrDm.relays` | list of string | `[]` | Other relays to deliver direct messages to |
-| `email.from` | string | `"Beamhop <alerts@localhost>"` |  |
-| `rules.spamWave.enabled` | boolean | `true` |  |
-| `rules.spamWave.minPerMinute` | number | `30` |  |
-| `rules.spamWave.factor` | number | `3` |  |
-| `rules.errorSpike.enabled` | boolean | `true` |  |
-| `rules.errorSpike.minPerMinute` | number | `5` |  |
-| `rules.errorSpike.criticalPerMinute` | number | `60` |  |
-| `rules.connectionDrop.enabled` | boolean | `true` |  |
-| `rules.connectionDrop.minBaseline` | number | `10` |  |
-| `rules.connectionDrop.dropRatio` | number | `0.3` |  |
-| `rules.diskFill.enabled` | boolean | `true` |  |
-| `rules.diskFill.warnDays` | number | `7` |  |
-| `rules.diskFill.criticalHours` | number | `24` |  |
-| `rules.cert.enabled` | boolean | `true` |  |
-| `rules.cert.warnDays` | number | `14` |  |
-| `rules.cert.criticalDays` | number | `3` |  |
-| `rules.backup.enabled` | boolean | `true` |  |
-| `rules.moderationBacklog.enabled` | boolean | `true` |  |
+| `email` | section |  | Alert emails |
+| `email.from` | string | `"Beamhop <alerts@localhost>"` | Sender name and address on alert emails. Use an address your mail server may send from. |
+| `rules` | section |  | Which problems to watch for |
+| `rules.spamWave` | section |  | Spam waves |
+| `rules.spamWave.enabled` | boolean | `true` | Warn when a spam wave is being blocked. |
+| `rules.spamWave.minPerMinute` | number | `30` | Ignore waves smaller than this many blocked posts a minute. |
+| `rules.spamWave.factor` | number | `3` | Warn when blocked posts reach this many times the usual amount. *Technical:* Also requires z-score ≥ 4 vs. the seasonal baseline after warm-up. |
+| `rules.errorSpike` | section |  | Error spikes |
+| `rules.errorSpike.enabled` | boolean | `true` | Warn when more errors happen than usual. |
+| `rules.errorSpike.minPerMinute` | number | `5` | Ignore fewer errors than this per minute. |
+| `rules.errorSpike.criticalPerMinute` | number | `60` | Send an urgent alert at this many errors per minute. |
+| `rules.connectionDrop` | section |  | Connection drops |
+| `rules.connectionDrop.enabled` | boolean | `true` | Warn when far fewer people are connected than usual. |
+| `rules.connectionDrop.minBaseline` | number | `10` | Only watch once at least this many people are usually connected. |
+| `rules.connectionDrop.dropRatio` | number | `0.3` | Warn when connections fall to this share of normal (0.3 = 30%). |
+| `rules.diskFill` | section |  | Disk filling up |
+| `rules.diskFill.enabled` | boolean | `true` | Warn before the disk fills up. |
+| `rules.diskFill.warnDays` | number | `7` | Warn when the disk will be full within this many days. |
+| `rules.diskFill.criticalHours` | number | `24` | Send an urgent alert when it will be full within this many hours. |
+| `rules.cert` | section |  | Security certificate (https) expiry |
+| `rules.cert.enabled` | boolean | `true` | Warn before the security certificate expires. |
+| `rules.cert.warnDays` | number | `14` | Warn this many days before it expires. |
+| `rules.cert.criticalDays` | number | `3` | Send an urgent alert this many days before it expires. |
+| `rules.backup` | section |  | Backups |
+| `rules.backup.enabled` | boolean | `true` | Warn when a backup fails or backups fall behind schedule. |
+| `rules.moderationBacklog` | section |  | Review queue |
+| `rules.moderationBacklog.enabled` | boolean | `true` | Warn when reports waiting for review pile up. |
 
 ### `modules.enterprise-compliance`
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
+| `approvals` | section |  | Second-admin approval for risky actions |
 | `approvals.enabled` | boolean | `true` | Require a second admin for risky actions |
 | `approvals.gatedActions` | list of string | `["escrow.decrypt-dm","keyvault.destroy-key","keyvault.rot…` | Actions that need a second admin |
 | `approvals.gateAllSensitive` | boolean | `true` | Also require approval for every action marked risky *Technical:* Also gate every action whose ActionDef has `sensitive: true`. |
-| `approvals.requestTtlMinutes` | number | `1440` | How long a request waits for approval |
-| `approvals.executeWithinMinutes` | number | `60` | How long an approval stays usable |
-| `siem.sinks` | list | `[]` |  |
+| `approvals.requestTtlMinutes` | number | `1440` | How long a request waits for approval, in minutes |
+| `approvals.executeWithinMinutes` | number | `60` | How long an approval stays usable, in minutes |
+| `siem` | section |  | Forwarding records to your security log system (SIEM) |
+| `siem.sinks` | list | `[]` | Security log systems that get a copy of audit and sign-in records. |
+| `siem.sinks[](type=syslog)` | section |  | Syslog server |
 | `siem.sinks[](type=syslog).id` | string |  | Short name for this destination |
-| `siem.sinks[](type=syslog).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=syslog).enabled` | boolean | `true` | Send records to this destination. Turn off to pause it without deleting it. |
 | `siem.sinks[](type=syslog).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
 | `siem.sinks[](type=syslog).type` | `"syslog"` |  |  |
 | `siem.sinks[](type=syslog).host` | string |  | Syslog server host name |
-| `siem.sinks[](type=syslog).port` | number | `6514` |  |
+| `siem.sinks[](type=syslog).port` | number | `6514` | Port of the syslog server. Use what your log team gives you. |
 | `siem.sinks[](type=syslog).transport` | `tls` \| `tcp` \| `udp` | `"tls"` | How to connect *Technical:* RFC 5424 over TLS (RFC 5425) / TCP (RFC 6587 octet counting) / UDP (RFC 5426). Bun only. |
-| `siem.sinks[](type=syslog).facility` | number | `13` |  |
-| `siem.sinks[](type=syslog).appName` | string | `"beamhop"` |  |
+| `siem.sinks[](type=syslog).facility` | number | `13` | Category number your log server uses to sort messages. Keep the default unless told otherwise. *Technical:* Syslog facility code (13 = log audit). |
+| `siem.sinks[](type=syslog).appName` | string | `"beamhop"` | Name the records are tagged with in your log server. |
 | `siem.sinks[](type=syslog).caPem` | string |  | Company CA for the syslog server certificate |
+| `siem.sinks[](type=splunk)` | section |  | Splunk |
 | `siem.sinks[](type=splunk).id` | string |  | Short name for this destination |
-| `siem.sinks[](type=splunk).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=splunk).enabled` | boolean | `true` | Send records to this destination. Turn off to pause it without deleting it. |
 | `siem.sinks[](type=splunk).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
 | `siem.sinks[](type=splunk).type` | `"splunk"` |  |  |
 | `siem.sinks[](type=splunk).url` | string |  | Splunk HTTP Event Collector address |
-| `siem.sinks[](type=splunk).token` | string |  | HEC token |
-| `siem.sinks[](type=splunk).index` | string |  |  |
-| `siem.sinks[](type=splunk).sourcetype` | string | `"beamhop:audit"` |  |
+| `siem.sinks[](type=splunk).token` | string |  | The access token Splunk gave you for sending data. *Technical:* HEC token |
+| `siem.sinks[](type=splunk).index` | string |  | Splunk index to store records in. Empty = the token’s default index. |
+| `siem.sinks[](type=splunk).sourcetype` | string | `"beamhop:audit"` | Label Splunk uses to recognise these records. Keep the default unless told otherwise. |
+| `siem.sinks[](type=sentinel)` | section |  | Microsoft Sentinel |
 | `siem.sinks[](type=sentinel).id` | string |  | Short name for this destination |
-| `siem.sinks[](type=sentinel).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=sentinel).enabled` | boolean | `true` | Send records to this destination. Turn off to pause it without deleting it. |
 | `siem.sinks[](type=sentinel).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
 | `siem.sinks[](type=sentinel).type` | `"sentinel"` |  |  |
-| `siem.sinks[](type=sentinel).tenantId` | string |  |  |
-| `siem.sinks[](type=sentinel).clientId` | string |  |  |
-| `siem.sinks[](type=sentinel).clientSecret` | string |  |  |
+| `siem.sinks[](type=sentinel).tenantId` | string |  | Your Microsoft directory (tenant) ID. *Technical:* Entra ID tenant id (GUID). |
+| `siem.sinks[](type=sentinel).clientId` | string |  | ID of the app registration allowed to send logs. *Technical:* Entra app registration client id. |
+| `siem.sinks[](type=sentinel).clientSecret` | string |  | Secret of that app registration. Stored privately. |
 | `siem.sinks[](type=sentinel).dceEndpoint` | string |  | Azure data collection endpoint *Technical:* Data Collection Endpoint ingestion URL (Logs Ingestion API) |
-| `siem.sinks[](type=sentinel).dcrImmutableId` | string |  |  |
-| `siem.sinks[](type=sentinel).streamName` | string | `"Custom-Beamhop_CL"` |  |
-| `siem.sinks[](type=sentinel).authorityHost` | string | `"https://login.microsoftonline.com"` |  |
+| `siem.sinks[](type=sentinel).dcrImmutableId` | string |  | ID of the data collection rule that receives the records. *Technical:* DCR immutable id (dcr-…). |
+| `siem.sinks[](type=sentinel).streamName` | string | `"Custom-Beamhop_CL"` | Name of the table stream in that rule. Keep the default unless you renamed it. |
+| `siem.sinks[](type=sentinel).authorityHost` | string | `"https://login.microsoftonline.com"` | Microsoft sign-in address. Only change it for government clouds. |
+| `siem.sinks[](type=chronicle)` | section |  | Google Security Operations (Chronicle) |
 | `siem.sinks[](type=chronicle).id` | string |  | Short name for this destination |
-| `siem.sinks[](type=chronicle).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=chronicle).enabled` | boolean | `true` | Send records to this destination. Turn off to pause it without deleting it. |
 | `siem.sinks[](type=chronicle).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
 | `siem.sinks[](type=chronicle).type` | `"chronicle"` |  |  |
-| `siem.sinks[](type=chronicle).customerId` | string |  |  |
-| `siem.sinks[](type=chronicle).logType` | string | `"BEAMHOP"` |  |
-| `siem.sinks[](type=chronicle).region` | string | `"us"` |  |
-| `siem.sinks[](type=chronicle).endpoint` | string |  | *Technical:* Defaults to https://{region}-malachiteingestion-pa.googleapis.com (v2 unstructuredlogentries:batchCreate) |
+| `siem.sinks[](type=chronicle).customerId` | string |  | Your Google Security Operations customer ID. *Technical:* Chronicle customer id (GUID). |
+| `siem.sinks[](type=chronicle).logType` | string | `"BEAMHOP"` | Log type the records are filed under. Keep the default unless told otherwise. |
+| `siem.sinks[](type=chronicle).region` | string | `"us"` | Region of your Google Security Operations instance. |
+| `siem.sinks[](type=chronicle).endpoint` | string |  | Custom address to send to. Empty = chosen from the region. *Technical:* Defaults to https://{region}-malachiteingestion-pa.googleapis.com (v2 unstructuredlogentries:batchCreate) |
 | `siem.sinks[](type=chronicle).serviceAccount` | section |  | Google service account allowed to ingest |
-| `siem.sinks[](type=chronicle).serviceAccount.clientEmail` | string |  |  |
-| `siem.sinks[](type=chronicle).serviceAccount.privateKeyPem` | string |  |  |
-| `siem.sinks[](type=chronicle).serviceAccount.tokenUri` | string | `"https://oauth2.googleapis.com/token"` |  |
+| `siem.sinks[](type=chronicle).serviceAccount.clientEmail` | string |  | Email address of the Google service account. |
+| `siem.sinks[](type=chronicle).serviceAccount.privateKeyPem` | string |  | Private key of that service account (from its JSON key file). Stored privately. |
+| `siem.sinks[](type=chronicle).serviceAccount.tokenUri` | string | `"https://oauth2.googleapis.com/token"` | Google sign-in address. Keep the default. |
+| `siem.sinks[](type=webhook)` | section |  | Web address (webhook) |
 | `siem.sinks[](type=webhook).id` | string |  | Short name for this destination |
-| `siem.sinks[](type=webhook).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=webhook).enabled` | boolean | `true` | Send records to this destination. Turn off to pause it without deleting it. |
 | `siem.sinks[](type=webhook).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
 | `siem.sinks[](type=webhook).type` | `"webhook"` |  |  |
-| `siem.sinks[](type=webhook).url` | string |  |  |
-| `siem.sinks[](type=webhook).secret` | string |  | Signs each batch (HMAC-SHA256) |
-| `siem.sinks[](type=webhook).headers` | map |  |  |
-| `siem.intervalSeconds` | number | `15` |  |
-| `siem.batchSize` | number | `200` |  |
-| `siem.maxBatchesPerTick` | number | `10` |  |
-| `siem.maxOutbox` | number | `100000` | *Technical:* Bounded outbox: when full, the oldest non-audit records are dropped and counted. |
+| `siem.sinks[](type=webhook).url` | string |  | Web address that receives batches of records. |
+| `siem.sinks[](type=webhook).secret` | string |  | Shared secret so the receiver can check records really came from here. *Technical:* Signs each batch (HMAC-SHA256) |
+| `siem.sinks[](type=webhook).headers` | map |  | Extra headers sent with each request, e.g. an access key. |
+| `siem.intervalSeconds` | number | `15` | How often waiting records are sent, in seconds. |
+| `siem.batchSize` | number | `200` | How many records are sent in one go. Lower it if your log system rejects large requests. |
+| `siem.maxBatchesPerTick` | number | `10` | Most batches sent each time. Raise it if records pile up. |
+| `siem.maxOutbox` | number | `100000` | Most records kept waiting while a destination is unreachable. *Technical:* Bounded outbox: when full, the oldest non-audit records are dropped and counted. |
 | `siem.authEvents` | boolean | `true` | Send relay sign-ins |
 | `siem.deletionEvents` | boolean | `true` | Send deletions |
+| `holds` | section |  | Legal holds |
 | `holds.archiveOnDelete` | boolean | `true` | Keep a copy of held posts that people delete *Technical:* Copies held events to compliance.hold-archive before NIP-09/62/admin deletion. |
-| `holds.refreshSeconds` | number | `60` |  |
-| `ediscovery.maxEvents` | number | `500000` |  |
-| `ediscovery.includeBlobs` | boolean | `true` |  |
+| `holds.refreshSeconds` | number | `60` | How quickly holds changed on another server take effect here, in seconds. |
+| `ediscovery` | section |  | Legal exports (eDiscovery) |
+| `ediscovery.maxEvents` | number | `500000` | Most posts included in one legal export. |
+| `ediscovery.includeBlobs` | boolean | `true` | Include the list of uploaded files in legal exports. |
+| `retention` | section |  | Retention by company group |
 | `retention.groups` | list | `[]` | Keep posts by members of a group for this many days |
-| `retention.groups[].group` | string |  |  |
-| `retention.groups[].days` | number |  |  |
-| `retention.defaultDays` | number |  |  |
+| `retention.groups[]` | section |  | Retention for one group |
+| `retention.groups[].group` | string |  | Name of the company group. |
+| `retention.groups[].days` | number |  | Keep posts by its members for this many days. |
+| `retention.defaultDays` | number |  | How long to keep posts of people in none of these groups. Empty = relay default. |
+| `residency` | section |  | Data residency checks |
 | `residency.databaseRegion` | string |  | Where the database is hosted |
 | `residency.relays` | map |  | Region each relay’s data must stay in |
+| `reports` | section |  | Compliance reports |
 | `reports.monthly` | boolean | `true` | Make a usage report every month |
+| `encryption` | section |  | Encryption of stored files |
 | `encryption.blobs` | boolean | `false` | Encrypt stored media with your company key *Technical:* Per-blob AES-256-GCM data keys wrapped by ports.keyWrapper (KMS/Vault/local KEK). Existing plaintext blobs stay readable. |
 
 ### `modules.enterprise-identity`
@@ -287,30 +340,34 @@ Each section exists only when that feature is turned on; enterprise features are
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `adminPaths` | list of string | `["/api/","/admin"]` | *Technical:* Path prefixes treated as the admin app/API (node scope). |
+| `adminPaths` | list of string | `["/api/","/admin"]` | Web addresses that count as the admin app. Only change this if you moved the admin app. *Technical:* Path prefixes treated as the admin app/API (node scope). |
+| `allowlist` | section |  | Limit access to company networks |
 | `allowlist.admin` | list of string | `[]` | Networks allowed to open the admin app (everyone when empty) |
 | `allowlist.relays` | map |  | Networks allowed to use each relay (everyone when empty) |
+| `mtls` | section |  | Company devices only (client certificates) |
 | `mtls.enabled` | boolean | `false` | Only company devices can connect |
-| `mtls.scope` | `admin` \| `relays` \| `all` | `"all"` |  |
-| `mtls.caPem` | string |  | Company CA certificate(s), PEM |
-| `mtls.certHeader` | string | `"x-client-cert"` | *Technical:* Header with the client certificate from the TLS-terminating proxy: URL-encoded PEM (nginx $ssl_client_escaped_cert, ALB), base64 DER, or Envoy XFCC (Cert="…"). |
-| `mtls.verifyHeader` | string |  | *Technical:* Optional proxy verdict header, e.g. x-ssl-client-verify: SUCCESS. |
+| `mtls.scope` | `admin` \| `relays` \| `all` | `"all"` | Where the company-device check applies. |
+| `mtls.caPem` | string |  | Your company certificate authority that issues device certificates. *Technical:* Company CA certificate(s), PEM |
+| `mtls.certHeader` | string | `"x-client-cert"` | Header your proxy uses to pass on the device certificate. Match your proxy setup. *Technical:* Header with the client certificate from the TLS-terminating proxy: URL-encoded PEM (nginx $ssl_client_escaped_cert, ALB), base64 DER, or Envoy XFCC (Cert="…"). |
+| `mtls.verifyHeader` | string |  | Header where your proxy reports whether the certificate checked out. Optional. *Technical:* Optional proxy verdict header, e.g. x-ssl-client-verify: SUCCESS. |
 | `mtls.proxySecret` | section |  | Shared secret that proves a request came through your proxy |
 | `mtls.proxySecret.header` | string |  | Header your proxy adds |
 | `mtls.proxySecret.value` | string |  | Secret value only your proxy knows |
 | `mtls.allowedSubjects` | list of string | `[]` | Only certificates whose subject contains one of these (all when empty) |
+| `zeroTrust` | section |  | Company sign-in proxy (zero trust) |
 | `zeroTrust.provider` | `off` \| `google-iap` \| `cloudflare-access` \| `entra-app-proxy` | `"off"` | Identity-aware proxy in front of Beamhop |
-| `zeroTrust.scope` | `admin` \| `all` | `"admin"` |  |
-| `zeroTrust.audience` | string |  | Expected audience (IAP backend / Access AUD tag) |
+| `zeroTrust.scope` | `admin` \| `all` | `"admin"` | Where the company sign-in proxy is required. |
+| `zeroTrust.audience` | string |  | The ID your proxy puts in its sign-in tokens for this app. *Technical:* Expected audience (IAP backend / Access AUD tag) |
 | `zeroTrust.teamDomain` | string |  | Cloudflare Access team domain, e.g. acme.cloudflareaccess.com |
-| `zeroTrust.jwksUrl` | string |  |  |
-| `zeroTrust.jwks` | section |  | *Technical:* Inline JWKS (air-gapped installs, tests); overrides jwksUrl. |
-| `zeroTrust.jwks.keys` | list of map |  |  |
-| `zeroTrust.userHeader` | string | `"x-ms-client-principal-name"` | *Technical:* Entra App Proxy header-based SSO: header carrying the signed-in user (UPN/email). |
+| `zeroTrust.jwksUrl` | string |  | Where to fetch the proxy’s signing keys. Empty = the provider’s usual address. *Technical:* JWKS URL; defaults to Google IAP public keys or <teamDomain>/cdn-cgi/access/certs. |
+| `zeroTrust.jwks` | section |  | Signing keys pasted in directly instead of fetched. *Technical:* Inline JWKS (air-gapped installs, tests); overrides jwksUrl. |
+| `zeroTrust.jwks.keys` | list of map |  | The signing keys, pasted in. Only for servers without internet access. |
+| `zeroTrust.userHeader` | string | `"x-ms-client-principal-name"` | Header the Microsoft proxy uses to say who is signed in. Keep the default. *Technical:* Entra App Proxy header-based SSO: header carrying the signed-in user (UPN/email). |
 | `zeroTrust.proxySecret` | section |  | Shared secret that proves a request came through your proxy |
 | `zeroTrust.proxySecret.header` | string |  | Header your proxy adds |
 | `zeroTrust.proxySecret.value` | string |  | Secret value only your proxy knows |
 | `zeroTrust.admins` | map |  | Email → admin account id for the admin app |
+| `privateOnly` | section |  | Private-only mode |
 | `privateOnly.enabled` | boolean | `false` | Hide the landing and status pages; share only minimal relay info |
 | `privateOnly.keepPortal` | boolean | `true` | Keep the self-service portal |
 
@@ -319,18 +376,20 @@ Each section exists only when that feature is turned on; enterprise features are
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `flushSeconds` | number | `10` | How often live numbers are saved |
+| `retention` | section |  | How long statistics are kept |
 | `retention.rawHours` | number | `48` | How long detailed (10-second) numbers are kept |
 | `retention.rollupDays` | number | `400` | How long hourly summaries are kept |
 | `retention.analyticsDays` | number | `400` | How long community statistics are kept |
-| `prometheus` | section |  | *Technical:* Prometheus text exposition 0.0.4. Access requires `Authorization: Bearer <token>` or an admin principal with insights.read. |
+| `prometheus` | section |  | Monitoring page for tools like Prometheus or Grafana *Technical:* Prometheus text exposition 0.0.4. Access requires `Authorization: Bearer <token>` or an admin principal with insights.read. |
 | `prometheus.enabled` | boolean | `true` | Offer a /metrics page for monitoring tools |
-| `prometheus.path` | string | `"/metrics"` |  |
-| `prometheus.token` | string |  | Secret that monitoring tools must send (Bearer token) |
-| `otlp` | section |  | *Technical:* OTLP/HTTP JSON metrics export (POST {endpoint}/v1/metrics), cumulative temporality. |
-| `otlp.endpoint` | string |  | OpenTelemetry collector address |
-| `otlp.headers` | map |  |  |
-| `otlp.intervalSeconds` | number | `60` |  |
+| `prometheus.path` | string | `"/metrics"` | Web address path of the monitoring page. Change it if /metrics is taken. |
+| `prometheus.token` | string |  | Password that monitoring tools must send (at least 16 characters). |
+| `otlp` | section |  | Send numbers to an OpenTelemetry collector (leave empty to turn off) *Technical:* OTLP/HTTP JSON metrics export (POST {endpoint}/v1/metrics), cumulative temporality. |
+| `otlp.endpoint` | string |  | Address of your monitoring collector that should receive the numbers. |
+| `otlp.headers` | map |  | Extra headers to send, e.g. a login key your collector requires. |
+| `otlp.intervalSeconds` | number | `60` | How often numbers are sent, in seconds. |
 | `storageBudgetBytes` | number |  | Space you are willing to use for the database (used when free disk is unknown) |
+| `analytics` | section |  | Community statistics (stay on this server) |
 | `analytics.enabled` | boolean | `true` | Count active users, popular apps and kinds (stays on this server) |
 | `analytics.geo` | boolean | `true` | Count visitors by country when your host provides it |
 
@@ -338,35 +397,40 @@ Each section exists only when that feature is turned on; enterprise features are
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
+| `retention` | section |  | Removing old posts |
 | `retention.enabled` | boolean | `true` | Remove old posts according to your rules |
-| `retention.intervalMinutes` | number | `60` |  |
-| `retention.chunkSize` | number | `500` |  |
-| `retention.maxEventsPerRun` | number | `20000` | *Technical:* Scan budget per relay per run; the sweep resumes from a stored cursor next run. |
-| `storageCaps` | map |  |  |
-| `backups.format` | `auto` \| `sqlite` \| `ndjson` | `"auto"` | *Technical:* auto: SQLite file snapshot (VACUUM INTO) on Bun+SQLite, else logical NDJSON per table. |
+| `retention.intervalMinutes` | number | `60` | How often old posts are cleaned up, in minutes. |
+| `retention.chunkSize` | number | `500` | How many posts are removed in one step. Smaller steps are gentler on a busy server. *Technical:* Delete batch size per transaction. |
+| `retention.maxEventsPerRun` | number | `20000` | Most posts checked per clean-up round; the rest wait for the next round. *Technical:* Scan budget per relay per run; the sweep resumes from a stored cursor next run. |
+| `storageCaps` | map |  | Storage limits per relay. Use "*" for every relay without its own limit. *Technical:* Keyed by relay id; `*` is the fallback entry. |
+| `backups` | section |  | Backup details (when and where are set under Backups) |
+| `backups.format` | `auto` \| `sqlite` \| `ndjson` | `"auto"` | How the backup is written. Automatic picks the best one for your database. *Technical:* auto: SQLite file snapshot (VACUUM INTO) on Bun+SQLite, else logical NDJSON per table. |
 | `backups.includeBlobBytes` | boolean | `false` | Also copy media files to the backup storage |
 | `backups.includeMetrics` | boolean | `true` | Include chart history |
 | `backups.includeSecrets` | boolean | `false` | Keep passwords and keys in backups that are not encrypted *Technical:* Without ports.keyWrapper archives are not encrypted, so secret-looking config fields (password, token, secret, key, salt, webhook, URL credentials) are masked unless this is on. Encrypted archives always keep them. |
-| `backups.checkMinutes` | number | `15` |  |
+| `backups.checkMinutes` | number | `15` | How often Beamhop checks whether a backup is due, in minutes. |
+| `litestream` | section |  | Live copy of the database to a standby server |
 | `litestream.enabled` | boolean | `false` | Watch continuous replication to a standby (Litestream) |
-| `litestream.metricsUrl` | string | `"http://127.0.0.1:9090/metrics"` |  |
-| `litestream.replica.driver` | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` |  |
-| `litestream.replica.path` | string |  |  |
-| `litestream.replica.bucket` | string |  |  |
-| `litestream.replica.endpoint` | string |  |  |
-| `litestream.replica.region` | string |  |  |
-| `litestream.replica.accessKeyId` | string |  |  |
-| `litestream.replica.secretAccessKey` | string |  |  |
-| `litestream.path` | string | `"beamhop/db"` |  |
-| `litestream.syncInterval` | string | `"1s"` |  |
-| `litestream.snapshotInterval` | string | `"24h"` |  |
-| `litestream.retention` | string | `"72h"` |  |
-| `litestream.lagWarnSeconds` | number | `60` |  |
-| `litestream.lagCriticalSeconds` | number | `300` |  |
-| `litestream.checkSeconds` | number | `30` |  |
-| `knownGood.enabled` | boolean | `true` |  |
-| `knownGood.healthySeconds` | number | `300` |  |
-| `knownGood.checkSeconds` | number | `60` |  |
+| `litestream.metricsUrl` | string | `"http://127.0.0.1:9090/metrics"` | Where Beamhop reads the replication status from. *Technical:* Litestream Prometheus metrics endpoint (litestream `addr`). |
+| `litestream.replica` | section |  | Where the standby copy is stored. Empty = the backup storage. |
+| `litestream.replica.driver` | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` | Which storage service to use. Pick cloud storage when this server's disk is too small or you want copies kept elsewhere. |
+| `litestream.replica.path` | string |  | Folder on this server where the files go. Empty = a folder inside the data folder. |
+| `litestream.replica.bucket` | string |  | Name of the storage bucket you created with your provider. |
+| `litestream.replica.endpoint` | string |  | Your provider's storage address. Leave empty for Amazon S3 and Google Cloud; needed for R2, MinIO and others. *Technical:* S3 API endpoint (path-style). Defaults: https://s3.<region>.amazonaws.com, https://storage.googleapis.com. |
+| `litestream.replica.region` | string |  | Data-center region of the bucket. Empty = us-east-1 for S3, auto otherwise. *Technical:* SigV4 signing region. |
+| `litestream.replica.accessKeyId` | string |  | The access key ID from your storage provider. |
+| `litestream.replica.secretAccessKey` | string |  | The secret that goes with the access key. Stored privately, never shown again. |
+| `litestream.path` | string | `"beamhop/db"` | Folder inside the storage bucket for the copy. |
+| `litestream.syncInterval` | string | `"1s"` | How often changes are copied, e.g. 1s or 10s. Shorter means less to lose. *Technical:* Litestream `sync-interval` (Go duration). |
+| `litestream.snapshotInterval` | string | `"24h"` | How often a full copy is made, e.g. 24h. *Technical:* Litestream `snapshot-interval` (Go duration). |
+| `litestream.retention` | string | `"72h"` | How far back you can restore, e.g. 72h. *Technical:* Litestream `retention` (Go duration). |
+| `litestream.lagWarnSeconds` | number | `60` | Warn when the copy falls this many seconds behind. |
+| `litestream.lagCriticalSeconds` | number | `300` | Send an urgent alert when the copy falls this many seconds behind. |
+| `litestream.checkSeconds` | number | `30` | How often the copy is checked, in seconds. |
+| `knownGood` | section |  | Last known good settings (for safe mode) *Technical:* After healthySeconds without a critical health result, admin.config.markKnownGood() is called; `beamhop --safe` boots that revision. |
+| `knownGood.enabled` | boolean | `true` | Remember settings that ran without problems, so safe mode can go back to them. |
+| `knownGood.healthySeconds` | number | `300` | How long the relay must run without urgent problems to count as healthy. |
+| `knownGood.checkSeconds` | number | `60` | How often health is checked for this, in seconds. |
 
 ### `modules.media`
 
@@ -376,8 +440,8 @@ Each section exists only when that feature is turned on; enterprise features are
 | `maxQueued` | number | `200` | How many files may wait for processing *Technical:* Backpressure: when this many jobs wait, new thumbnail/resize jobs are skipped (abuse scans are never skipped). |
 | `thumbnailSize` | number | `320` | Thumbnail size in pixels |
 | `sizes` | list of number | `[640,1280]` | Widths of the smaller copies made for phones and slow connections |
-| `format` | `webp` \| `avif` \| `jpeg` | `"webp"` | File type of the copies |
-| `quality` | number | `80` | Quality of the copies |
+| `format` | `webp` \| `avif` \| `jpeg` | `"webp"` | File type of the smaller copies |
+| `quality` | number | `80` | Quality of the copies (1–100). Lower makes smaller files but blurrier pictures. |
 | `matchThreshold` | number | `8` | How close a picture must be to a blocked one to be stopped *Technical:* Max Hamming distance (bits out of 64) between a pHash/dHash and a list entry to count as a match. |
 | `scanWaitMs` | number | `5000` | How long a download may wait for a fresh upload to be checked *Technical:* A GET for a blob whose abuse scan is still running waits up to this long, then gets 403 until the scan completes. |
 | `listRefreshMinutes` | number | `60` | How often blocked-image lists are reloaded |
@@ -387,33 +451,38 @@ Each section exists only when that feature is turned on; enterprise features are
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `dir` | string |  |  |
-| `catalogUrl` | string | `""` |  |
-| `catalogPubkeys` | list of string | `[]` |  |
-| `timeBudgetMs` | number | `20` |  |
-| `hotReload` | boolean | `false` |  |
-| `breaker.threshold` | number | `5` |  |
-| `entries` | map |  |  |
+| `dir` | string |  | Folder where plugins are installed. Empty = a "plugins" folder in the data folder. |
+| `catalogUrl` | string | `""` | An extra list of plugins you can install. Empty = only the built-in list. *Technical:* https://… (signed, needs catalogPubkeys) or file:///path/catalog.json for offline installs. |
+| `catalogPubkeys` | list of string | `[]` | Keys of the people trusted to publish the extra plugin list. *Technical:* Hex pubkeys trusted to sign the remote catalog. |
+| `timeBudgetMs` | number | `20` | How long a plugin may take per post, in milliseconds. Raise it only if a slow plugin keeps timing out. |
+| `hotReload` | boolean | `false` | Reload plugins automatically when their files change. For plugin development. |
+| `breaker` | section |  | Automatic shut-off of misbehaving plugins |
+| `breaker.threshold` | number | `5` | How many failures in a row before a plugin is turned off automatically. |
+| `entries` | map |  | How each plugin is run, by plugin id. |
 
 ### `modules.policy`
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `rateLimitByIp` | boolean | `true` | Also limit by network address |
-| `ipMultiplier` | number | `4` | A network address may post this many times more than one person |
-| `content.packs` | list of string | `["scam"]` | Ready-made word and link lists to block |
+| `rateLimitByIp` | boolean | `true` | Also limit how fast one network address can post, not just one account. Stops one bot running many accounts. |
+| `ipMultiplier` | number | `4` | A network address may post this many times more than one person. Raise it if many people share one connection (offices, schools). |
+| `content` | section |  | Block posts by the words and links they contain |
+| `content.packs` | list of string | `["scam"]` | Ready-made word and link lists to block, e.g. "scam" (common scam phrases) or "shorteners" (link shorteners that hide where a link goes). *Technical:* Pack ids: keyword packs (KEYWORD_PACKS: scam) and link packs (LINK_PACKS: shorteners). Unknown ids are ignored. |
 | `content.blockedKeywords` | list of string | `[]` | Words or phrases to block |
 | `content.blockedDomains` | list of string | `[]` | Websites whose links are blocked |
 | `bannedPubkeys` | list of string | `[]` | Known bad accounts, blocked everywhere *Technical:* Static known-bad pubkey list (hex), applied to all relays |
-| `tierRules` | list | `[]` |  |
-| `tierRules[].relayId` | string |  |  |
-| `tierRules[].tier` | string |  | Tier to assign |
+| `tierRules` | list | `[]` | Rules that give people a membership level automatically, checked in order. |
+| `tierRules[]` | section |  | Give people a membership level automatically when they match |
+| `tierRules[].relayId` | string |  | Only apply this rule on one relay (its internal id). Empty = every relay. |
+| `tierRules[].tier` | string |  | Membership level to give (its short internal name). |
 | `tierRules[].when` | section |  | All given conditions must hold |
-| `tierRules[].when.allowlisted` | boolean |  | Person is on the member list |
-| `tierRules[].when.wotDepthAtMost` | number |  | Person is within this many follow hops of you |
-| `wot.maxMembers` | number | `100000` |  |
-| `spamWave.windowMinutes` | number | `60` |  |
-| `spamWave.minKeys` | number | `10` |  |
+| `tierRules[].when.allowlisted` | boolean |  | Person is on the member list. Empty = does not matter. |
+| `tierRules[].when.wotDepthAtMost` | number |  | Person is within this many follow hops of you. Empty = does not matter. |
+| `wot` | section |  | Limits for "people my network trusts" access |
+| `wot.maxMembers` | number | `100000` | Most people that can count as trusted. A safety cap so a huge network does not slow the relay down. *Technical:* Upper bound on the follow-graph walk; the walk stops (and reports truncation) at this size. |
+| `spamWave` | section |  | When to warn you about a spam wave from new accounts |
+| `spamWave.windowMinutes` | number | `60` | How far back to look for a spam wave, in minutes. |
+| `spamWave.minKeys` | number | `10` | How many new accounts must trip the spam filter in that time before you are warned about a spam wave. |
 | `recycleDays` | number | `30` | Days removed items can be restored |
 
 ### `modules.public-web`
@@ -422,50 +491,52 @@ Each section exists only when that feature is turned on; enterprise features are
 |---|---|---|---|
 | `sessionMinutes` | number | `60` | How long a portal sign-in lasts |
 | `uptimeDays` | number | `30` | Days shown on the status page |
-| `branding` | map |  |  |
-| `sourceUrl` | string | `"https://github.com/beamhop/beamhop"` | Link to the source code (AGPL) |
+| `branding` | map |  | Colors and footer of the public pages, per relay. |
+| `sourceUrl` | string | `"https://github.com/beamhop/beamhop"` | Link to the source code, shown on every page. Change it if you run a modified version (the license requires sharing your changes). |
 
 ### `modules.relay`
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `maxMessageBytes` | number | `524288` | Largest message a client may send *Technical:* Maximum size of any single WebSocket frame from a client, in bytes. |
-| `maxPendingMessages` | number | `256` | Messages queued per connection before new ones are refused |
-| `backpressure` | section |  | *Technical:* Uses Connection.bufferedAmount(): above dropAboveBytes live EVENT frames are dropped (one NOTICE per episode); above closeAboveBytes the socket is closed with 1013. |
+| `maxMessageBytes` | number | `524288` | Largest message an app may send in one go. Raise it only if people post very long texts. *Technical:* Maximum size of any single WebSocket frame from a client, in bytes. |
+| `maxPendingMessages` | number | `256` | Messages waiting per connection before new ones are refused. Protects the server from apps that send too fast. |
+| `backpressure` | section |  | How to handle apps that cannot keep up with live updates *Technical:* Uses Connection.bufferedAmount(): above dropAboveBytes live EVENT frames are dropped (one NOTICE per episode); above closeAboveBytes the socket is closed with 1013. |
 | `backpressure.dropAboveBytes` | number | `1048576` | Skip live updates to slow readers above this backlog |
 | `backpressure.closeAboveBytes` | number | `8388608` | Disconnect readers whose backlog grows past this |
-| `expireSweepSeconds` | number | `60` | How often expired posts are cleaned up *Technical:* NIP-40: interval of EventStore.deleteExpired sweeps. |
-| `dedupeCacheSize` | number | `10000` |  |
-| `authWindowSeconds` | number | `600` | *Technical:* NIP-42: max \|created_at - now\| for kind 22242 AUTH events. |
-| `negentropy` | section |  | *Technical:* NIP-77 negentropy set reconciliation (NEG-OPEN/NEG-MSG/NEG-CLOSE). |
+| `expireSweepSeconds` | number | `60` | How often posts that have expired are cleaned up, in seconds. *Technical:* NIP-40: interval of EventStore.deleteExpired sweeps. |
+| `dedupeCacheSize` | number | `10000` | How many recent posts are remembered to skip duplicates quickly. Raise it on very busy relays. *Technical:* Size of the in-memory LRU of recently seen event ids. |
+| `authWindowSeconds` | number | `600` | How far a device's clock may be off when signing in, in seconds. Raise it if people with wrong clocks can't sign in. *Technical:* NIP-42: max \|created_at - now\| for kind 22242 AUTH events. |
+| `negentropy` | section |  | Fast sync with other relays and apps *Technical:* NIP-77 negentropy set reconciliation (NEG-OPEN/NEG-MSG/NEG-CLOSE). |
 | `negentropy.enabled` | boolean | `true` | Allow fast sync with other relays/clients |
-| `negentropy.maxRecords` | number | `500000` |  |
-| `negentropy.frameSizeLimit` | number | `131072` |  |
-| `negentropy.maxSessions` | number | `4` |  |
-| `groups` | section |  | *Technical:* NIP-29 relay-based groups: h-tagged posts, moderation kinds 9000–9009, join/leave 9021/9022, relay-signed 39000–39003. Admins can always create groups via the groups.* actions. |
+| `negentropy.maxRecords` | number | `500000` | Most posts one sync may compare. Limits memory use for very large syncs. |
+| `negentropy.frameSizeLimit` | number | `131072` | Largest single sync message, in bytes. 0 = no limit. *Technical:* NEG-MSG frame size limit passed to the negentropy reconciler. |
+| `negentropy.maxSessions` | number | `4` | How many syncs one connection may run at the same time. |
+| `groups` | section |  | Group chats (channels) *Technical:* NIP-29 relay-based groups: h-tagged posts, moderation kinds 9000–9009, join/leave 9021/9022, relay-signed 39000–39003. Admins can always create groups via the groups.* actions. |
 | `groups.enabled` | boolean | `true` | Allow group chats (channels) on this relay |
 | `groups.whoCanCreate` | `anyone` \| `owner` | `"anyone"` | Who may start a new group from a Nostr app |
-| `countScanLimit` | number | `10000` | *Technical:* NIP-45: when filters may match audience-restricted events (gift wraps, private NIP-29 groups), COUNT scans up to this many matching events and applies REQ visibility per event; hitting the cap marks the answer approximate (a lower bound). |
-| `vanishIdCap` | number | `1000` | *Technical:* NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total. |
-| `software` | string | `"https://github.com/beamhop/beamhop"` |  |
-| `version` | string | `"0.1.0-alpha.0"` |  |
+| `countScanLimit` | number | `10000` | Most posts checked when an app asks "how many?" about private content. Higher is more exact but slower. *Technical:* NIP-45: when filters may match audience-restricted events (gift wraps, private NIP-29 groups), COUNT scans up to this many matching events and applies REQ visibility per event; hitting the cap marks the answer approximate (a lower bound). |
+| `vanishIdCap` | number | `1000` | When someone asks to erase their account, how many removed posts are listed in the activity log. Everything is still erased. *Technical:* NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total. |
+| `software` | string | `"https://github.com/beamhop/beamhop"` | Web address of the relay software, shown to apps. Change it only if you run a modified version. *Technical:* NIP-11 `software`. |
+| `version` | string | `"0.1.0-alpha.0"` | Software version shown to apps. Normally left as is. *Technical:* NIP-11 `version`. |
 
 ### `modules.webhooks`
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `hooks` | list | `[]` |  |
-| `hooks[].id` | string |  |  |
-| `hooks[].url` | string |  |  |
-| `hooks[].events` | list of `conn.open` \| `conn.close` \| `event.accepted` \| `event.rejected` \| `event.held` \| `event.deleted` \| `req.served` \| `auth.success` \| `report.received` \| `blob.uploaded` \| `blob.deleted` \| `blob.quarantined` \| `admin.action` \| `config.changed` \| `error` | `[]` |  |
-| `hooks[].filter.kinds` | list of number |  |  |
-| `hooks[].filter.authors` | list of string |  |  |
-| `hooks[].filter.relays` | list of string |  |  |
-| `hooks[].secret` | string |  |  |
-| `hooks[].enabled` | boolean | `true` |  |
-| `hooks[].description` | string |  |  |
-| `allowPrivate` | boolean | `false` |  |
-| `maxAttempts` | number | `6` |  |
-| `baseDelaySeconds` | number | `10` |  |
-| `maxDelaySeconds` | number | `3600` |  |
-| `timeoutMs` | number | `10000` |  |
+| `hooks` | list | `[]` | Web addresses to notify when things happen on your relay. |
+| `hooks[]` | section |  | A web address that gets notified |
+| `hooks[].id` | string |  | A short name for this webhook, used to refer to it. |
+| `hooks[].url` | string |  | The web address that receives the notifications. |
+| `hooks[].events` | list of `conn.open` \| `conn.close` \| `event.accepted` \| `event.rejected` \| `event.held` \| `event.deleted` \| `req.served` \| `auth.success` \| `report.received` \| `blob.uploaded` \| `blob.deleted` \| `blob.quarantined` \| `admin.action` \| `config.changed` \| `error` | `[]` | Which happenings to send, e.g. a new upload or a new report. |
+| `hooks[].filter` | section |  | Also send matching posts as they are accepted |
+| `hooks[].filter.kinds` | list of number |  | Only send posts of these types. Empty = all types. *Technical:* Event kinds to match. |
+| `hooks[].filter.authors` | list of string |  | Only send posts by these people. Empty = everyone. *Technical:* Hex pubkeys of event authors to match. |
+| `hooks[].filter.relays` | list of string |  | Only send posts accepted on these relays (their internal ids). Empty = all relays. |
+| `hooks[].secret` | string |  | A shared secret the receiver uses to check messages really come from you. Keep it private. *Technical:* HMAC-SHA256 key for X-Beamhop-Signature over "<timestamp>.<body>". |
+| `hooks[].enabled` | boolean | `true` | Turn this webhook on or off without deleting it. |
+| `hooks[].description` | string |  | A note for yourself about what this webhook is for. |
+| `allowPrivate` | boolean | `false` | Allow sending to addresses on your own private network, e.g. an internal service. Leave off unless you need it. *Technical:* Disables the SSRF guard for private, loopback and link-local targets. |
+| `maxAttempts` | number | `6` | How many times a failed delivery is tried before giving up. |
+| `baseDelaySeconds` | number | `10` | Wait before the first retry, in seconds. Later retries wait longer. *Technical:* Exponential backoff base: delay = min(max, base × 2^(attempt−1)). |
+| `maxDelaySeconds` | number | `3600` | Longest wait between retries, in seconds. |
+| `timeoutMs` | number | `10000` | How long to wait for the receiver to answer, in milliseconds. |

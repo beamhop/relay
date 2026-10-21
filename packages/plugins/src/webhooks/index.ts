@@ -18,6 +18,9 @@ import {
   type NostrEvent,
   defineAction,
   defineModule,
+  example,
+  labels,
+  technical,
 } from '@beamhop/core';
 import { z } from 'zod';
 import { commitConfig } from '../host/config-write.ts';
@@ -49,37 +52,134 @@ const APP_EVENTS = [
   'error',
 ] as const satisfies readonly AppEventName[];
 
-const FilterSchema = z.object({
-  kinds: z.array(z.number().int().min(0)).optional(),
-  authors: z.array(z.string().regex(/^[0-9a-f]{64}$/)).optional(),
-  relays: z.array(z.string()).optional(),
-});
+const APP_EVENT_LABELS: Record<(typeof APP_EVENTS)[number], string> = {
+  'conn.open': 'Someone connected',
+  'conn.close': 'Someone disconnected',
+  'event.accepted': 'A post was accepted',
+  'event.rejected': 'A post was rejected',
+  'event.held': 'A post was held for review',
+  'event.deleted': 'A post was deleted',
+  'req.served': 'A feed request was answered',
+  'auth.success': 'Someone signed in',
+  'report.received': 'A report was received',
+  'blob.uploaded': 'A file was uploaded',
+  'blob.deleted': 'A file was deleted',
+  'blob.quarantined': 'A file was quarantined',
+  'admin.action': 'An admin made a change',
+  'config.changed': 'Settings changed',
+  error: 'An error happened',
+};
+
+const FilterSchema = z
+  .object({
+    kinds: technical(
+      z
+        .array(z.number().int().min(0))
+        .optional()
+        .describe('Only send posts of these types. Empty = all types.'),
+      'Event kinds to match.',
+    ),
+    authors: technical(
+      z
+        .array(z.string().regex(/^[0-9a-f]{64}$/))
+        .optional()
+        .describe('Only send posts by these people. Empty = everyone.'),
+      'Hex pubkeys of event authors to match.',
+    ),
+    relays: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Only send posts accepted on these relays (their internal ids). Empty = all relays.',
+      ),
+  })
+  .describe('Also send matching posts as they are accepted');
 export type WebhookFilter = z.infer<typeof FilterSchema>;
 
-export const WebhookSchema = z.object({
-  id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),
-  url: z.string().url(),
-  /** App events to send (e.g. `blob.uploaded`, `report.received`). */
-  events: z.array(z.enum(APP_EVENTS)).default([]),
-  /** Also send accepted Nostr events matching this filter (type `nostr.event`). */
-  filter: FilterSchema.optional(),
-  secret: z.string().min(16),
-  enabled: z.boolean().default(true),
-  description: z.string().max(200).optional(),
-});
+export const WebhookSchema = z
+  .object({
+    id: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]{1,64}$/)
+      .describe('A short name for this webhook, used to refer to it.'),
+    url: example(
+      z.string().url().describe('The web address that receives the notifications.'),
+      'https://example.com/hooks/beamhop',
+    ),
+    /** App events to send (e.g. `blob.uploaded`, `report.received`). */
+    events: z
+      .array(labels(z.enum(APP_EVENTS), APP_EVENT_LABELS))
+      .default([])
+      .describe('Which happenings to send, e.g. a new upload or a new report.'),
+    /** Also send accepted Nostr events matching this filter (type `nostr.event`). */
+    filter: FilterSchema.optional(),
+    secret: technical(
+      z
+        .string()
+        .min(16)
+        .describe(
+          'A shared secret the receiver uses to check messages really come from you. Keep it private.',
+        ),
+      'HMAC-SHA256 key for X-Beamhop-Signature over "<timestamp>.<body>".',
+    ),
+    enabled: z.boolean().default(true).describe('Turn this webhook on or off without deleting it.'),
+    description: z
+      .string()
+      .max(200)
+      .optional()
+      .describe('A note for yourself about what this webhook is for.'),
+  })
+  .describe('A web address that gets notified');
 export type Webhook = z.infer<typeof WebhookSchema>;
 
 export const WebhooksConfigSchema = z
   .object({
-    hooks: z.array(WebhookSchema).default([]),
+    hooks: z
+      .array(WebhookSchema)
+      .default([])
+      .describe('Web addresses to notify when things happen on your relay.'),
     /** Allow targets on private / local networks (e.g. an internal service). */
-    allowPrivate: z.boolean().default(false),
-    maxAttempts: z.number().int().min(1).max(20).default(6),
-    baseDelaySeconds: z.number().int().positive().default(10),
-    maxDelaySeconds: z.number().int().positive().default(3600),
-    timeoutMs: z.number().int().positive().max(60_000).default(10_000),
+    allowPrivate: technical(
+      z
+        .boolean()
+        .default(false)
+        .describe(
+          'Allow sending to addresses on your own private network, e.g. an internal service. Leave off unless you need it.',
+        ),
+      'Disables the SSRF guard for private, loopback and link-local targets.',
+    ),
+    maxAttempts: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .default(6)
+      .describe('How many times a failed delivery is tried before giving up.'),
+    baseDelaySeconds: technical(
+      z
+        .number()
+        .int()
+        .positive()
+        .default(10)
+        .describe('Wait before the first retry, in seconds. Later retries wait longer.'),
+      'Exponential backoff base: delay = min(max, base × 2^(attempt−1)).',
+    ),
+    maxDelaySeconds: z
+      .number()
+      .int()
+      .positive()
+      .default(3600)
+      .describe('Longest wait between retries, in seconds.'),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(60_000)
+      .default(10_000)
+      .describe('How long to wait for the receiver to answer, in milliseconds.'),
   })
-  .prefault({});
+  .prefault({})
+  .describe('Webhooks');
 export type WebhooksConfig = z.infer<typeof WebhooksConfigSchema>;
 
 export interface Delivery {
