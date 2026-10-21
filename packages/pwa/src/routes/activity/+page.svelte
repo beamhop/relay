@@ -1,6 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  /** Activity (§6.1): live stream, moderation queue, recycle bin, team feed, alerts. */
+  /**
+   * Activity (§6.1): live stream (with refused posts and multi-select),
+   * moderation queue, recycle bin, team feed, alerts, errors & logs.
+   */
   import { page } from '$app/state';
   import Pause from '@lucide/svelte/icons/pause';
   import Play from '@lucide/svelte/icons/play';
@@ -15,11 +18,18 @@
   import ModerationQueue from '$lib/components/activity/ModerationQueue.svelte';
   import RecycleBin from '$lib/components/activity/RecycleBin.svelte';
   import TeamFeed from '$lib/components/activity/TeamFeed.svelte';
-  import AlertsList from '$lib/components/activity/AlertsList.svelte';
+  // Alerts, logs and refused posts load on demand (keeps the first load of Activity small).
+  const loadAlerts = () => import('$lib/components/activity/AlertsList.svelte');
+  const loadLogs = () => import('$lib/components/activity/LogViewer.svelte');
+  const loadRefused = () => import('$lib/components/activity/RefusedList.svelte');
+  import BulkActions from '$lib/components/activity/BulkActions.svelte';
+  import NotesButton from '$lib/components/notes/NotesButton.svelte';
+  import { longpress } from '$lib/components/activity/longpress';
+  import { type Pick, pickFromLive, selectRange } from '$lib/components/activity/bulk';
   import { m } from '$lib/paraglide/messages.js';
 
   const tab = $derived(page.url.searchParams.get('tab') ?? 'stream');
-  let filter = $state<StreamFilter>('all');
+  let filter = $state<StreamFilter | 'refused'>('all');
   let search = $state('');
 
   const filterLabel: Record<StreamFilter, () => string> = {
@@ -36,8 +46,32 @@
     live.items
       .filter((i) => i.name !== 'conn.open' && i.name !== 'conn.close')
       .filter((i) => filter === 'all' || groupOf(i.name) === filter)
-      .map((i) => ({ item: i, d: describeLive(i) }))
+      .map((i) => ({ item: i, d: describeLive(i), pick: pickFromLive(i.name, i.data) }))
       .filter((r) => !search || r.d.text.toLowerCase().includes(search.toLowerCase()) || (prefs.lens && r.d.technical.includes(search))),
+  );
+
+  /** Multi-select of posts in the stream (§6.13): long-press on phone, checkboxes / shift-click on desktop. */
+  let selecting = $state(false);
+  let selected = $state<Set<number>>(new Set());
+  let anchor: string | null = null;
+  const canModerate = $derived(app.can('moderation.write'));
+
+  function toggleRow(seq: number, e?: MouseEvent) {
+    selecting = true;
+    const order = rows.filter((r) => r.pick).map((r) => String(r.item.seq));
+    const next = selectRange(new Set([...selected].map(String)), order, anchor, String(seq), !!e?.shiftKey);
+    selected = new Set([...next].map(Number));
+    anchor = String(seq);
+    live.paused = true;
+  }
+  function stopSelecting() {
+    selecting = false;
+    selected = new Set();
+    anchor = null;
+    live.paused = false;
+  }
+  const picks = $derived<Pick[]>(
+    live.items.filter((i) => selected.has(i.seq)).map((i) => pickFromLive(i.name, i.data)).filter((p): p is Pick => !!p),
   );
 
   const moduleLinks = $derived(app.uiRoutes.filter((r) => r.placement === 'activity-section'));
@@ -55,6 +89,7 @@
     { id: 'bin', label: m.activity_tab_bin() },
     { id: 'feed', label: m.activity_tab_feed() },
     { id: 'alerts', label: m.activity_tab_alerts() },
+    { id: 'logs', label: m.act_tab_logs() },
   ]}
 />
 
@@ -66,7 +101,9 @@
   {:else if tab === 'feed'}
     <TeamFeed />
   {:else if tab === 'alerts'}
-    <AlertsList />
+    {#await loadAlerts() then { default: AlertsList }}<AlertsList />{/await}
+  {:else if tab === 'logs'}
+    {#await loadLogs() then { default: LogViewer }}<LogViewer />{/await}
   {:else}
     <div class="mb-3 flex flex-wrap items-center gap-2">
       <input
@@ -94,10 +131,27 @@
           {filterLabel[f]()}
         </button>
       {/each}
+      {#if app.hasAction('experience.recent-rejections')}
+        <button
+          class={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs', filter === 'refused' ? 'border-foreground' : 'text-muted-foreground')}
+          aria-pressed={filter === 'refused'}
+          onclick={() => ((filter = 'refused'), stopSelecting())}
+          data-testid="filter-refused"
+        >
+          {m.act_filter_refused()}
+        </button>
+      {/if}
     </div>
+    {#if filter === 'refused'}
+      {#await loadRefused() then { default: RefusedList }}<RefusedList />{/await}
+    {:else}
+    {#if selecting}
+      <BulkActions {picks} kinds={['remove', 'ban']} oncancel={stopSelecting} ondone={(_k, pending) => !pending && stopSelecting()} />
+    {/if}
     <p class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
       <span class={cn('size-2 rounded-full', live.connected ? 'animate-pulse bg-success' : 'bg-muted-foreground/40')}></span>
       {live.connected ? m.stream_live() : m.stream_offline()}
+      {#if canModerate && !selecting && rows.some((r) => r.pick)}<span class="ml-auto">{m.act_bulk_hint()}</span>{/if}
     </p>
     {#if rows.length === 0}
       <p class="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground" data-testid="stream-empty">{m.stream_empty()}</p>
@@ -105,17 +159,36 @@
       <div class="rounded-xl border">
         <VirtualList items={rows} key={(r) => r.item.seq} rowHeight={prefs.lens ? 64 : 52} testid="stream" height="calc(100dvh - 22rem)">
           {#snippet row(r)}
-            <div class="flex h-full items-center gap-3 border-b px-3">
+            <div
+              class={cn('flex h-full items-center gap-3 border-b px-3', selected.has(r.item.seq) && 'bg-primary/5')}
+              use:longpress={{ onlongpress: () => toggleRow(r.item.seq), enabled: canModerate && !!r.pick }}
+              data-testid="stream-row"
+            >
+              {#if canModerate && r.pick}
+                <input
+                  type="checkbox"
+                  class={cn('size-4 shrink-0', !selecting && 'hidden md:block')}
+                  checked={selected.has(r.item.seq)}
+                  onclick={(e) => {
+                    e.preventDefault();
+                    toggleRow(r.item.seq, e);
+                  }}
+                  aria-label={m.common_select()}
+                  data-testid="stream-check"
+                />
+              {/if}
               <span class={cn('size-2 shrink-0 rounded-full', tones[r.d.tone])}></span>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-sm">{r.d.text}</p>
                 {#if prefs.lens}<p class="truncate font-mono text-[10px] text-muted-foreground">{r.item.name} · {r.d.technical}</p>{/if}
               </div>
+              {#if r.pick?.eventId}<NotesButton subject={{ type: 'event', id: r.pick.eventId }} />{/if}
               <time class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{new Date(r.item.at).toLocaleTimeString()}</time>
             </div>
           {/snippet}
         </VirtualList>
       </div>
+    {/if}
     {/if}
   {/if}
 

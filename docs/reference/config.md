@@ -178,6 +178,8 @@ Each section exists only when that feature is turned on; enterprise features are
 | `tokens.maxDays` | number | `365` | Longest allowed lifetime for API tokens used by scripts and other tools. |
 | `live` | section |  | Live updates in the admin app |
 | `live.heartbeatSeconds` | number | `25` | How often the admin app's live view checks the connection is still alive, in seconds. Lower it if a proxy cuts idle connections. *Technical:* Interval of SSE keep-alive comments on the live stream. |
+| `logs` | section |  | Recent logs in the admin app |
+| `logs.keep` | number | `5000` | How many recent log lines the admin app can show. Older lines are dropped; nothing is written to disk. *Technical:* Capacity of the in-memory log ring buffer behind logs.query (since restart, per process). |
 
 ### `modules.ai`
 

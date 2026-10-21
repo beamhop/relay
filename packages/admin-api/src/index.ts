@@ -20,6 +20,7 @@ import { actionRoutes } from './http/routes-actions.ts';
 import { authRoutes } from './http/routes-auth.ts';
 import { configRoutes } from './http/routes-config.ts';
 import { liveRoutes } from './http/routes-live.ts';
+import { logActions } from './logs.ts';
 import { moduleActions } from './modules-actions.ts';
 import { type AdminApiConfig, AdminApiConfigSchema, MODULE_ID } from './settings.ts';
 import { UndoStore } from './undo.ts';
@@ -101,6 +102,7 @@ export const adminApiModule = defineModule({
     kernel.authProviders.push(...builtinProviders(kernel, dir, sessions, tokens));
     for (const a of builtinActions(kernel, dir, tokens)) kernel.actions.register(a);
     for (const a of moduleActions(kernel, config)) kernel.actions.register(a);
+    for (const a of logActions(kernel, () => settings().logs.keep)) kernel.actions.register(a);
     audit.attach();
 
     const claim: AdminClaimService = {

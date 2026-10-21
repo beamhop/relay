@@ -30,6 +30,11 @@ const ALIASES: Record<string, string> = {
   '/activity/feed': '/activity?tab=feed',
   '/activity/team': '/activity?tab=feed',
   '/activity/alerts': '/activity?tab=alerts',
+  '/activity/logs': '/activity?tab=logs',
+  '/activity/errors': '/activity?tab=logs',
+  '/activity/refused': '/activity?tab=stream',
+  '/activity/oncall': '/activity/on-call',
+  '/settings/on-call': '/activity/on-call',
   '/settings/ai': '/settings/privacy',
   '/settings/assistant': '/settings/privacy',
   '/settings/limits': '/settings/advanced',
@@ -59,6 +64,7 @@ export const SETTINGS_SECTIONS = [
 /** Fixed screens (besides the tabs). */
 const FIXED = new Set([
   '/help',
+  '/activity/on-call',
   '/settings/goals',
   '/settings/company',
   '/settings/history',
