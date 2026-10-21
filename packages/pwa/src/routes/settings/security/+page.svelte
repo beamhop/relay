@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Sign-in & recovery (§6.4, §6.11): recovery codes, passkeys, API tokens. */
   import { onMount } from 'svelte';

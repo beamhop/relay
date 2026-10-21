@@ -1,5 +1,5 @@
-import { bytesToHex } from '@noble/hashes/utils.js';
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { bytesToHex } from '@noble/hashes/utils.js';
 /** Desktop parity for the user-testing fixes (1440×900). */
 import { expect, test } from '@playwright/test';
 import { generateSecretKey } from 'nostr-tools/pure';

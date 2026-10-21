@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts" generics="T">
   /** Fixed-row-height virtual list: only the visible rows (plus overscan) are rendered. */
   import type { Snippet } from 'svelte';

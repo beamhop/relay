@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * Inbox-zero attention cards (§6.8, §6.9): swipe right runs the card's
@@ -14,6 +15,7 @@
   import { asApiError, flow } from '$lib/stores/actions.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
+  import { names } from '$lib/stores/names.svelte';
   import { assistant } from '$lib/stores/assistant.svelte';
   import { DISMISS, DISMISS_SECONDS, SNOOZE, type HomeCard, snoozeLocal, unsnoozeLocal } from '$lib/cards';
   import { to } from '$lib/nav';
@@ -187,10 +189,10 @@
               <Icon class="mt-0.5 size-5 shrink-0 {top.severity === 'critical' ? 'text-destructive' : top.severity === 'warning' ? 'text-warning' : 'text-primary'}" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <h3 class="font-medium leading-snug">{top.title}</h3>
+                  <h3 class="font-medium leading-snug">{names.text(top.title)}</h3>
                   {#if top.count > 1}<Badge tone={tones[top.severity]}>×{top.count}</Badge>{/if}
                 </div>
-                <p class="mt-1 text-sm text-muted-foreground">{top.body}</p>
+                <p class="mt-1 text-sm text-muted-foreground">{names.text(top.body)}</p>
                 {#if prefs.lens && top.technical}<p class="mt-2 font-mono text-[11px] text-muted-foreground" data-lens>{top.technical}</p>{/if}
               </div>
             </div>

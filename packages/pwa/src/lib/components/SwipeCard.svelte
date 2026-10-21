@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** A card you can swipe off the stack (Tinder-style triage, §6.2). */
   import type { Snippet } from 'svelte';

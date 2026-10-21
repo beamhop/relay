@@ -1,5 +1,5 @@
-import { checkComplexityBudget } from '$screens';
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { checkComplexityBudget } from '$screens';
 /** Complexity budget (§6.6): ≤ 7 settings per simple screen, every setting exists. */
 import { ConfigSchema, RelaySchema } from '@beamhop/core';
 import { describe, expect, it } from 'vitest';

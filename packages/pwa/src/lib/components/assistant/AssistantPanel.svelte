@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * Chat with the relay (§6.5, §6.9): bottom sheet on phones, side panel on

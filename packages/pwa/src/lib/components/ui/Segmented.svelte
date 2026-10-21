@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Segmented tabs bound to the `?tab=` query parameter (deep-linkable, back-button friendly). */
   import { goto } from '$app/navigation';

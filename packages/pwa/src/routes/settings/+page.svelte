@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Settings (§6.1): persona at the top, goals, grouped sections, lens, history. */
   import { onMount } from 'svelte';

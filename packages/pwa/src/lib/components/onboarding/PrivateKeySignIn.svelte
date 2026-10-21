@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * "Sign in with your private key" (nsec / hex / ncryptsec). The key stays in

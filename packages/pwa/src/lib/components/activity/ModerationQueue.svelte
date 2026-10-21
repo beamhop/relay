@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * Swipe triage (§5.3, §6.2): → keep, ← remove, ↑ block author, ↓ skip.
@@ -21,7 +22,8 @@
   import { toasts } from '$lib/stores/toasts.svelte';
   import { assistant } from '$lib/stores/assistant.svelte';
   import { haptic } from '$lib/haptics';
-  import { short, ago } from '$lib/utils';
+  import { ago } from '$lib/utils';
+  import { names } from '$lib/stores/names.svelte';
   import SwipeCard from '../SwipeCard.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
@@ -235,7 +237,7 @@
               <span class="text-xs text-muted-foreground">{ago(top.createdAt)}</span>
             </div>
             <p class="mt-3 flex items-start gap-2 text-sm font-medium" data-testid="queue-reason">
-              <Flag class="mt-0.5 size-4 shrink-0 text-warning" />{top.reason}
+              <Flag class="mt-0.5 size-4 shrink-0 text-warning" />{names.text(top.reason)}
             </p>
             {#if top.event}
               <blockquote class="mt-3 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 p-3 text-sm">
@@ -250,7 +252,7 @@
               </ul>
             {/if}
             <p class="mt-3 text-xs text-muted-foreground">
-              {m.mod_author()} <span class="font-mono">{short(top.pubkey ?? top.event?.pubkey)}</span>
+              {m.mod_author()} <span data-testid="queue-author">{names.label(top.pubkey ?? top.event?.pubkey)}</span>
             </p>
             {#if prefs.lens}
               <p class="mt-2 break-all font-mono text-[11px] text-muted-foreground" data-lens>

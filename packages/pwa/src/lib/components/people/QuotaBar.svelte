@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** "2.1 GB of 5 GB · 2.9 GB left" with a bar; red and badged when over the limit. */
   import type { QuotaInfo } from './users';

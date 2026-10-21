@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Relay switcher (§6.1), shown only when the node hosts more than one virtual relay. */
   import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';

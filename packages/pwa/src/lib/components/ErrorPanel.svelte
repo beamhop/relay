@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Error boundary fallback / failed load, with a "Why?" sheet (§6.10). */
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';

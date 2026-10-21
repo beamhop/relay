@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Media (§6.1): file grid, quarantined items, per-person usage, quotas; multi-select bulk delete. */
   import { onMount } from 'svelte';
@@ -14,7 +15,8 @@
   import { prefs } from '$lib/stores/prefs.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
   import type { BlobItem, RelayConfig, UsageSummary } from '$lib/api/types';
-  import { ago, cn, formatBytes, short } from '$lib/utils';
+  import { ago, cn, formatBytes } from '$lib/utils';
+  import { names } from '$lib/stores/names.svelte';
   import { to } from '$lib/nav';
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import SwipeRow from '$lib/components/SwipeRow.svelte';
@@ -163,7 +165,7 @@
             <li class="flex items-center gap-3 p-3">
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <span class="min-w-0 flex-1 truncate font-mono text-xs">{short(u.pubkey, 8)}</span>
+                  <span class="min-w-0 flex-1 truncate text-sm">{names.label(u.pubkey)}</span>
                   {#if !q}<span class="text-sm tabular-nums">{formatBytes(u.usedBytes)}</span>{/if}
                 </div>
                 {#if q}<QuotaBar {q} compact />{/if}
@@ -197,7 +199,7 @@
       <ul class="divide-y rounded-xl border" data-testid="usage-list">
         {#each usage as u (u.pubkey)}
           <li class="flex items-center gap-3 p-3">
-            <span class="min-w-0 flex-1 truncate font-mono text-xs">{short(u.pubkey, 8)}</span>
+            <span class="min-w-0 flex-1 truncate text-sm">{names.label(u.pubkey)}</span>
             <span class="text-xs text-muted-foreground">{m.media_files_count({ count: u.files })}</span>
             <span class="w-20 text-right text-sm tabular-nums">{formatBytes(u.bytes)}</span>
             {#if app.hasAction('media.set-quota') && app.can('media.write')}
@@ -257,7 +259,7 @@
                 {#if selecting}<input type="checkbox" class="size-4" checked={selected.has(key(b))} onchange={() => toggle(b)} aria-label={m.common_select()} />{/if}
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-sm">{b.type ?? m.media_file()} · {formatBytes(b.size)}</p>
-                  <p class="text-xs text-muted-foreground">{short(b.pubkey)} · {b.uploadedAt ? ago(b.uploadedAt) : ''}</p>
+                  <p class="text-xs text-muted-foreground">{names.label(b.pubkey)} · {b.uploadedAt ? ago(b.uploadedAt) : ''}</p>
                   {#if prefs.lens}<p class="truncate font-mono text-[10px] text-muted-foreground">{b.sha256}</p>{/if}
                 </div>
                 {#if b.quarantined}<Badge tone="critical">{m.media_quarantined()}</Badge>{/if}

@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * Goals instead of knobs (§6.7): five sliders; Beamhop derives the exact

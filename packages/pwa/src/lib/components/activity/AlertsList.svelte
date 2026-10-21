@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * Alerts: open and recent alerts from the alerts module when it is installed (`alerts.list`),
@@ -10,6 +11,7 @@
   import { query } from '$lib/stores/actions.svelte';
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
+  import { names } from '$lib/stores/names.svelte';
   import { ago } from '$lib/utils';
   import { to } from '$lib/nav';
   import Badge from '../ui/badge.svelte';
@@ -88,8 +90,8 @@
             {r.severity === 'critical' ? m.severity_critical() : r.severity === 'warning' ? m.severity_warning() : m.severity_info()}
           </Badge>
           <div class="min-w-0 flex-1">
-            <p class="text-sm">{r.title}</p>
-            {#if r.body}<p class="text-xs text-muted-foreground">{r.body}</p>{/if}
+            <p class="text-sm">{names.text(r.title)}</p>
+            {#if r.body}<p class="text-xs text-muted-foreground">{names.text(r.body)}</p>{/if}
             {#if r.resolved}<p class="text-xs text-success">{m.alerts_resolved()}</p>{/if}
             {#if prefs.lens && r.technical}<p class="font-mono text-[10px] text-muted-foreground">{r.technical}</p>{/if}
           </div>

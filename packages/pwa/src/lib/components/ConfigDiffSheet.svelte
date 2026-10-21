@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Plain-language diff of a proposed settings change, then apply (5-minute undo). */
   import { configFlow } from '$lib/stores/config.svelte';

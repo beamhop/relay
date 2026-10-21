@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Recycle bin (§6.11): removed posts and files, restorable until they are purged. */
   import { onMount } from 'svelte';
@@ -5,6 +6,7 @@
   import { app } from '$lib/stores/app.svelte';
   import { runNow, asApiError } from '$lib/stores/actions.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
+  import { names } from '$lib/stores/names.svelte';
   import { ago, short } from '$lib/utils';
   import Button from '../ui/button.svelte';
   import Skeleton from '../ui/skeleton.svelte';
@@ -64,7 +66,7 @@
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm">{e.type === 'event' ? e.event?.content || m.mod_no_text() : m.bin_file({ id: short(e.id) })}</p>
           <p class="text-xs text-muted-foreground">
-            {m.bin_removed({ when: ago(e.removedAt) })} · {m.bin_days_left({ count: daysLeft(e) })}{e.reason ? ` · ${e.reason}` : ''}
+            {m.bin_removed({ when: ago(e.removedAt) })} · {m.bin_days_left({ count: daysLeft(e) })}{e.event ? ` · ${names.label(e.event.pubkey)}` : ''}{e.reason ? ` · ${names.text(e.reason)}` : ''}
           </p>
           {#if prefs.lens}<p class="font-mono text-[10px] text-muted-foreground">{e.id} · by {e.by}</p>{/if}
         </div>

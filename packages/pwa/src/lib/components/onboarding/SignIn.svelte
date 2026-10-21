@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import Building2 from '@lucide/svelte/icons/building-2';

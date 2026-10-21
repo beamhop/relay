@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** People (§6.1): users, team & roles, invites, access mode. */
   import { onMount } from 'svelte';
@@ -12,7 +13,8 @@
   import type { BlobItem, RelayConfig, RunResult } from '$lib/api/types';
   import { mergeUsers, quotaOf, type UserRow } from '$lib/components/people/users';
   import QuotaBar from '$lib/components/people/QuotaBar.svelte';
-  import { ago, formatBytes, short } from '$lib/utils';
+  import { ago, formatBytes } from '$lib/utils';
+  import { names } from '$lib/stores/names.svelte';
   import { to } from '$lib/nav';
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import SwipeRow from '$lib/components/SwipeRow.svelte';
@@ -49,6 +51,8 @@
     admins = team?.admins ?? [];
     fromModule = !!listed;
     users = listed?.users ?? mergeUsers(blobs?.items ?? [], live.items, admins);
+    names.rememberRows(admins);
+    names.rememberRows(users);
     relayCfg = (await app.api.relayConfig().catch(() => null))?.relay ?? null;
   }
   onMount(load);
@@ -212,7 +216,7 @@
                 <button class="flex w-full items-center gap-3 p-3 text-left" onclick={() => (selected = u)}>
                   <div class="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px]">{u.pubkey.slice(0, 2)}</div>
                   <div class="min-w-0 flex-1">
-                    <p class="truncate text-sm font-medium">{u.name ?? short(u.pubkey, 8)}</p>
+                    <p class="truncate text-sm font-medium">{u.name ?? names.label(u.pubkey)}</p>
                     <p class="text-xs text-muted-foreground">
                       {u.tier ?? m.people_default_tier()} · {u.lastSeen ? ago(u.lastSeen) : m.people_not_seen()}
                       {#if u.storageBytes && !q}· {formatBytes(u.storageBytes)}{/if}

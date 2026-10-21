@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Config time machine (§6.11): a timeline of revisions; restore any point in one tap. */
   import { onMount } from 'svelte';

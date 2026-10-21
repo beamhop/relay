@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Help when lost (§6.10): guided playbooks with one-tap steps. */
   import { onMount } from 'svelte';

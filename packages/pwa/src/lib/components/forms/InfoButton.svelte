@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * ⓘ sheet (§6.2): plain explanation, an example, the recommended value and
