@@ -563,7 +563,7 @@ Each section exists only when that feature is turned on; enterprise features are
 | `countScanLimit` | number | `10000` | Most posts checked when an app asks "how many?" about private content. Higher is more exact but slower. *Technical:* NIP-45: when filters may match audience-restricted events (gift wraps, private NIP-29 groups), COUNT scans up to this many matching events and applies REQ visibility per event; hitting the cap marks the answer approximate (a lower bound). |
 | `vanishIdCap` | number | `1000` | When someone asks to erase their account, how many removed posts are listed in the activity log. Everything is still erased. *Technical:* NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total. |
 | `software` | string | `"https://github.com/beamhop/beamhop"` | Web address of the relay software, shown to apps. Change it only if you run a modified version. *Technical:* NIP-11 `software`. |
-| `version` | string | `"0.1.0-alpha.0"` | Software version shown to apps. Normally left as is. *Technical:* NIP-11 `version`. |
+| `version` | string | `"0.1.0"` | Software version shown to apps. Normally left as is. *Technical:* NIP-11 `version`. |
 
 ### `modules.webhooks`
 

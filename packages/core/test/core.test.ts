@@ -117,7 +117,7 @@ describe('version', () => {
     const root = (await import('../../../package.json', { with: { type: 'json' } })).default as {
       version: string;
     };
-    expect(root.version).toBe('0.1.0-alpha.0');
+    expect(root.version).toBe('0.1.0');
     expect(BEAMHOP_VERSION).toBe(root.version);
   });
 });

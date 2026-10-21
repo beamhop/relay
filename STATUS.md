@@ -1,6 +1,6 @@
 # Beamhop — build status
 
-**Version:** `0.1.0-alpha.0` · **Date:** 2026-10-21 · **Branch:** `main`
+**Version:** `0.1.0` · **Date:** 2026-10-22 · **Branch:** `main`
 
 Built by a coordinated swarm in waves (contracts first, then parallel agents in isolated git worktrees, merged and verified after every wave). Plan: [PLAN.md](PLAN.md). Conventions: [CLAUDE.md](CLAUDE.md). Gap sweep and what closed it: [GAPS.md](GAPS.md).
 
