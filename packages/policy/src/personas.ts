@@ -70,9 +70,20 @@ export const personaPresets: Record<Persona, RelayConfigPatch> = {
  * Only ever switches features on: modules are shared by every relay on the
  * node, so applying another persona to one relay never turns them off.
  * `team.enabled` serves the Team app at /app (runtime-bun, default off).
+ * `enterprise-identity` (company sign-in) is an optional module: writing its section
+ * makes the runtime load it without a restart (§12.0: the Company persona is its
+ * entry point). Key custody, compliance and network controls stay off until chosen.
  */
 export const personaModulePresets: Partial<Record<Persona, Record<string, unknown>>> = {
-  organization: { team: { enabled: true } },
+  organization: { team: { enabled: true }, 'enterprise-identity': { enabled: true } },
+};
+
+/** Plain-language lines for optional modules a persona switches on. */
+const MODULE_LINES: Record<string, { text: string; technical: string }> = {
+  'enterprise-identity': {
+    text: 'Company sign-in turns on (Google Workspace, Microsoft or another provider — set it up under Settings → Company sign-in)',
+    technical: "modules['enterprise-identity'] added (hot-loaded; OIDC SSO, SCIM, directory sync)",
+  },
 };
 
 /** Merge a persona's module presets into `config.modules`. */
@@ -89,15 +100,19 @@ export function diffPersonaModules(modules: Record<string, unknown>, persona: Pe
   const next = applyPersonaModules(modules, persona);
   const team = (m: Record<string, unknown>) =>
     (m.team as { enabled?: boolean } | undefined)?.enabled === true;
+  const lines: DiffLine[] = [];
   if (team(next) && !team(modules))
-    return [
-      {
-        kind: 'add',
-        text: 'Team app turns on (at /app)',
-        technical: 'modules.team.enabled: false → true',
-      },
-    ];
-  return [];
+    lines.push({
+      kind: 'add',
+      text: 'Team app turns on (at /app)',
+      technical: 'modules.team.enabled: false → true',
+    });
+  for (const [id, line] of Object.entries(MODULE_LINES)) {
+    const on = (m: Record<string, unknown>) =>
+      isPlainObject(m[id]) && (m[id] as { enabled?: boolean }).enabled !== false;
+    if (on(next) && !on(modules)) lines.push({ kind: 'add', ...line });
+  }
+  return lines;
 }
 
 export const personaInfo: Record<Persona, { title: string; description: string }> = {

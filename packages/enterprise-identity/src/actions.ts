@@ -80,11 +80,25 @@ async function affected(
   return out;
 }
 
-function baseUrlFor(kernel: Kernel, identity: EnterpriseIdentityService): string {
+/**
+ * Base address for redirect URIs and SCIM: the configured `publicUrl`, else the
+ * origin the admin opened the admin app from (`baseUrl` input), else the first relay host.
+ */
+function baseUrlFor(kernel: Kernel, identity: EnterpriseIdentityService, hint?: string): string {
   const configured = identity.cfg().publicUrl;
   if (configured) return configured.replace(/\/+$/, '');
-  const host = kernel.config().relays[0]?.hosts[0];
+  if (hint) {
+    try {
+      return new URL(hint).origin;
+    } catch {}
+  }
+  const host = kernel.config().relays[0]?.hosts.find((h) => h !== '*' && !h.includes('*'));
   return host ? `https://${host}` : 'https://your-server.example.com';
+}
+
+/** Provider id used in sign-in links (`entra` for Microsoft unless given). */
+function idpIdOf(input: { provider: 'google' | 'microsoft' | 'oidc'; id?: string | undefined }) {
+  return input.id ?? (input.provider === 'microsoft' ? 'entra' : input.provider);
 }
 
 export function createActions(deps: ActionDeps): ActionDef[] {
@@ -283,52 +297,89 @@ export function createActions(deps: ActionDeps): ActionDef[] {
       title: 'Connect your company directory',
       description: 'Step-by-step setup for Google, Microsoft or another sign-in provider.',
       technical:
-        'OIDC client registration (redirect URIs), SCIM 2.0 endpoint + bearer token (Entra/Okta), Google Directory API service account.',
+        'OIDC client registration (redirect URIs), SCIM 2.0 endpoint + bearer token (Entra/Okta), Google Directory API service account. Without clientId: returns the steps only; with clientId: saves modules.enterprise-identity.idps[id] (versioned config revision).',
       scope: 'node',
       permission: 'config.write',
+      keywords: ['sso', 'company sign-in', 'google workspace', 'microsoft', 'entra', 'okta'],
       input: z.object({
         provider: z.enum(['google', 'microsoft', 'oidc']),
         id: z
           .string()
           .regex(/^[a-z0-9-]{1,32}$/)
           .optional(),
+        label: z.string().max(80).optional().describe('Button text, e.g. "Sign in with Contoso"'),
         clientId: z.string().optional(),
         clientSecret: z.string().optional(),
         tenant: z.string().optional(),
         hostedDomain: z.string().optional(),
+        domain: z
+          .string()
+          .optional()
+          .describe(
+            'Company email domain, e.g. company.com (Google: only this domain can sign in)',
+          ),
         issuer: z.string().url().optional(),
-        scimToken: z.boolean().default(true).describe('Create a provisioning (SCIM) token'),
+        baseUrl: z
+          .string()
+          .url()
+          .optional()
+          .describe('Address you use to open the admin app (for the redirect address)'),
+        scimToken: z
+          .boolean()
+          .optional()
+          .describe(
+            'Create a provisioning (SCIM) token. Default: only when there is none yet; true replaces the old one.',
+          ),
       }),
       async preview(input) {
+        const id = idpIdOf(input);
         const lines: DiffLine[] = [
           { kind: 'info', text: `Shows the setup steps for ${providerName(input.provider)}` },
         ];
         if (input.clientId)
-          lines.push({ kind: 'add', text: `Adds ${providerName(input.provider)} sign-in` });
-        if (input.provider !== 'google' && input.scimToken)
           lines.push({
-            kind: 'warning',
-            text: 'Creates a new provisioning token (an older one stops working)',
+            kind: identity.idp(id) ? 'change' : 'add',
+            text: `${identity.idp(id) ? 'Updates' : 'Adds'} ${providerName(input.provider)} sign-in`,
+            technical: `modules.${MODULE_ID}.idps[${id}]`,
           });
+        if (input.provider !== 'google') {
+          const existing = await scimTokenInfo(kernel, id);
+          if (input.scimToken === true && existing)
+            lines.push({
+              kind: 'warning',
+              text: 'Creates a new provisioning token (the old one stops working)',
+            });
+          else if (input.scimToken !== false && !existing)
+            lines.push({ kind: 'add', text: 'Creates a provisioning token' });
+        }
         return lines;
       },
       async run(input, ctx) {
-        const id = input.id ?? (input.provider === 'microsoft' ? 'entra' : input.provider);
-        const base = baseUrlFor(kernel, identity);
+        const id = idpIdOf(input);
+        const base = baseUrlFor(kernel, identity, input.baseUrl);
         const redirectUris = {
           admin: redirectUriOf(base, id),
           team: redirectUriOf(base, id),
         };
         let scimToken: string | undefined;
-        if (input.provider !== 'google' && input.scimToken)
-          scimToken = await createScimToken(kernel, id);
+        let scimTokenLast4: string | undefined;
+        if (input.provider !== 'google' && input.scimToken !== false) {
+          const existing = await scimTokenInfo(kernel, id);
+          if (input.scimToken === true || !existing) scimToken = await createScimToken(kernel, id);
+          else scimTokenLast4 = existing.last4;
+        }
+        const hostedDomain =
+          input.hostedDomain ?? (input.provider === 'google' ? input.domain : undefined);
+        const prevIdp = identity.idp(id);
         const idpEntry = IdpSchema.parse({
+          ...(prevIdp ?? {}),
           id,
           type: input.provider,
-          clientId: input.clientId ?? 'PASTE-CLIENT-ID',
+          clientId: input.clientId ?? prevIdp?.clientId ?? 'PASTE-CLIENT-ID',
+          ...(input.label ? { label: input.label } : {}),
           ...(input.clientSecret ? { clientSecret: input.clientSecret } : {}),
           ...(input.tenant ? { tenant: input.tenant } : {}),
-          ...(input.hostedDomain ? { hostedDomain: input.hostedDomain } : {}),
+          ...(hostedDomain ? { hostedDomain } : {}),
           ...(input.issuer ? { issuer: input.issuer } : {}),
         });
         let applied = false;
@@ -341,6 +392,10 @@ export function createActions(deps: ActionDeps): ActionDef[] {
           const idps = ((section.idps as Array<{ id: string }>) ?? []).filter((i) => i.id !== id);
           section.idps = [...idps, idpEntry];
           section.configured = true;
+          // Keep redirect addresses stable: remember the address the admin set this up from.
+          if (!section.publicUrl && input.baseUrl) section.publicUrl = base;
+          const nip05 = { ...((section.nip05 as Record<string, unknown>) ?? {}) };
+          if (input.domain && !nip05.domain) section.nip05 = { ...nip05, domain: input.domain };
           await cfgSvc.apply(
             { ...cur, modules: { ...cur.modules, [MODULE_ID]: section } },
             { principalId: ctx.principal.id, summary: `Connected ${providerName(input.provider)}` },
@@ -356,6 +411,7 @@ export function createActions(deps: ActionDeps): ActionDef[] {
               redirectUris,
               scimUrl: `${base}${SCIM_BASE}`,
               scimToken,
+              scimTokenLast4,
               tenant: input.tenant,
             }),
             values: {
@@ -363,11 +419,14 @@ export function createActions(deps: ActionDeps): ActionDef[] {
               signInUrl: `${base}/api/v1/sso/${id}/start`,
               ...(input.provider !== 'google' ? { scimUrl: `${base}${SCIM_BASE}` } : {}),
               ...(scimToken ? { scimToken } : {}),
+              ...(scimTokenLast4 ? { scimTokenLast4 } : {}),
             },
-            config: idpEntry,
+            config: { ...idpEntry, ...(idpEntry.clientSecret ? { clientSecret: '••••' } : {}) },
             applied,
           },
-          summary: `Setup steps for ${providerName(input.provider)}`,
+          summary: applied
+            ? `Connected ${providerName(input.provider)}`
+            : `Setup steps for ${providerName(input.provider)}`,
         };
       },
     }),
@@ -493,6 +552,19 @@ function providerName(p: 'google' | 'microsoft' | 'oidc'): string {
       : 'your provider';
 }
 
+/** Copy-paste entry for the provisioning token (or a hint when an existing one is kept). */
+function tokenCopy(
+  label: string,
+  v: { scimToken?: string | undefined; scimTokenLast4?: string | undefined },
+): Record<string, string> {
+  if (v.scimToken) return { [label]: v.scimToken };
+  if (v.scimTokenLast4)
+    return {
+      [label]: `(already created, ends with …${v.scimTokenLast4} — create a new one if you lost it)`,
+    };
+  return {};
+}
+
 export function setupSteps(
   provider: 'google' | 'microsoft' | 'oidc',
   v: {
@@ -500,6 +572,8 @@ export function setupSteps(
     redirectUris: { admin: string; team: string };
     scimUrl: string;
     scimToken?: string | undefined;
+    /** Last 4 characters of an existing provisioning token (shown when it is not re-created). */
+    scimTokenLast4?: string | undefined;
     tenant?: string | undefined;
   },
 ): Array<{ title: string; body: string; copy?: Record<string, string> }> {
@@ -542,7 +616,7 @@ export function setupSteps(
       {
         title: 'Turn on provisioning',
         body: 'Enterprise applications → your app → Provisioning → Automatic. Paste the tenant URL and secret token, then “Test Connection”. Under Mappings, map objectId to externalId for users.',
-        copy: { 'Tenant URL': v.scimUrl, ...(v.scimToken ? { 'Secret Token': v.scimToken } : {}) },
+        copy: { 'Tenant URL': v.scimUrl, ...tokenCopy('Secret Token', v) },
       },
       {
         title: 'Start provisioning',
@@ -562,7 +636,7 @@ export function setupSteps(
     {
       title: 'Optional: SCIM provisioning',
       body: 'Point SCIM 2.0 provisioning at Beamhop so people who leave lose access right away.',
-      copy: { 'SCIM base URL': v.scimUrl, ...(v.scimToken ? { 'Bearer token': v.scimToken } : {}) },
+      copy: { 'SCIM base URL': v.scimUrl, ...tokenCopy('Bearer token', v) },
     },
     { title: 'Test the connection', body: 'Press “Test connection” in Beamhop.' },
   ];

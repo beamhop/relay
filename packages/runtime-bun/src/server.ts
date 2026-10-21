@@ -7,16 +7,20 @@
  * dispatch to `kernel.http` with the `route` variable set.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import {
   BEAMHOP_VERSION,
   type BeamhopConfig,
   type BeamhopModule,
   type Kernel,
   type Logger,
+  type OptionalModuleSource,
   type Ports,
   type RouteContext,
   createKernel,
+  defineModule,
   dispatchHttp,
+  manageOptionalModules,
   parseConfig,
   resolveRelay,
   runRequestGates,
@@ -26,6 +30,7 @@ import type { Server } from 'bun';
 import { type AssetServer, createAssetServer } from './assets.ts';
 import { type DataLayout, ensureDataDir, parseListen, withDataDirDefaults } from './config.ts';
 import { BunConnection, type WsData } from './connection.ts';
+import { optionalModuleSources } from './modules.ts';
 import { JsonLogger } from './ports.ts';
 import {
   DISK_SERVICE,
@@ -102,6 +107,27 @@ export interface StartServerOptions {
   storageLoaders?: StorageLoaders;
   /** Max inbound WS frame (bytes). Per-relay limits are enforced by the relay module. */
   maxPayloadLength?: number;
+  /**
+   * Optional modules hot-loaded when their `config.modules[id]` section appears (and
+   * unloaded when it disappears). Default: the enterprise packages of
+   * {@link DEFAULT_MODULE_PACKAGES}; `false` turns hot loading off.
+   */
+  optionalModules?: OptionalModuleSource[] | false;
+}
+
+/** Service id of {@link bunRuntimeModule}'s secret file reader (key vault `kek.keyFile`). */
+export const SECRET_FILES_SERVICE = 'runtime.secret-files';
+
+/** Registered first: runtime services modules may need while registering. */
+export function bunRuntimeModule(): BeamhopModule {
+  return defineModule({
+    id: 'runtime-bun',
+    register(kernel) {
+      kernel.provide(SECRET_FILES_SERVICE, {
+        read: (path: string) => readFile(path, 'utf8'),
+      });
+    },
+  });
 }
 
 export interface RunningServer {
@@ -219,12 +245,20 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     runtime: 'bun',
     ports,
     config: bootConfig,
-    modules: opts.modules,
+    modules: [bunRuntimeModule(), ...opts.modules],
   });
   // Runtime facts for modules (lifecycle: safe mode, data dir, SQL snapshots).
   kernel.provide('runtime', { name: 'bun', safe, dataDir: layout.root });
   if (sqlService) kernel.provide('storage.sql', sqlService);
   kernel.provide(DISK_SERVICE, diskService(layout.root));
+  // Optional (enterprise) modules: hot-load/unload when `config.modules[id]` appears/disappears.
+  if (opts.optionalModules !== false) {
+    manageOptionalModules(
+      kernel,
+      opts.optionalModules ??
+        optionalModuleSources({ secretsDir: layout.secretsDir, env: process.env }, logger),
+    );
+  }
 
   if (safe) {
     const lkg = await lastKnownGood(kernel);
@@ -303,7 +337,8 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   // ── HTTP / WS ──
   const assets: AssetServer = createAssetServer({ mount: ADMIN_MOUNT, dir: opts.pwaDir });
   const teamApp = createTeamApp(kernel, { dir: opts.teamDir });
-  const nodeScope = opts.nodeScopePrefixes ?? [`${ADMIN_MOUNT}/`, '/api/'];
+  // `/scim/`: company directory provisioning is node-wide (404 unless company sign-in is on).
+  const nodeScope = opts.nodeScopePrefixes ?? [`${ADMIN_MOUNT}/`, '/api/', '/scim/'];
   const conns = new Set<BunConnection>();
   const startedAt = ports.clock.nowMs();
   let draining = false;
@@ -553,7 +588,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       if (timedOut) await server.stop(true);
       httpServer?.stop(true);
       ports.scheduler.cancel('runtime.tls.renew');
-      for (const m of [...topoSort(opts.modules)].reverse()) {
+      // Currently enabled modules (includes hot-enabled ones, excludes hot-disabled ones).
+      const running = kernel.modules?.() ?? topoSort(opts.modules);
+      for (const m of [...running].reverse()) {
         try {
           await m.stop?.(kernel);
         } catch (err) {

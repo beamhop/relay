@@ -188,6 +188,7 @@ export function createNetworkControls(kernel: Kernel): NetworkControls {
 export const networkModule: BeamhopModule = defineModule({
   id: NETWORK_MODULE_ID,
   configSchema: NetworkConfigSchema,
+  optional: true,
   register(kernel) {
     const controls = createNetworkControls(kernel);
     kernel.provide('enterprise.network', controls);

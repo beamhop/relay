@@ -15,11 +15,13 @@ import {
   type Kernel,
   type Logger,
   type MediaProcessor,
+  type OptionalModuleSource,
   type PubSub,
   type RouteContext,
   type Scheduler,
   createKernel,
   defineModule,
+  manageOptionalModules,
   parseConfig,
   resolveRelay,
   runRequestGates,
@@ -65,6 +67,38 @@ export const cfRuntimeModule: BeamhopModule = defineModule({
     });
   },
 });
+
+/**
+ * Default `config.modules[id]` sections written by `modules.enable` on Workers. The key
+ * vault reads its local master key from the `BEAMHOP_MASTER_KEY` secret
+ * (`wrangler secret put BEAMHOP_MASTER_KEY`); Workers have no file system for a key file.
+ */
+export const CF_OPTIONAL_DEFAULTS: Record<string, Record<string, unknown>> = {
+  'enterprise-identity': { enabled: true },
+  'enterprise-keyvault': { kek: { provider: 'local', keyEnv: 'BEAMHOP_MASTER_KEY' } },
+};
+
+/**
+ * Split bundled modules into those registered at boot and optional ones (`optional: true`)
+ * whose config section is absent. Optional modules must be bundled (listed in `builtins`)
+ * to be turned on later: Workers cannot import code at runtime.
+ */
+export function splitOptional(
+  all: BeamhopModule[],
+  config: BeamhopConfig,
+): { modules: BeamhopModule[]; optional: BeamhopModule[] } {
+  const optional = all.filter((m) => m.optional);
+  const modules = all.filter((m) => !m.optional || config.modules[m.id] !== undefined);
+  return { modules, optional };
+}
+
+function optionalSources(mods: BeamhopModule[]): OptionalModuleSource[] {
+  return mods.map((m) => ({
+    id: m.id,
+    load: async () => m,
+    defaultSection: async () => ({ ...(CF_OPTIONAL_DEFAULTS[m.id] ?? {}) }),
+  }));
+}
 
 /** Module id of the plugin host (`createBundledPluginHost` from `@beamhop/plugins`). */
 export const PLUGIN_HOST_ID = 'plugins';
@@ -162,7 +196,7 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     // With the bundled plugin host (`@beamhop/plugins`) in `modules`, it loads the
     // enabled plugins itself; resolving them here too would register them twice.
     const hostLoaded = (opts.modules ?? []).some((m) => m.id === PLUGIN_HOST_ID);
-    const modules = [
+    const all = [
       cfRuntimeModule,
       ...(opts.modules ?? []),
       ...resolveModules(
@@ -171,6 +205,9 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
         (msg, fields) => logger.log('warn', msg, fields),
       ),
     ];
+    // Optional (enterprise) modules: bundled, but registered only while their
+    // `config.modules[id]` section exists; hot-loaded/unloaded on config changes.
+    const { modules, optional } = splitOptional(all, baseConfig);
     const services: SharedServices = {
       env,
       logger,
@@ -180,8 +217,8 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
       shards: shardCount(env),
       baseConfig,
       modules,
-      createKernel: (over) =>
-        createKernel({
+      createKernel: async (over) => {
+        const kernel = await createKernel({
           runtime: 'cloudflare',
           config: baseConfig,
           modules,
@@ -198,7 +235,10 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
             crypto,
             ...(media ? { media } : {}),
           },
-        }),
+        });
+        if (optional.length) manageOptionalModules(kernel, optionalSources(optional));
+        return kernel;
+      },
     };
     if (media) services.media = media;
     return services;
