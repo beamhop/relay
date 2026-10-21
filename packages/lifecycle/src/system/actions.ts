@@ -43,6 +43,7 @@ export function createSystemActions(kernel: Kernel, updates: UpdateManager): Act
     scope: 'node',
     permission: 'node.manage',
     readOnly: true,
+    outbound: true,
     keywords: ['update', 'upgrade', 'version', 'release'],
     input: z.object({}),
     async run() {
@@ -146,6 +147,7 @@ export function createSystemActions(kernel: Kernel, updates: UpdateManager): Act
     scope: 'node',
     permission: 'config.write',
     readOnly: true,
+    outbound: true,
     keywords: ['doctor', 'diagnose', 'health', 'dns', 'certificate', 'proxy'],
     input: z.object({}),
     async run() {

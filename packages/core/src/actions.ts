@@ -64,6 +64,12 @@ export interface ActionDef<I extends z.ZodType = z.ZodType, O = unknown> {
   anyRelay?: boolean;
   /** Requires two-person approval when the approvals module is enabled (§12.9). */
   sensitive?: boolean;
+  /**
+   * Contacts other servers or addresses (a provider, a feed, DNS, a URL from the input),
+   * not just this server's own data and storage. The AI assistant never runs these: a
+   * model steered by untrusted text must not make the server reach out.
+   */
+  outbound?: boolean;
   /** Supports multi-select bulk invocation. */
   bulk?: boolean;
   /** Palette keywords. */

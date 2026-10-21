@@ -70,6 +70,7 @@ export function createAiSetupModule(opts: { fetch?: typeof fetch } = {}): Beamho
           scope: 'node',
           permission: 'config.write',
           readOnly: true,
+          outbound: true,
           keywords: ['ai', 'models', 'assistant', 'ollama', 'openai'],
           input: z.object({
             baseUrl: z.string().url().optional(),

@@ -417,6 +417,7 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     scope: 'relay',
     permission: 'config.write',
     readOnly: true,
+    outbound: true,
     keywords: ['test', 'check', 'reachable', 'diagnose'],
     input: z.object({ skipUpload: z.boolean().default(false), baseUrl: baseUrlInput }),
     async run(input, ctx): Promise<ActionResult<TestRelayReport | TestRelayNeedsDomain>> {

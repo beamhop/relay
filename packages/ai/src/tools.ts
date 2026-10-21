@@ -169,6 +169,8 @@ export function readTool(def: ActionDef): AssistantTool {
     async run(args, env) {
       if (!actionAvailable(env.kernel, def, env.principal, env.relayId))
         return { ok: false, error: 'Not allowed for this admin' };
+      if (def.sensitive || def.outbound)
+        return { ok: false, error: 'The assistant cannot run this. The admin can, on its screen.' };
       const parsed = parseInput(def, args, wrapped);
       if (!parsed.success)
         return { ok: false, error: `Invalid input: ${issuesText(parsed.error)}` };
@@ -241,8 +243,9 @@ export function actionTools(
   for (const def of kernel.actions.list()) {
     if (!actionAvailable(kernel, def, principal, relayId)) continue;
     if (def.readOnly) {
-      // Sensitive reads (exports, secrets) never go to a model that may be remote.
-      if (!def.sensitive) out.push(readTool(def));
+      // Sensitive reads (exports, secrets) never go to a model that may be remote, and
+      // the model never makes the server contact other servers (`outbound`).
+      if (!def.sensitive && !def.outbound) out.push(readTool(def));
     } else if (opts.proposals) out.push(proposeTool(def));
   }
   return out;

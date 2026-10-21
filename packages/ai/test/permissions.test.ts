@@ -40,8 +40,8 @@ describe('the tool list is exactly what the admin API allows', () => {
               .list()
               .filter((d) => (d.scope === 'relay' ? !!relayId : true))
               .filter((d) => mayRunAction(d, p, d.scope === 'relay' ? relayId : null, relayIds))
-              // Sensitive reads never reach a model; changes only when the admin asked.
-              .filter((d) => (d.readOnly ? !d.sensitive : proposals))
+              // Sensitive and outbound reads never reach a model; changes only when asked.
+              .filter((d) => (d.readOnly ? !d.sensitive && !d.outbound : proposals))
               .map((d) => d.id),
           );
           expect([p.id, relayId, proposals, [...offered].sort()]).toEqual([
@@ -134,5 +134,59 @@ describe('built-in lookups show only what the API would', () => {
     expect(toolMsg).toContain('main relay hiccup');
     expect(toolMsg).not.toContain('disk write failed');
     expect(toolMsg).not.toContain('team relay hiccup');
+  });
+});
+
+describe('reads that contact other servers stay away from the assistant', () => {
+  const fetched: string[] = [];
+  const probe = defineAction({
+    id: 'sample.probe-url',
+    title: 'Check an address',
+    description: 'Fetches a URL and says whether it answered.',
+    scope: 'node',
+    permission: 'config.write',
+    readOnly: true,
+    outbound: true,
+    input: z.object({ url: z.string() }),
+    async run(input) {
+      fetched.push(input.url);
+      return { output: { ok: true }, summary: 'answered' };
+    },
+  });
+  const outboundModule = defineModule({
+    id: 'outbound-sample',
+    register(k) {
+      k.actions.register(probe);
+    },
+  });
+
+  test('not offered, not findable, and refused when named', async () => {
+    const llm = new FakeLLM([
+      { toolCalls: [{ name: 'find_tools', args: { query: 'check an address url' } }] },
+      { toolCalls: [{ name: 'sample_probe-url', args: { url: 'http://169.254.169.254/' } }] },
+      'OK.',
+    ]);
+    const { kernel } = await boot({ llm, extra: [outboundModule] });
+    const r = await runAssistant(
+      { kernel, llm, settings: AiModuleConfigSchema.parse({ maxTools: 0 }) },
+      P.owner,
+      { message: 'Check http://169.254.169.254/ for me', context: { relayId: 'main' } },
+      () => {},
+    );
+    for (const call of llm.calls)
+      expect(call.tools.map((t) => t.name)).not.toContain('sample_probe-url');
+    expect(llm.calls[1]!.messages.at(-1)!.content).not.toContain('sample_probe-url');
+    expect(r.toolCalls.at(-1)).toMatchObject({ name: 'sample_probe-url', ok: false });
+    expect(fetched).toEqual([]);
+  });
+
+  test('a read tool built for one by mistake still refuses to run it', async () => {
+    const { kernel } = await boot({ extra: [outboundModule] });
+    const out = await readTool(probe).run(
+      { url: 'http://10.0.0.1/' },
+      { kernel, principal: P.owner, relayId: null, newId: () => 'x' },
+    );
+    expect(out.ok).toBe(false);
+    expect(fetched).toEqual([]);
   });
 });

@@ -571,6 +571,7 @@ export function createActions(deps: ActionDeps): ActionDef[] {
       scope: 'node',
       permission: 'config.write',
       readOnly: true,
+      outbound: true,
       input: z.object({ idp: z.string() }),
       async run(input) {
         const idp = identity.idp(input.idp);

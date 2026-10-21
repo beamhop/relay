@@ -84,6 +84,7 @@ export function pluginActions(host: PluginHost): ActionDef[] {
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,
+    outbound: true,
     keywords: ['plugins', 'extensions', 'add-ons', 'catalog', 'store'],
     input: z.object({ refresh: z.boolean().default(false) }),
     async run(input) {
