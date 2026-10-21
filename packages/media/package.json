@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@beamhop/blossom": "workspace:*",
+    "@beamhop/relay": "workspace:*",
     "@beamhop/testkit": "workspace:*"
   }
 }

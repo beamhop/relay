@@ -15,11 +15,22 @@ export const BLOSSOM_GC_JOB = 'blossom.gc';
 
 export function createBlossomModule(opts: BlossomOptions = {}): BeamhopModule {
   let svc: BlossomService | undefined;
+  const offs: Array<() => void> = [];
   return defineModule({
     id: 'blossom',
     register(kernel) {
       svc = new BlossomService(kernel, opts);
       kernel.provide('blossom', svc);
+      const s = svc;
+      // NIP-62: the person's files go with their posts (relay emits `user.vanished`).
+      offs.push(
+        kernel.bus.on('user.vanished', (e) =>
+          s.track('blossom.vanish', async () => {
+            const r = await s.vanish(e.relayId, e.pubkey, e.until);
+            if (r.removed) kernel.ports.logger.log('info', 'blossom vanish', { ...r });
+          }),
+        ),
+      );
       registerRoutes(kernel, svc);
       registerActions(kernel, svc);
       kernel.health.push(blossomHealthCheck(kernel));
@@ -40,6 +51,7 @@ export function createBlossomModule(opts: BlossomOptions = {}): BeamhopModule {
     },
     stop(kernel) {
       kernel.ports.scheduler.cancel(BLOSSOM_GC_JOB);
+      for (const off of offs.splice(0)) off();
     },
   });
 }
@@ -52,7 +64,10 @@ export { parseRange } from './routes.ts';
 export {
   ANONYMOUS,
   BlossomService,
+  HELD,
   type BlobDescriptor,
+  type HeldBlobRecord,
+  type VanishFilesResult,
   type BlossomOptions,
   type IngestParams,
   type IngestResult,

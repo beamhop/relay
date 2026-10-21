@@ -306,6 +306,7 @@ describe('NIP-62 right to vanish', () => {
   test('deletes everything by the author and blocks older re-publishing', async () => {
     const h = await setup();
     const deleted = h.record('event.deleted');
+    const vanished = h.record('user.vanished');
     const c = await h.connect();
     const k = makeKey();
     const other = makeKey();
@@ -318,6 +319,9 @@ describe('NIP-62 right to vanish', () => {
     const vanish = h.event(k, { kind: 62, tags: [['relay', 'wss://relay.test']] });
     expect((await h.publish(c, vanish))[2]).toBe(true);
     expect(deleted.at(-1)).toMatchObject({ cause: 'nip62' });
+    expect(vanished).toEqual([
+      { relayId: 'main', pubkey: k.pk, until: vanish.created_at, scope: 'relay' },
+    ]);
     expect(eventsOf(await h.req(c, 'a', { authors: [k.pk] }))).toEqual([]);
     expect(eventsOf(await h.req(c, 'b', { authors: [other.pk] }))).toEqual([keep]);
     const again = h.event(k, { created_at: now - 10 });
@@ -326,12 +330,14 @@ describe('NIP-62 right to vanish', () => {
 
   test('ALL_RELAYS is honored; other relays are refused', async () => {
     const h = await setup();
+    const vanished = h.record('user.vanished');
     const c = await h.connect();
     const k = makeKey();
     const wrong = h.event(k, { kind: 62, tags: [['relay', 'wss://elsewhere.example']] });
     expect((await h.publish(c, wrong))[2]).toBe(false);
     const all = h.event(k, { kind: 62, tags: [['relay', 'ALL_RELAYS']] });
     expect((await h.publish(c, all))[2]).toBe(true);
+    expect(vanished.map((v) => v.scope)).toEqual(['all']);
   });
 
   test('vanish is honored even when posting is restricted', async () => {

@@ -197,14 +197,24 @@ export class MediaService {
     }
   }
 
+  private readonly cleanups = new Set<Promise<void>>();
+
   onDeleted(e: AppEvents['blob.deleted']): void {
     if (e.pubkey === VARIANT_OWNER) return;
-    void this.cleanupVariants(e.relayId, e.sha256).catch((err) =>
-      this.kernel.ports.logger.log('warn', 'media variant cleanup failed', {
-        sha256: e.sha256,
-        error: String(err),
-      }),
-    );
+    const p: Promise<void> = this.cleanupVariants(e.relayId, e.sha256)
+      .catch((err) =>
+        this.kernel.ports.logger.log('warn', 'media variant cleanup failed', {
+          sha256: e.sha256,
+          error: String(err),
+        }),
+      )
+      .finally(() => this.cleanups.delete(p));
+    this.cleanups.add(p);
+  }
+
+  /** Resolves once pending variant clean-ups (after deletions, e.g. a vanish) are done. */
+  async cleanupsSettled(): Promise<void> {
+    while (this.cleanups.size) await Promise.allSettled([...this.cleanups]);
   }
 
   // ───────────── scanning ─────────────

@@ -94,6 +94,27 @@ export const ANONYMOUS = 'anonymous';
 export const QUOTAS = 'blossom.quotas';
 export const QUARANTINE = 'blossom.quarantine';
 export const STATE = 'blossom.state';
+/**
+ * Files kept under legal hold after their owner asked for removal (e.g. NIP-62
+ * vanish): key `<sha256>:<relayId>:<pubkey>` → the former ownership. The file is
+ * no longer served (the ownership is gone) but its bytes are never collected
+ * while a record for the hash exists.
+ */
+export const HELD = 'blossom.held';
+
+export interface HeldBlobRecord extends BlobOwnership {
+  cause: string;
+  heldAt: number;
+}
+
+export interface VanishFilesResult {
+  /** Ownerships removed (no longer served by this relay). */
+  removed: number;
+  /** Of those, how many were kept (bytes frozen) because of a legal hold. */
+  held: number;
+  /** Byte blobs erased because nobody owns them any more. */
+  erased: number;
+}
 
 export interface QuarantineRecord {
   reason: string;
@@ -448,10 +469,17 @@ export class BlossomService {
     }
   }
 
+  /** Were these bytes kept under legal hold after their owners removed them? */
+  async heldAfterRemoval(sha256: string): Promise<boolean> {
+    const page = await this.ports.docs.list(HELD, { prefix: `${sha256}:`, limit: 1 });
+    return page.items.length > 0;
+  }
+
   /** Delete bytes when no relay owns the blob any more (and no legal hold freezes them). */
   async collect(sha256: string, owner?: { relayId: RelayId; pubkey: string }): Promise<boolean> {
     if ((await this.ports.blobIndex.refCount(sha256)) > 0) return false;
     if (await this.bytesHeld(sha256, owner)) return false;
+    if (await this.heldAfterRemoval(sha256)) return false;
     const erased = await this.ports.blobs.delete(sha256);
     await this.ports.docs.delete(QUARANTINE, sha256);
     return erased;
@@ -467,6 +495,65 @@ export class BlossomService {
     if (!removed) return { removed, erased: false };
     this.kernel.bus.emit('blob.deleted', { relayId, sha256, pubkey, cause });
     return { removed, erased: await this.collect(sha256, { relayId, pubkey }) };
+  }
+
+  // ───────────── right to vanish (NIP-62) ─────────────
+
+  private readonly inflight = new Set<Promise<unknown>>();
+
+  /** Run `job` in the background, tracked by `settled()`; failures go to the bus. */
+  track(source: string, job: () => Promise<unknown>): void {
+    const p = job()
+      .catch((err) => this.kernel.bus.emit('error', { source, message: String(err) }))
+      .finally(() => this.inflight.delete(p));
+    this.inflight.add(p);
+  }
+
+  /** Resolves once background work (vanish requests) has finished. */
+  async settled(): Promise<void> {
+    while (this.inflight.size) await Promise.allSettled([...this.inflight]);
+  }
+
+  /**
+   * Remove every file `pubkey` uploaded to `relayId` at or before `until`:
+   * ownership rows go (the relay stops serving them, quota usage drops), and
+   * bytes are erased once no relay owns the hash any more. Files under legal
+   * hold stop being served too, but a `blossom.held` record keeps their bytes.
+   */
+  async vanish(relayId: RelayId, pubkey: string, until: number): Promise<VanishFilesResult> {
+    const r: VanishFilesResult = { removed: 0, held: 0, erased: 0 };
+    for (let guard = 0; guard < 10_000; guard++) {
+      const owned = await this.ports.blobIndex.listByOwner(relayId, pubkey, { until, limit: 200 });
+      if (owned.length === 0) break;
+      let progressed = false;
+      for (const o of owned) {
+        if (await this.ownershipHeld(o)) {
+          const rec: HeldBlobRecord = { ...o, cause: 'vanish', heldAt: this.ports.clock.now() };
+          await this.ports.docs.put(HELD, `${o.sha256}:${o.relayId}:${o.pubkey}`, rec);
+          r.held++;
+        }
+        const x = await this.removeOwnership(relayId, o.sha256, pubkey, 'vanish');
+        if (x.removed) {
+          progressed = true;
+          r.removed++;
+        }
+        if (x.erased) r.erased++;
+      }
+      if (!progressed) break;
+    }
+    return r;
+  }
+
+  /** Drop `blossom.held` records whose hold was lifted, then collect their bytes. */
+  async releaseHeld(max = 500): Promise<number> {
+    const page = await this.ports.docs.list<HeldBlobRecord>(HELD, { limit: max });
+    let erased = 0;
+    for (const { key, value } of page.items) {
+      if (await this.ownershipHeld(value)) continue;
+      await this.ports.docs.delete(HELD, key);
+      if (await this.collect(value.sha256, value)) erased++;
+    }
+    return erased;
   }
 
   /** One GC pass: drop expired ownerships, then sweep orphaned bytes. */
@@ -509,6 +596,7 @@ export class BlossomService {
       if (!cursor) break;
     }
     await this.ports.docs.put(STATE, 'gc', { cursor, lastRun: now });
+    erased += await this.releaseHeld();
     return { expired, erased, scanned };
   }
 }

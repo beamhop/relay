@@ -36,6 +36,19 @@ export interface AppEvents {
     /** Total number of deleted events when known; may exceed `ids.length` (ids unknown or capped). */
     count?: number;
   };
+  /**
+   * A person's request to vanish (NIP-62) was accepted on `relayId`: their events
+   * up to `until` are gone. Modules holding other data of theirs (files, media
+   * variants…) remove it too, respecting legal holds (stop serving, keep held data).
+   * `scope: 'all'` when the request named every relay (`ALL_RELAYS`).
+   */
+  'user.vanished': {
+    relayId: RelayId;
+    pubkey: string;
+    /** Unix seconds; data created/uploaded at or before this is removed. */
+    until: number;
+    scope: 'relay' | 'all';
+  };
   'req.served': {
     relayId: RelayId;
     connId: string;
