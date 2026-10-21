@@ -3,6 +3,7 @@
 import { ConfigSchema, RelaySchema, can } from '@beamhop/core';
 import { z } from 'zod';
 import { describeChanges } from '../config/describe.ts';
+import { toJsonSchemaWithNotes } from '../config/json-schema.ts';
 import { redactPatch } from '../config/patch.ts';
 import type { ConfigProposal, ConfigRevision } from '../config/service.ts';
 import { HttpError, redact } from '../util.ts';
@@ -44,8 +45,8 @@ function revisionInfo(r: ConfigRevision) {
 let cachedSchemas: { node: unknown; relay: unknown } | null = null;
 function jsonSchemas() {
   cachedSchemas ??= {
-    node: z.toJSONSchema(ConfigSchema, { io: 'input', unrepresentable: 'any' }),
-    relay: z.toJSONSchema(RelaySchema, { io: 'input', unrepresentable: 'any' }),
+    node: toJsonSchemaWithNotes(ConfigSchema),
+    relay: toJsonSchemaWithNotes(RelaySchema),
   };
   return cachedSchemas;
 }
