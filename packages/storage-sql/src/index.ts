@@ -5,6 +5,7 @@ export * from './factory.ts';
 export * from './events.ts';
 export * from './blob-index.ts';
 export * from './docs.ts';
+export { GroupCommitter } from './group-commit.ts';
 export * from './metrics.ts';
 export * from './migrate.ts';
 export * from './exec/types.ts';

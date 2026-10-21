@@ -64,7 +64,10 @@ export const LINK_PACKS: Record<string, string[]> = {
 
 const URL_RE = /https?:\/\/[^\s<>"']+/gi;
 
-class DuplicateWindow {
+/** Exact-duplicate fingerprints kept per relay (memory cap; oldest are forgotten first). */
+const EXACT_MAX = 50_000;
+
+export class DuplicateWindow {
   private exact = new Map<string, number>();
   private sims: Array<{ h: SimHash; at: number }> = [];
 
@@ -83,10 +86,17 @@ class DuplicateWindow {
   }
 
   record(norm: string, now: number, windowSeconds: number, distance: number): void {
-    if (this.exact.size > 50_000) {
-      for (const [k, v] of this.exact) if (v <= now) this.exact.delete(k);
+    if (this.exact.size >= EXACT_MAX) {
+      // Oldest first (insertion order ≈ expiry order): drop expired entries, then, if
+      // still full, the oldest live ones. Amortized O(1) per post, unlike a full scan.
+      for (const [k, v] of this.exact) {
+        if (v > now && this.exact.size < EXACT_MAX * 0.9) break;
+        this.exact.delete(k);
+      }
     }
-    this.exact.set(contentHash(norm), now + windowSeconds);
+    const key = contentHash(norm);
+    this.exact.delete(key);
+    this.exact.set(key, now + windowSeconds);
     if (distance > 0) {
       // `at` stores expiry so the reverse scan can stop at the first expired entry.
       this.sims.push({ h: simhash(norm), at: now + windowSeconds });

@@ -36,16 +36,10 @@ import {
   type Stmt,
   prepare,
 } from './exec/types.ts';
+import { type GroupCommitOptions, GroupCommitter } from './group-commit.ts';
 import { chunk, inList, json, jsonValues, num, param, ph, truthy } from './sql-util.ts';
 
-export interface GroupCommitOptions {
-  /** Group concurrent saves into one transaction (sync drivers only). Default true. */
-  enabled?: boolean;
-  /** Flush when this many saves are queued. Default 512. */
-  maxSize?: number;
-  /** Wait this long for more saves before committing (0 = end of current tick). Default 0. */
-  windowMs?: number;
-}
+export type { GroupCommitOptions } from './group-commit.ts';
 
 export interface SqlEventStoreOptions {
   /** Per-filter cap when neither `filter.limit` nor `opts.maxLimit` is given. Default 5000. */
@@ -53,6 +47,11 @@ export interface SqlEventStoreOptions {
   /** Rows deleted per statement in bulk deletes (keeps D1 statements short). Default 2000. */
   deleteChunk?: number;
   groupCommit?: GroupCommitOptions;
+  /**
+   * Shared group committer of the connection (the factory passes one so event and
+   * doc writes share transactions). Default: a private one built from `groupCommit`.
+   */
+  committer?: GroupCommitter;
   /** Called by `init()` (the factory passes a memoized `migrate()`). */
   ready?: () => Promise<void>;
   /** Unix seconds, for tombstone bookkeeping. */
@@ -86,13 +85,6 @@ function searchTerms(search: string): string[] {
     .filter((t) => t && !t.includes(':'));
 }
 
-interface Pending {
-  relayId: RelayId;
-  event: NostrEvent;
-  resolve: (r: SaveResult) => void;
-  reject: (e: unknown) => void;
-}
-
 interface Saves {
   insert: Prepared;
   insertAddr: Prepared;
@@ -106,10 +98,9 @@ export class SqlEventStore implements EventStore {
   private readonly defaultLimit: number;
   private readonly deleteChunk: number;
   private readonly now: () => number;
-  private readonly groupCommit: Required<GroupCommitOptions>;
   private readonly s: Saves;
-  private queue: Pending[] = [];
-  private scheduled = false;
+  /** Group committer (sync drivers with group commit on), else null. */
+  readonly committer: GroupCommitter | null;
 
   constructor(
     private readonly x: SqlExec,
@@ -118,16 +109,12 @@ export class SqlEventStore implements EventStore {
     this.defaultLimit = opts.defaultLimit ?? 5000;
     this.deleteChunk = opts.deleteChunk ?? 2000;
     this.now = opts.now ?? (() => Math.floor(Date.now() / 1000));
-    this.groupCommit = {
-      enabled: opts.groupCommit?.enabled ?? true,
-      maxSize: opts.groupCommit?.maxSize ?? 512,
-      windowMs: opts.groupCommit?.windowMs ?? 0,
-    };
+    const sync = x.sync;
+    this.committer =
+      sync && (opts.groupCommit?.enabled ?? true)
+        ? (opts.committer ?? new GroupCommitter(sync, opts.groupCommit))
+        : null;
     this.s = this.compileSaves();
-  }
-
-  private get batching(): boolean {
-    return this.groupCommit.enabled && this.x.sync !== undefined;
   }
 
   async init(): Promise<void> {
@@ -204,42 +191,16 @@ export class SqlEventStore implements EventStore {
   }
 
   save(relayId: RelayId, event: NostrEvent): Promise<SaveResult> {
-    if (!this.batching) return this.saveAsync(relayId, event);
-    return new Promise<SaveResult>((resolve, reject) => {
-      this.queue.push({ relayId, event, resolve, reject });
-      if (this.queue.length >= this.groupCommit.maxSize) {
-        this.flush();
-      } else if (!this.scheduled) {
-        this.scheduled = true;
-        if (this.groupCommit.windowMs > 0)
-          setTimeout(() => this.flush(), this.groupCommit.windowMs);
-        else queueMicrotask(() => this.flush());
-      }
-    });
+    if (!this.committer) return this.saveAsync(relayId, event);
+    return this.committer.enqueue(() => this.saveSync(relayId, event));
   }
 
-  /** Commit queued saves now (group commit). Called before every other operation. */
+  /**
+   * Commit queued writes now (group commit). Deletes, stats and close call it first,
+   * so they apply after every earlier save; reads see each save once it resolved.
+   */
   flush(): void {
-    this.scheduled = false;
-    if (this.queue.length === 0) return;
-    const items = this.queue;
-    this.queue = [];
-    const sync = this.x.sync!;
-    let results: SaveResult[];
-    try {
-      results = sync.transaction(() => items.map((it) => this.saveSync(it.relayId, it.event)));
-    } catch {
-      // Isolate the failing save(s): retry one transaction per event.
-      for (const it of items) {
-        try {
-          it.resolve(sync.transaction(() => this.saveSync(it.relayId, it.event)));
-        } catch (err) {
-          it.reject(err);
-        }
-      }
-      return;
-    }
-    items.forEach((it, i) => it.resolve(results[i]!));
+    this.committer?.flush();
   }
 
   private saveSync(relayId: RelayId, e: NostrEvent): SaveResult {
@@ -347,7 +308,7 @@ export class SqlEventStore implements EventStore {
   }
 
   async query(relayId: RelayId, filters: Filter[], opts?: QueryOptions): Promise<NostrEvent[]> {
-    this.flushIfBatching();
+    // Reads do not wait for queued saves: a save is visible once its promise resolved.
     const qs: Query[] = [];
     for (const f of filters) {
       const limit = this.effectiveLimit(f, opts);
@@ -373,7 +334,7 @@ export class SqlEventStore implements EventStore {
   }
 
   async count(relayId: RelayId, filters: Filter[]): Promise<number> {
-    this.flushIfBatching();
+    // Reads do not wait for queued saves: a save is visible once its promise resolved.
     const conds = filters
       .map((f) => {
         const c = this.where(relayId, f);
@@ -406,7 +367,7 @@ export class SqlEventStore implements EventStore {
   }
 
   async getById(relayId: RelayId, id: string): Promise<NostrEvent | null> {
-    this.flushIfBatching();
+    // Reads do not wait for queued saves: a save is visible once its promise resolved.
     const rows = await this.x.all(
       this.x.compile(sql`SELECT ${COLS} FROM events WHERE id = ${id} AND relay_id = ${relayId}`),
     );
@@ -601,6 +562,6 @@ export class SqlEventStore implements EventStore {
   }
 
   private flushIfBatching(): void {
-    if (this.batching && this.queue.length) this.flush();
+    if (this.committer?.pending) this.committer.flush();
   }
 }

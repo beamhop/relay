@@ -65,6 +65,8 @@ export interface SqlStores {
   metrics: SqlTimeSeries;
   /** Low-level executor (for modules that bring their own registered tables). */
   exec: SqlExec;
+  /** SQLite database file opened by the factory (absent for `:memory:` and other drivers). */
+  file?: string;
   /** Apply registered migrations now (idempotent). */
   migrate(): Promise<MigrateResult>;
   close(): Promise<void>;
@@ -132,7 +134,8 @@ export function storesFromExec(x: SqlExec, opts: CommonOptions = {}): SqlStores 
   return {
     events,
     blobIndex: new SqlBlobIndex(x, { ready }),
-    docs: new SqlDocStore(x, { ready }),
+    // Doc writes share the event store's group commit (one transaction per tick).
+    docs: new SqlDocStore(x, { ready, committer: events.committer }),
     metrics: new SqlTimeSeries(x, { ready }),
     exec: x,
     migrate: () => {
@@ -147,5 +150,10 @@ export function storesFromExec(x: SqlExec, opts: CommonOptions = {}): SqlStores 
 }
 
 export async function createSqlStores(opts: CreateSqlStoresOptions): Promise<SqlStores> {
-  return storesFromExec(await openExec(opts), opts);
+  const stores = storesFromExec(await openExec(opts), opts);
+  if (opts.driver === 'sqlite' && !opts.database) {
+    const path = sqlitePath(opts);
+    if (path !== ':memory:' && path !== '') stores.file = path;
+  }
+  return stores;
 }

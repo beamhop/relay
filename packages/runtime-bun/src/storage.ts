@@ -28,6 +28,10 @@ import {
 import type { DataLayout } from './config.ts';
 import { BunCrypto, BunScheduler, InProcessPubSub, systemClock } from './ports.ts';
 import { sharpLoader } from './sharp.ts';
+import {
+  BACKGROUND_CHECKPOINT_SAFETY_PAGES,
+  startSqliteCheckpointer,
+} from './sqlite-checkpointer.ts';
 
 export interface SqlStores {
   events: EventStore;
@@ -36,6 +40,8 @@ export interface SqlStores {
   metrics: TimeSeriesStore;
   /** storage-sql executor (offered to modules as `storage.sql`, e.g. lifecycle backups). */
   exec?: unknown;
+  /** SQLite database file, when the factory opened one. */
+  file?: string;
   close?: () => Promise<void> | void;
 }
 
@@ -45,7 +51,18 @@ export type CreateSqlStores = (opts: {
   url?: string;
   dataDir: string;
   logger: Logger;
+  /** SQLite pragma overrides. */
+  pragmas?: Record<string, string | number>;
+  /** Event store options (group commit). */
+  events?: { groupCommit?: { enabled?: boolean; maxSize?: number; windowMs?: number } };
 }) => Promise<Partial<SqlStores>> | Partial<SqlStores>;
+
+/**
+ * SQLite group commit window: saves arriving within this many milliseconds share one
+ * transaction. Each commit rewrites the touched index pages into the log, so fewer,
+ * larger commits are much cheaper; 2 ms adds at most that much to an OK.
+ */
+export const SQLITE_COMMIT_WINDOW_MS = 2;
 
 /** Shape the runtime expects from `@beamhop/blobs`. */
 export type CreateBlobStore = (
@@ -59,6 +76,8 @@ export interface StorageLoaders {
     { createBlobStore?: CreateBlobStore; createBlobStoreFromConfig?: CreateBlobStore } | undefined
   >;
   importMedia?: () => Promise<{ createBunMediaProcessor?: CreateMediaProcessor } | undefined>;
+  /** Run SQLite checkpoints on a background thread (default true; see sqlite-checkpointer.ts). */
+  backgroundCheckpoint?: boolean;
 }
 
 /** Shape the runtime expects from `@beamhop/media/bun` (sharp + ffmpeg composite). */
@@ -67,6 +86,14 @@ export type CreateMediaProcessor = (opts: {
   /** sharp loader for binaries shipping sharp next to them (see sharp.ts). */
   sharp?: { load?: () => Promise<unknown> };
 }) => Promise<{ processor?: MediaProcessor }>;
+
+/** SQLite's own default (pages); used again when no background checkpointer runs. */
+const DEFAULT_WAL_AUTOCHECKPOINT = 1000;
+
+async function setWalAutocheckpoint(exec: unknown, pages: number): Promise<void> {
+  const x = exec as { run?: (q: { sql: string; params: unknown[] }) => Promise<unknown> };
+  await x?.run?.({ sql: `PRAGMA wal_autocheckpoint = ${pages}`, params: [] });
+}
 
 async function tryImport<T>(load: () => Promise<unknown>): Promise<T | undefined> {
   try {
@@ -122,13 +149,29 @@ export async function createDefaultPorts(
       tryImport<{ createSqlStores?: CreateSqlStores }>(() => import('@beamhop/storage-sql')));
     if (typeof mod?.createSqlStores === 'function') {
       try {
+        const sqlite = config.storage.driver === 'sqlite';
+        const background = sqlite && loaders.backgroundCheckpoint !== false;
         sql = await mod.createSqlStores({
           driver: config.storage.driver,
           url: config.storage.url,
           dataDir: layout.root,
           logger: logger.child({ component: 'storage' }),
+          ...(sqlite ? { events: { groupCommit: { windowMs: SQLITE_COMMIT_WINDOW_MS } } } : {}),
+          ...(background
+            ? { pragmas: { wal_autocheckpoint: BACKGROUND_CHECKPOINT_SAFETY_PAGES } }
+            : {}),
         });
         if (sql.close) closers.push(sql.close.bind(sql));
+        if (background && sql.file) {
+          const cp = await startSqliteCheckpointer(sql.file, {
+            logger: logger.child({ component: 'storage' }),
+          });
+          // Stopped before the database closes (closers run in order).
+          if (cp) closers.unshift(() => cp.stop());
+          else await setWalAutocheckpoint(sql.exec, DEFAULT_WAL_AUTOCHECKPOINT);
+        } else if (background) {
+          await setWalAutocheckpoint(sql.exec, DEFAULT_WAL_AUTOCHECKPOINT);
+        }
       } catch (err) {
         logger.log('error', 'database could not be opened', { err });
         sql = {};

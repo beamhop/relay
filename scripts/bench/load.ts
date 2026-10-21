@@ -303,9 +303,8 @@ relays:
       reqPerMinute: 100000000
       maxSubscriptions: 50
 `;
-// No `modules:` section on purpose: a partial module section in the boot file currently
-// reaches modules unparsed (no schema defaults) via `adoptBootConfig` → `applyConfig`.
-// The per-address post limit is eventsPerMinute × policy.ipMultiplier, so it is lifted too.
+// The per-address post limit is eventsPerMinute × policy.ipMultiplier, so it is lifted too
+// (no `modules.policy` section needed).
 
 async function bootServer(o: LoadOptions): Promise<ServerHandle> {
   if (o.url) {

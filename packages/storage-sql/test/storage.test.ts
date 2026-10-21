@@ -138,6 +138,57 @@ describe('storage-sql event store', () => {
     await s.close();
   });
 
+  test('group commit: event saves and doc writes of one tick share one transaction', async () => {
+    const s = await createSqlStores({ driver: 'sqlite' });
+    await s.events.init();
+    const sync = s.exec.sync!;
+    const tx = sync.transaction.bind(sync);
+    let transactions = 0;
+    sync.transaction = (fn) => {
+      transactions++;
+      return tx(fn);
+    };
+    const results = await Promise.all([
+      ...Array.from({ length: 10 }, () => s.events.save(R, fakeEvent({}))),
+      s.docs.put('c', 'a', 1),
+      s.docs.cas('c', 'b', null, 2),
+      s.docs.cas('c', 'b', null, 3),
+    ]);
+    expect(transactions).toBe(1);
+    expect(results.slice(-2)).toEqual([true, false]);
+    // A read commits queued writes first.
+    const put = s.docs.put('c', 'a', 5);
+    expect(await s.docs.get('c', 'a')).toBe(5);
+    await put;
+    expect((await s.docs.list('c')).items.map((i) => [i.key, i.value])).toEqual([
+      ['a', 5],
+      ['b', 2],
+    ]);
+    await s.close();
+  });
+
+  test('group commit window: saves wait for the window; reads do not wait, deletes do', async () => {
+    const s = await createSqlStores({
+      driver: 'sqlite',
+      events: { groupCommit: { windowMs: 50 } },
+    });
+    await s.events.init();
+    const e = fakeEvent({});
+    const saved = s.events.save(R, e);
+    expect(s.events.committer?.pending).toBe(1);
+    // Not visible before its save resolved (no OK has been sent for it yet)...
+    expect(await s.events.getById(R, e.id)).toBeNull();
+    expect((await saved).status).toBe('saved');
+    expect((await s.events.getById(R, e.id))?.id).toBe(e.id);
+    // ...but a delete always applies after earlier saves.
+    const f = fakeEvent({});
+    const savedF = s.events.save(R, f);
+    expect(await s.events.deleteByIds(R, [f.id])).toBe(1);
+    expect((await savedF).status).toBe('saved');
+    expect(await s.events.getById(R, f.id)).toBeNull();
+    await s.close();
+  });
+
   test('d1: a save is one batch round trip', async () => {
     const shim = new D1Shim();
     const s = await createSqlStores({ driver: 'd1', database: shim });

@@ -17,6 +17,10 @@ const drivers: Array<[string, () => Promise<SqlStores>]> = [
     'sqlite (no group commit)',
     () => createSqlStores({ driver: 'sqlite', events: { groupCommit: { enabled: false } } }),
   ],
+  [
+    'sqlite (group commit window 2 ms)',
+    () => createSqlStores({ driver: 'sqlite', events: { groupCommit: { windowMs: 2 } } }),
+  ],
   ['d1-shim', d1],
 ];
 

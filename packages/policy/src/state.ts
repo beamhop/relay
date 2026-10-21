@@ -31,6 +31,22 @@ export interface ActivityEntry {
 
 export const INVALIDATE_CHANNEL = 'policy.invalidate';
 
+/**
+ * First-seen and last-activity writes (one per new key / active key) are kept in
+ * memory and written in batches: after this many milliseconds, or as soon as this
+ * many are waiting. Reads see waiting writes; `flush()` (module stop, `idle()`)
+ * writes them out.
+ */
+export const STATE_FLUSH_MS = 1000;
+export const STATE_FLUSH_SIZE = 256;
+
+export interface PolicyStateOptions {
+  flushMs?: number;
+  flushSize?: number;
+  /** Background flush failures (the entries are kept and retried on the next flush). */
+  onError?: (err: unknown) => void;
+}
+
 export interface AllowEntry {
   pubkey: string;
   addedAt: number;
@@ -102,10 +118,96 @@ export class PolicyState {
   private caches = new Map<RelayId, Promise<RelayCache>>();
   private seen = new Map<string, number>();
   private activeWritten = new Map<string, number>();
+  /** First-seen times not written yet (rkey → unix seconds). */
+  private pendingSeen = new Map<string, number>();
+  /** Last-activity entries not written yet (rkey → entry). */
+  private pendingActive = new Map<string, ActivityEntry>();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushing: Promise<void> | null = null;
+  /** First-seen times being written by the running flush. */
+  private inflightSeen: Map<string, number> | null = null;
+  private readonly flushMs: number;
+  private readonly flushSize: number;
   readonly origin: string;
 
-  constructor(private readonly ports: Ports) {
+  constructor(
+    private readonly ports: Ports,
+    private readonly opts: PolicyStateOptions = {},
+  ) {
     this.origin = ports.crypto.randomHex(8);
+    this.flushMs = opts.flushMs ?? STATE_FLUSH_MS;
+    this.flushSize = Math.max(1, opts.flushSize ?? STATE_FLUSH_SIZE);
+  }
+
+  /** Writes waiting to be flushed. */
+  get pendingWrites(): number {
+    return this.pendingSeen.size + this.pendingActive.size;
+  }
+
+  private scheduleFlush(): void {
+    if (this.pendingWrites >= this.flushSize) {
+      void this.flush().catch((err) => this.opts.onError?.(err));
+      return;
+    }
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      void this.flush().catch((err) => this.opts.onError?.(err));
+    }, this.flushMs);
+    (this.flushTimer as { unref?: () => void }).unref?.();
+  }
+
+  /** Write waiting first-seen / last-activity entries now (one batch). */
+  async flush(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    while (this.flushing) await this.flushing.catch(() => {});
+    if (this.pendingWrites === 0) return;
+    const seen = this.pendingSeen;
+    const active = this.pendingActive;
+    this.pendingSeen = new Map();
+    this.pendingActive = new Map();
+    const docs = this.ports.docs;
+    const run = async () => {
+      // Issued together: a SQL store with group commit writes them in one transaction.
+      const results = await Promise.allSettled([
+        ...[...seen].map(async ([k, at]) => {
+          if (await docs.cas<number>(COLLECTIONS.seen, k, null, at)) return;
+          // Already recorded (another node, or before a restart): keep the earlier time.
+          const v = await docs.get<number>(COLLECTIONS.seen, k);
+          if (v !== null) this.remember(k, v);
+        }),
+        ...[...active].map(([k, e]) => docs.put<ActivityEntry>(COLLECTIONS.active, k, e)),
+      ]);
+      const failed = results.find((r) => r.status === 'rejected');
+      if (!failed) return;
+      // Keep failed entries for the next flush (unless newer ones are already waiting).
+      const n = seen.size;
+      let i = 0;
+      for (const [k, at] of seen)
+        if (results[i++]!.status === 'rejected' && !this.pendingSeen.has(k))
+          this.pendingSeen.set(k, at);
+      i = n;
+      for (const [k, e] of active)
+        if (results[i++]!.status === 'rejected' && !this.pendingActive.has(k))
+          this.pendingActive.set(k, e);
+      throw (failed as PromiseRejectedResult).reason;
+    };
+    this.flushing = run().finally(() => {
+      this.flushing = null;
+    });
+    // Reads during the flush still see these entries.
+    this.inflightSeen = seen;
+    try {
+      await this.flushing;
+    } finally {
+      if (this.inflightSeen === seen) this.inflightSeen = null;
+    }
+  }
+  private waitingSeen(k: string): number | undefined {
+    return this.pendingSeen.get(k) ?? this.inflightSeen?.get(k);
   }
 
   /** Load (once) the relay's hot-path sets. */
@@ -307,25 +409,28 @@ export class PolicyState {
   // ── first-seen (for "new key" checks) ──
   async firstSeen(relayId: RelayId, pubkey: string): Promise<number | undefined> {
     const k = rkey(relayId, pubkey);
-    const hit = this.seen.get(k);
+    const hit = this.seen.get(k) ?? this.waitingSeen(k);
     if (hit !== undefined) return hit;
     const v = await this.ports.docs.get<number>(COLLECTIONS.seen, k);
     if (v !== null) this.remember(k, v);
-    return v ?? undefined;
+    return v ?? this.waitingSeen(k);
   }
   async markSeen(relayId: RelayId, pubkey: string, at: number): Promise<void> {
     const k = rkey(relayId, pubkey);
-    if (this.seen.has(k)) return;
+    if (this.seen.has(k) || this.waitingSeen(k) !== undefined) return;
     const v = await this.ports.docs.get<number>(COLLECTIONS.seen, k);
+    if (this.seen.has(k) || this.waitingSeen(k) !== undefined) return;
     if (v === null) {
-      await this.ports.docs.cas<number>(COLLECTIONS.seen, k, null, at);
       this.remember(k, at);
+      this.pendingSeen.set(k, at);
+      this.scheduleFlush();
     } else {
       this.remember(k, v);
     }
   }
   /** Every pubkey first seen on this relay, with the time (unix seconds). */
   async listSeen(relayId: RelayId): Promise<Array<{ pubkey: string; at: number }>> {
+    await this.flush();
     const prefix = `${relayId}:`;
     return (await listAll<number>(this.ports.docs, COLLECTIONS.seen, prefix)).map((x) => ({
       pubkey: x.key.slice(prefix.length),
@@ -343,9 +448,11 @@ export class PolicyState {
       if (first !== undefined) this.activeWritten.delete(first);
     }
     this.activeWritten.set(k, at);
-    await this.ports.docs.put<ActivityEntry>(COLLECTIONS.active, k, { pubkey, lastSeen: at });
+    this.pendingActive.set(k, { pubkey, lastSeen: at });
+    this.scheduleFlush();
   }
   async listActive(relayId: RelayId): Promise<ActivityEntry[]> {
+    await this.flush();
     return (await listAll<ActivityEntry>(this.ports.docs, COLLECTIONS.active, `${relayId}:`)).map(
       (x) => x.value,
     );
