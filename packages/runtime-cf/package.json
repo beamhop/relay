@@ -5,7 +5,30 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "description": "Cloudflare runtime: Worker + Durable Objects + D1 + R2",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./build": "./src/bundle/index.ts"
+  },
+  "bin": { "beamhop-cf-build": "./src/bundle/cli.ts" },
+  "scripts": {
+    "build:entry": "bun src/bundle/cli.ts",
+    "test:cf": "vitest run --config test-cf/vitest.config.ts"
+  },
+  "dependencies": {
+    "@beamhop/admin-api": "workspace:*",
+    "@beamhop/blobs": "workspace:*",
+    "@beamhop/blossom": "workspace:*",
+    "@beamhop/core": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/relay": "workspace:*",
+    "@beamhop/storage-sql": "workspace:*",
+    "@beamhop/testkit": "workspace:*",
+    "@noble/hashes": "^1.8.0",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.9.0",
+    "vitest": "~3.2.0",
+    "wrangler": "^4.40.0"
+  }
 }
