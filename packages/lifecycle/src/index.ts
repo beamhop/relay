@@ -17,7 +17,7 @@ import {
   reject,
 } from '@beamhop/core';
 import { createActions } from './actions.ts';
-import { BackupService } from './backup.ts';
+import { type BackupLast, BackupService } from './backup.ts';
 import { type ExportOptions, exportUserData } from './export.ts';
 import { FAILOVER_PLAYBOOK, createCardSource, createHealthChecks } from './health.ts';
 import { HOLDS_SERVICE, type LegalHolds } from './holds.ts';
@@ -87,6 +87,8 @@ export interface LifecycleService {
     opts?: ExportOptions,
   ): ReadableStream<Uint8Array>;
   generateLitestreamConfig(opts?: Parameters<typeof generateLitestreamConfig>[1]): string;
+  /** Latest backup status (`lifecycle.backups/last`), or null if none ran yet. */
+  lastBackup(): Promise<BackupLast | null>;
   /** True while a restore is running (writes are refused). */
   restoring(): boolean;
   /** Wait for background bus handlers (tests). */
@@ -151,6 +153,7 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         litestream,
         exportUserData: (relayId, pubkey, o) => exportUserData(kernel.ports, relayId, pubkey, o),
         generateLitestreamConfig: (o) => generateLitestreamConfig(kernel.config(), o),
+        lastBackup: () => backups.last(),
         restoring: () => rt.restoring,
         idle: () => retention.idle(),
       };
