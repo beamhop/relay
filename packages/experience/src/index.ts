@@ -26,6 +26,7 @@ export * from './playbooks.ts';
 export * from './simple-screens.ts';
 export * from './simulate.ts';
 export * from './why.ts';
+export * from './why-subjects.ts';
 export { COL, MODULE_ID, ExperienceError } from './util.ts';
 
 export interface ExperienceModuleOptions {

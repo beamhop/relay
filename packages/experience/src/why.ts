@@ -16,6 +16,7 @@ import {
 import { type LimitExplanation, explainLimits } from '@beamhop/policy';
 import type { SuggestionsEngine } from './inbox.ts';
 import { HOOK_LABELS } from './simulate.ts';
+import { explainAlert, explainBlock, explainMetric } from './why-subjects.ts';
 
 export interface WhyOption {
   label: string;
@@ -40,7 +41,10 @@ export type WhySubject =
   | { subject: 'rejected-event'; eventId: string }
   | { subject: 'limit'; field: string; tier?: string }
   | { subject: 'health'; subsystem?: Subsystem; checkId?: string }
-  | { subject: 'card'; cardId: string };
+  | { subject: 'card'; cardId: string }
+  | { subject: 'alert'; alertId: string }
+  | { subject: 'metric'; metric: string; value?: number }
+  | { subject: 'block'; pubkey: string };
 
 export interface RejectionRecord {
   relayId: RelayId;
@@ -383,5 +387,11 @@ export async function explainWhy(
         found: true,
       };
     }
+    case 'alert':
+      return explainAlert(kernel, relayId, q.alertId);
+    case 'metric':
+      return explainMetric(kernel, relayId, q.metric, q.value);
+    case 'block':
+      return explainBlock(kernel, relayId, q.pubkey, deps.ring, opts.principal);
   }
 }

@@ -69,6 +69,13 @@ export const METRICS = {
     help: 'Approximate database size',
     unit: 'bytes',
   },
+  blobStorageBytes: {
+    id: 'blobs.bytes',
+    type: 'gauge',
+    help: 'Bytes of uploaded files stored',
+    unit: 'bytes',
+  },
+  blobStorageFiles: { id: 'blobs.files', type: 'gauge', help: 'Uploaded files stored' },
   diskFree: { id: 'disk.free', type: 'gauge', help: 'Free disk space', unit: 'bytes' },
   diskTotal: { id: 'disk.total', type: 'gauge', help: 'Total disk space', unit: 'bytes' },
   healthScore: { id: 'health.score', type: 'gauge', help: 'Overall health score (0-100)' },

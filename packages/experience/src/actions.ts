@@ -492,9 +492,9 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     id: 'experience.why',
     title: 'Why?',
     description:
-      'Explains a refused post, a limit, a health score or a suggestion in plain words, with what you can do about it.',
+      'Explains a refused post, a limit, a health score, a suggestion, an alert, a number on a chart or why someone is blocked — in plain words, with what you can do about it.',
     technical:
-      'rejected-event: in-memory ring of event.rejected/event.held; limit: policy.explainLimits; health: kernel.health; card: inbox.',
+      'rejected-event: in-memory ring of event.rejected/event.held; limit: policy.explainLimits; health: kernel.health; card: inbox; alert: alerts.engine active/history; metric: built-in table + insights.live() + alerts baselines; block: policy bans/mutes + kernel.access chain + tier.',
     scope: 'relay',
     permission: 'relay.read',
     readOnly: true,
@@ -510,6 +510,13 @@ export function createActions(deps: ActionDeps): ActionDef[] {
         checkId: z.string().optional(),
       }),
       z.object({ subject: z.literal('card'), cardId: z.string() }),
+      z.object({ subject: z.literal('alert'), alertId: z.string().min(1) }),
+      z.object({
+        subject: z.literal('metric'),
+        metric: z.string().min(1).max(100),
+        value: z.number().optional(),
+      }),
+      z.object({ subject: z.literal('block'), pubkey: z.string().min(1).max(200) }),
     ]),
     async run(input, ctx) {
       const ans = await explainWhy(
@@ -562,8 +569,9 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     id: 'experience.my-stats',
     title: 'My time this week',
     description:
-      'How many minutes you spent managing your relay this week. Only you can see this, and it never leaves your server.',
-    technical: 'Sessions from admin.action + experience.ping (10-minute gap), per ISO week.',
+      'How many minutes you spent managing your relay this week, how many things you got done, and roughly how much time suggestions saved you. Only you can see this, and it never leaves your server.',
+    technical:
+      'Sessions from admin.action + experience.ping (10-minute gap), per ISO week, in DocStore experience.admin-time (no network). minutesSaved = approved suggestions (admin.action experience.approve-card) × 3.',
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,

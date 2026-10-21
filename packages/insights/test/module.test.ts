@@ -8,6 +8,7 @@ import {
   MetricsRegistry,
   computeScore,
   formatPrometheus,
+  kindName,
   normalizeReason,
 } from '../src/index.ts';
 import { setup } from './helpers.ts';
@@ -51,6 +52,14 @@ describe('collector + flush', () => {
     expect(live.acceptRatio).toBe(0.75);
     expect(live.p50Ms).toBeGreaterThan(14);
     expect(live.p50Ms).toBeLessThan(17);
+    expect(live.p95Ms).toBeGreaterThanOrEqual(live.p50Ms);
+    expect(live.errorsPerMinute).toBeGreaterThan(0);
+    expect(live.errorRate).toBeGreaterThan(0);
+    expect(live.errorRate).toBeLessThan(0.05);
+    expect(live.storageEvents).not.toBeNull();
+    expect(live.storageBytes).not.toBeNull();
+    expect(live.blobFiles).toBe(0);
+    expect(live.blobBytes).toBe(0);
 
     const ts = ports.metrics as MemoryTimeSeries;
     const accepted = ts.points.filter((p) => p.metric === 'events.accepted');
@@ -58,6 +67,7 @@ describe('collector + flush', () => {
     expect(accepted[0]).toMatchObject({ v: 30, labels: { relay: 'main' } });
     expect(ts.points.some((p) => p.metric === 'event.latency.p95')).toBe(true);
     expect(ts.points.some((p) => p.metric === 'storage.bytes')).toBe(true);
+    expect(ts.points.some((p) => p.metric === 'blobs.bytes')).toBe(true);
 
     const series = await rt.series({
       metric: 'events.rejected',
@@ -251,13 +261,22 @@ describe('analytics', () => {
     expect(report.dailyActive).toHaveLength(7);
     expect(report.dailyActive.at(-1)).toMatchObject({ newUsers: 50, events: 55 });
     expect(report.topKinds).toEqual([
-      { kind: 1, count: 50 },
-      { kind: 7, count: 5 },
+      { kind: 1, name: 'Posts', count: 50 },
+      { kind: 7, name: 'Reactions', count: 5 },
     ]);
     expect(report.topClients).toEqual([{ name: 'Amethyst', count: 50 }]);
     expect(report.topUserAgents).toEqual([{ name: 'Damus', count: 1 }]);
     expect(report.countries).toEqual([{ country: 'DE', count: 1 }]);
     expect(report.storageByUser).toEqual([{ pubkey: keys[0]!.pk, bytes: 1000, files: 1 }]);
+    expect(report.storageTotal).toEqual({ bytes: 1000, files: 1, users: 1 });
+    expect(report.geoSource).toBe('runtime-header');
+  });
+
+  test('plain kind names', () => {
+    expect(kindName(1)).toBe('Posts');
+    expect(kindName(30023)).toBe('Articles');
+    expect(kindName(25000)).toBe('Short-lived messages');
+    expect(kindName(424242)).toBe('Other');
   });
 
   test('weekly retention cohorts and multi-day uniques', async () => {

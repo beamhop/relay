@@ -122,3 +122,95 @@ export function landingCustomized(
   if (!info) return false;
   return (!!info.name && info.name !== 'Beamhop Relay') || !!info.description;
 }
+
+/** Checklist items next to which the app offers the launch kit (sharing, profile polish). */
+export const LAUNCH_ITEMS = new Set(['test-relay', 'landing', 'profile']);
+
+// ───────────────────────────── launch kit ─────────────────────────────
+
+/** `experience.launch-kit` output (subset). */
+export interface LaunchKitPolish {
+  field: string;
+  text: string;
+  technical: string;
+  /** Relay-relative config path, e.g. `info.icon`. */
+  path: string;
+  importance: 'recommended' | 'nice-to-have';
+}
+
+export type LaunchKitOutput =
+  | {
+      ok: true;
+      needsDomain: false;
+      urlSource?: string;
+      urls: { relay: string; blossom: string | null; landing: string; nip11: string };
+      announcement: { text: string; published: false; draft?: { kind: number; tags: string[][] } };
+      polish: LaunchKitPolish[];
+    }
+  | {
+      ok: false;
+      needsDomain: true;
+      summary: string;
+      technical?: string;
+      link?: { screen: string };
+      polish: LaunchKitPolish[];
+    };
+
+/** Technical lens for a polish item: the relay-info field it fills. */
+const POLISH_FIELD: Record<string, string> = {
+  name: 'NIP-11 name',
+  description: 'NIP-11 description',
+  icon: 'NIP-11 icon',
+  banner: 'NIP-11 banner',
+  contact: 'NIP-11 contact',
+  pubkey: 'NIP-11 pubkey',
+  rules: 'NIP-11 posting_policy / landing rules',
+  terms: 'NIP-11 posting_policy',
+};
+
+/** The settings screen (and field) to fix a polish item, plus its lens lines. */
+export function polishTarget(p: LaunchKitPolish): { href: string; lens: string[] } {
+  const field = p.path.startsWith('info.') ? p.path : `info.${p.field}`;
+  return {
+    href: `/settings/profile?field=${encodeURIComponent(field)}`,
+    lens: [POLISH_FIELD[p.field] ?? `relay.${field}`, p.technical],
+  };
+}
+
+// ───────────────────────────── your week ─────────────────────────────
+
+/** `experience.my-stats` output (subset; newer fields optional for older servers). */
+export interface MyStats {
+  thisWeek: {
+    weekStart: number;
+    minutes: number;
+    sessions: number;
+    actions: number;
+    tasksDone?: number;
+    suggestionsApproved?: number;
+    minutesSaved?: number;
+  };
+  goalMinutes: number;
+  onTrack: boolean;
+  message: string;
+  privacy: string;
+}
+
+const WEEK_KEY = 'beamhop.myWeekHidden';
+
+/** "Your week" was hidden for this week (on this device). */
+export function weekHidden(weekStart: number): boolean {
+  try {
+    return localStorage.getItem(WEEK_KEY) === String(weekStart);
+  } catch {
+    return false;
+  }
+}
+
+export function hideWeek(weekStart: number): void {
+  try {
+    localStorage.setItem(WEEK_KEY, String(weekStart));
+  } catch {
+    // ignore: hidden for this visit only
+  }
+}

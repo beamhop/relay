@@ -90,6 +90,9 @@ describe('weekly admin minutes (local only)', () => {
     const { output } = await act('experience.my-stats', {});
     expect(output.thisWeek.sessions).toBe(2);
     expect(output.thisWeek.actions).toBe(3);
+    expect(output.thisWeek.tasksDone).toBe(3);
+    expect(output.thisWeek.suggestionsApproved).toBe(0);
+    expect(output.thisWeek.minutesSaved).toBe(0);
     expect(output.thisWeek.minutes).toBe(7);
     expect(output.onTrack).toBe(true);
     expect(output.goalMinutes).toBe(10);
@@ -109,6 +112,27 @@ describe('weekly admin minutes (local only)', () => {
       await act('experience.ping', {});
     }
     expect((await act('experience.my-stats', {})).output.onTrack).toBe(false);
+  });
+});
+
+describe('time saved by suggestions (local only)', () => {
+  test('approved suggestions count as tasks and estimated minutes saved', async () => {
+    const { act, kernel, svc } = await setup();
+    for (const actionId of ['experience.approve-card', 'experience.approve-card', 'x'])
+      kernel.bus.emit('admin.action', {
+        relayId: null,
+        actionId,
+        principalId: OWNER.id,
+        input: {},
+        summary: 'x',
+        ok: true,
+      });
+    await svc.idle();
+    const { output } = await act('experience.my-stats', {});
+    expect(output.thisWeek.tasksDone).toBe(3);
+    expect(output.thisWeek.suggestionsApproved).toBe(2);
+    expect(output.thisWeek.minutesSaved).toBe(6);
+    expect(output.privacy).toContain('Never sent');
   });
 });
 

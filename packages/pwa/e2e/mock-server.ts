@@ -16,6 +16,7 @@ import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { enterprise } from './mocks/enterprise.ts';
+import { homeActions } from './mocks/home.ts';
 import { registerMediaMocks } from './mocks/media.ts';
 import { registerPeopleMocks } from './mocks/people.ts';
 import { pluginWriterActions } from './mocks/plugins.ts';
@@ -1286,6 +1287,7 @@ ACTIONS.push(
   }),
 );
 enterprise.annotate(nodeSchemaJson);
+ACTIONS.push(...homeActions(() => S).filter((a) => !ACTIONS.some((x) => x.id === a.id)));
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')

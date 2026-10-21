@@ -14,13 +14,14 @@
   import { app } from '$lib/stores/app.svelte';
   import { asApiError, flow } from '$lib/stores/actions.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
-  import { prefs } from '$lib/stores/prefs.svelte';
   import { names } from '$lib/stores/names.svelte';
   import { assistant } from '$lib/stores/assistant.svelte';
   import { DISMISS, DISMISS_SECONDS, SNOOZE, type HomeCard, snoozeLocal, unsnoozeLocal } from '$lib/cards';
   import { to } from '$lib/nav';
   import { cn } from '$lib/utils';
   import SwipeCard from '../SwipeCard.svelte';
+  import WhyButton from '../WhyButton.svelte';
+  import ItemLens from '../ItemLens.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
   import { m } from '$lib/paraglide/messages.js';
@@ -193,7 +194,7 @@
                   {#if top.count > 1}<Badge tone={tones[top.severity]}>×{top.count}</Badge>{/if}
                 </div>
                 <p class="mt-1 text-sm text-muted-foreground">{names.text(top.body)}</p>
-                {#if prefs.lens && top.technical}<p class="mt-2 font-mono text-[11px] text-muted-foreground" data-lens>{top.technical}</p>{/if}
+                <div class="mt-2"><ItemLens lines={[...(top.technical ? [top.technical] : []), `card ${top.key} (${top.source})`]} /></div>
               </div>
             </div>
             <div class="mt-4 flex flex-wrap items-center gap-2">
@@ -205,6 +206,7 @@
               {#if top.playbook}
                 <Button size="sm" variant="ghost" href={to(`/help?playbook=${top.playbook}`)}>{m.cards_guide()}</Button>
               {/if}
+              {#if top.source === 'inbox'}<WhyButton subject={{ subject: 'card', cardId: top.key }} class="px-2" />{/if}
               <span class="ml-auto hidden text-[11px] text-muted-foreground sm:inline" data-testid="card-swipe-hint">
                 {canApprove ? m.cards_swipe_hint() : m.cards_swipe_hint_later()}
               </span>

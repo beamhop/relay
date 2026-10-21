@@ -9,8 +9,10 @@ import {
   deriveLimits,
   deriveSpamSettings,
   explainLimits,
+  goalOverrides,
   interpolate,
   limitsFromGoals,
+  overridesByGoal,
   retentionDaysFor,
 } from '../src/goals.ts';
 import { setup } from './helpers.ts';
@@ -204,6 +206,27 @@ describe('explainLimits', () => {
     expect(pow?.source).toBe('goal');
     expect(pow?.goal).toBe('openness');
     expect(pow?.technical).toContain('NIP-13');
+  });
+});
+
+describe('goal overrides', () => {
+  test('reports which goal an override replaced and what the goal would set', () => {
+    const relay = relayWith({ goals: MID, limits: { eventsPerMinute: 5, maxEventBytes: 1000 } });
+    const ov = goalOverrides(relay);
+    const epm = ov.find((o) => o.field === 'eventsPerMinute');
+    expect(epm).toEqual({
+      field: 'eventsPerMinute',
+      goal: GOAL_TABLE.eventsPerMinute.goal,
+      value: 5,
+      goalValue: limitsFromGoals(MID).eventsPerMinute,
+    });
+    expect(ov.find((o) => o.field === 'maxEventBytes')?.goal).toBe(GOAL_TABLE.maxEventBytes.goal);
+    const counts = overridesByGoal(relay);
+    expect(Object.values(counts).reduce((a, b) => a + (b ?? 0), 0)).toBe(2);
+    expect(goalOverrides(relayWith())).toEqual([]);
+    const line = explainLimits(relay).find((l) => l.field === 'eventsPerMinute');
+    expect(line?.goal).toBeUndefined();
+    expect(line?.goalWouldSet?.goal).toBe(GOAL_TABLE.eventsPerMinute.goal);
   });
 });
 
