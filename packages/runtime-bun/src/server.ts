@@ -56,6 +56,7 @@ import {
   acmeDomains,
   decideTls,
 } from './tls.ts';
+import { VerifyPool, defaultVerifyWorkers } from './verify-pool.ts';
 
 /** Release version (root package.json, or the build-time `__BEAMHOP_VERSION__` define). */
 export const VERSION = BEAMHOP_VERSION;
@@ -242,6 +243,17 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     closeDefaults = defaults.close;
     memoryFallbacks = defaults.memoryFallbacks.filter((k) => !opts.ports?.[k as keyof Ports]);
     if (!opts.ports?.events) sqlService = defaults.sql;
+  }
+
+  // ── Signature checks off the event loop (PLAN §3.5) ──
+  let verifyPool: VerifyPool | undefined;
+  const verifyWorkers = bootConfig.node.verifyWorkers;
+  if (!ports.verifier && verifyWorkers !== 0) {
+    verifyPool = new VerifyPool({
+      workers: verifyWorkers ?? defaultVerifyWorkers(),
+      logger: logger.child({ component: 'verify' }),
+    });
+    ports = { ...ports, verifier: verifyPool };
   }
 
   // ── Kernel ──
@@ -593,6 +605,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     tls: tlsDecision.mode,
     safeMode: safe,
     relays: kernel.config().relays.length,
+    signatureThreads: verifyPool?.size ?? 0,
   });
 
   // ── Shutdown ──
@@ -629,6 +642,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
           // ignore
         }
       }
+      await verifyPool?.close();
       await closeDefaults?.();
       logger.log('info', 'stopped', {});
     })();

@@ -306,6 +306,20 @@ export interface KeyWrapper {
   unwrap(ciphertext: Uint8Array): Promise<Uint8Array>;
 }
 
+/**
+ * Offloaded Schnorr signature checks (e.g. a worker pool on Bun). Optional: when
+ * absent, callers check signatures inline with `verifyEventSig`.
+ */
+export interface SignatureVerifier {
+  /**
+   * Check each event's BIP-340 signature over its `id` (the caller has already
+   * checked that `id` matches the content). Resolves to one boolean per event, in
+   * order. Rejects only when the signatures could not be checked at all (e.g. a
+   * worker crashed); callers must then treat the events as not verified.
+   */
+  verify(events: readonly Pick<NostrEvent, 'id' | 'pubkey' | 'sig'>[]): Promise<boolean[]>;
+}
+
 /** The full set of ports handed to modules. Optional ports may be absent on some runtimes. */
 export interface Ports {
   events: EventStore;
@@ -321,6 +335,8 @@ export interface Ports {
   media?: MediaProcessor;
   llm?: LLM;
   keyWrapper?: KeyWrapper;
+  /** Off-thread signature checks; absent → inline. */
+  verifier?: SignatureVerifier;
 }
 
 export type RuntimeName = 'bun' | 'cloudflare' | 'test';

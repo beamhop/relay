@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { sandboxWorkerUrl, setSandboxWorkerUrl } from '@beamhop/plugins/bun';
 import {
   PLUGIN_WORKER,
+  VERIFY_WORKER,
   commonRoot,
   compileArgs,
   embeddedWorkerPath,
@@ -37,6 +38,24 @@ describe('single binary: plugin sandbox worker', () => {
     expect(src).toContain(`setSandboxWorkerUrl(${JSON.stringify(embeddedWorkerPath(r.entry))});`);
     // The call runs before main().
     expect(src.indexOf('setSandboxWorkerUrl(')).toBeLessThan(src.indexOf('await main();'));
+  });
+
+  test('the signature worker is embedded and the pool is pointed at it', () => {
+    const out = tempDir('beamhop-build-');
+    const r = generateEntry(out, join(out, 'no-pwa'), join(out, 'no-team'));
+    expect(r.workers).toEqual([PLUGIN_WORKER, VERIFY_WORKER]);
+    const distEntry = resolve(import.meta.dir, '../dist/.gen/entry.ts');
+    expect(embeddedWorkerPath(distEntry, VERIFY_WORKER)).toBe('./runtime-bun/src/verify-worker.ts');
+    expect(embeddedWorkerPath(distEntry)).toBe('./plugins/src/bun/worker-entry.ts');
+    const src = readFileSync(r.entry, 'utf8');
+    expect(src).toContain(
+      `setVerifyWorkerUrl(${JSON.stringify(embeddedWorkerPath(r.entry, VERIFY_WORKER))});`,
+    );
+    expect(src.indexOf('setVerifyWorkerUrl(')).toBeLessThan(src.indexOf('await main();'));
+    const args = compileArgs(distEntry, 'linux-x64', '/o', r.workers);
+    expect(args).toContain(VERIFY_WORKER);
+    expect(args).toContain(PLUGIN_WORKER);
+    expect(args).toContain(`--root=${resolve(import.meta.dir, '../..')}`);
   });
 
   test('the sandbox worker URL can be overridden', () => {

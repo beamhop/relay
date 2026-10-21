@@ -19,6 +19,9 @@ Usage: beamhop-server [options]
   -c, --config <file>   Settings file (default: ./beamhop.yaml or <data-dir>/beamhop.yaml)
       --data-dir <dir>  Where Beamhop keeps its data (default: ./data)
       --listen <addr>   Address to listen on, e.g. 0.0.0.0:3334
+      --verify-workers <n>
+                        Signature checking threads (default: CPU cores - 1;
+                        0 checks signatures on the main thread)
       --safe            Start with plugins off and the last known good settings
       --no-config-writeback
                         Don't write changes made in the admin app back to the

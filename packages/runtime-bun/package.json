@@ -14,7 +14,8 @@
   "scripts": {
     "start": "bun src/main.ts",
     "build": "bun scripts/build.ts",
-    "build:host": "bun scripts/build.ts --host"
+    "build:host": "bun scripts/build.ts --host",
+    "bench:verify": "bun bench/verify.ts"
   },
   "dependencies": {
     "@beamhop/core": "workspace:*",
@@ -36,6 +37,8 @@
     "@beamhop/enterprise-identity": "workspace:*",
     "@beamhop/enterprise-keyvault": "workspace:*",
     "@beamhop/enterprise-compliance": "workspace:*",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
     "acme-client": "^5.4.0",
     "hono": "^4.13.13",
     "reflect-metadata": "^0.2.2",

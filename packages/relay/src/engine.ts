@@ -777,8 +777,14 @@ export class RelayEngine implements ConnectionHandler {
       this.rejectEvent(st, event, 'invalid', 'event id does not match its content');
       return;
     }
-    if (!verifyEventSig(event)) {
-      this.rejectEvent(st, event, 'invalid', 'bad signature');
+    const sig = await this.checkSig(event);
+    if (sig !== true) {
+      this.rejectEvent(
+        st,
+        event,
+        'invalid',
+        sig === false ? 'bad signature' : 'could not verify the signature, please try again',
+      );
       return;
     }
     if (event.kind === AUTH_KIND) {
@@ -1194,6 +1200,22 @@ export class RelayEngine implements ConnectionHandler {
     return { count, capped: events.length >= cap };
   }
 
+  /**
+   * Schnorr check via the optional `ports.verifier` (worker pool on Bun), else inline.
+   * `null` = could not be checked (worker failure): never treated as valid.
+   */
+  private async checkSig(event: NostrEvent): Promise<boolean | null> {
+    const verifier = this.kernel.ports.verifier;
+    if (!verifier) return verifyEventSig(event);
+    try {
+      const [ok] = await verifier.verify([event]);
+      return ok === true;
+    } catch (err) {
+      this.kernel.ports.logger.log('warn', 'signature check failed', { err });
+      return null;
+    }
+  }
+
   // ───────────────────────── AUTH (NIP-42) ─────────────────────────
 
   private async onAuth(st: ConnState, input: unknown): Promise<void> {
@@ -1214,7 +1236,10 @@ export class RelayEngine implements ConnectionHandler {
       this.ok(st, event.id, false, reason(prefix, msg));
     if (!relay) return fail('error', 'unknown relay');
     if (event.kind !== AUTH_KIND) return fail('invalid', `sign-in event must be kind ${AUTH_KIND}`);
-    if (!verifyEventId(event) || !verifyEventSig(event)) return fail('invalid', 'bad signature');
+    if (!verifyEventId(event)) return fail('invalid', 'bad signature');
+    const sig = await this.checkSig(event);
+    if (sig === null) return fail('invalid', 'could not verify the signature, please try again');
+    if (!sig) return fail('invalid', 'bad signature');
     const now = this.kernel.ports.clock.now();
     if (Math.abs(event.created_at - now) > this.cfg.authWindowSeconds)
       return fail('invalid', 'sign-in event is too old or too far in the future');

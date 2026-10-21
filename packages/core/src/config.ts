@@ -787,6 +787,18 @@ export const NodeSchema = z
       ),
       { path: 'trustProxy', equals: true },
     ),
+    verifyWorkers: technical(
+      z
+        .number()
+        .int()
+        .min(0)
+        .max(256)
+        .optional()
+        .describe(
+          'Signature checking threads: how many background threads check that incoming posts are really signed by their author. Leave empty to pick automatically; 0 checks them on the main thread.',
+        ),
+      'Size of the Schnorr (BIP-340) verification worker pool on Bun. Default: CPU cores − 1 (min 1). 0 disables the pool (inline verification). Ignored on Cloudflare. CLI: --verify-workers <n>.',
+    ),
   })
   .prefault({})
   .describe('This server');
