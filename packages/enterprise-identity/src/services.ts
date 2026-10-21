@@ -84,7 +84,11 @@ export interface GroupLike {
   members: Record<string, Array<'admin' | 'moderator'>>;
 }
 
-/** `kernel.use('relay.engine')` — `disconnectPubkey` is a requested additive relay hook; until it exists the revocation list blocks every read/write. */
+/**
+ * `kernel.use('relay.engine')`. `disconnectPubkey` closes this node's sockets; other
+ * nodes react to the `enterprise.revoked` PubSub message. The revocation list blocks
+ * every read/write regardless.
+ */
 export interface RelayEngineLike {
   broadcast?(relayId: RelayId, event: NostrEvent): Promise<void> | void;
   disconnectPubkey?(pubkey: string, reason?: string): Promise<number> | number;
@@ -100,7 +104,21 @@ export interface PolicyLike {
 
 /** `kernel.use('lifecycle.holds')` — legal holds (§12.7) block key destruction. */
 export interface LegalHoldsLike {
-  isHeld(subject: { pubkey?: string; subjectId?: string; relayId?: RelayId }): Promise<boolean>;
+  isHeld(relayId: RelayId, subject: { pubkey?: string }): Promise<boolean> | boolean;
+}
+
+/** `kernel.use('compliance.siem')` (enterprise-compliance) — tamper-evident SIEM export. */
+export interface SiemLike {
+  record(r: SiemRecordInput): void;
+}
+
+export interface SiemRecordInput {
+  stream: 'auth' | 'audit' | 'compliance';
+  type: string;
+  summary: string;
+  relayId?: RelayId | null;
+  principalId?: string;
+  data?: Record<string, unknown>;
 }
 
 export interface Services {
@@ -111,6 +129,7 @@ export interface Services {
   engine(): RelayEngineLike | undefined;
   policy(): PolicyLike | undefined;
   holds(): LegalHoldsLike | undefined;
+  siem(): SiemLike | undefined;
 }
 
 export function services(kernel: Kernel): Services {
@@ -122,6 +141,7 @@ export function services(kernel: Kernel): Services {
     engine: () => kernel.use<RelayEngineLike>('relay.engine'),
     policy: () => kernel.use<PolicyLike>('policy'),
     holds: () => kernel.use<LegalHoldsLike>('lifecycle.holds'),
+    siem: () => kernel.use<SiemLike>('compliance.siem'),
   };
 }
 

@@ -86,6 +86,27 @@ export class TeamSessions {
     return token ? this.verify(token) : Promise.resolve(null);
   }
 
+  get(bindingKey: string, sid: string): Promise<TeamSessionRecord | null> {
+    return this.kernel.ports.docs.get<TeamSessionRecord>(
+      COL.teamSessions,
+      this.key(bindingKey, sid),
+    );
+  }
+
+  /** Find a session by id alone (scans; sessions are few per node). */
+  async find(sid: string): Promise<TeamSessionRecord | null> {
+    let cursor: string | undefined;
+    do {
+      const page = await this.kernel.ports.docs.list<TeamSessionRecord>(COL.teamSessions, {
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const i of page.items) if (i.value.sid === sid) return i.value;
+      cursor = page.items.length ? page.cursor : undefined;
+    } while (cursor);
+    return null;
+  }
+
   async list(bindingKey: string): Promise<TeamSessionRecord[]> {
     const page = await this.kernel.ports.docs.list<TeamSessionRecord>(COL.teamSessions, {
       prefix: `${bindingKey}/`,
