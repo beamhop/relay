@@ -349,6 +349,7 @@ export class MediaService {
     try {
       await this.kernel.notify({
         severity: 'critical',
+        category: 'safety',
         title: 'A blocked image was uploaded',
         body: 'An upload matched a known-abuse image list. It was blocked and is never shown to anyone. Review it in Moderation.',
         relayId,
