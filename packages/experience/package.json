@@ -6,6 +6,11 @@
   "license": "AGPL-3.0-or-later",
   "description": "Admin experience: suggestions engine, digest, playbooks, sandbox, onboarding checklist",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/public-web": "workspace:*",
+    "zod": "^4.1.0"
+  },
   "devDependencies": { "@beamhop/testkit": "workspace:*" }
 }
