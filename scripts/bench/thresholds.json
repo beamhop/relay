@@ -1,0 +1,34 @@
+{
+  "_derivation": {
+    "measured": "2026-10-21, Apple M-series laptop, 10 cores, Bun 1.4.3, `bun run bench:gate` (profile ci), machine shared with other jobs (load average 12-13). Local values are in the _local keys.",
+    "throughput floors": "local x 0.6 (one GitHub ubuntu-latest vCPU is roughly 0.6x one laptop core) x 0.6 (margin for runner noise) = about 0.36 x local, rounded down.",
+    "latency/size ceilings": "local / 0.36, rounded up, then generous: they catch order-of-magnitude regressions (a sync call on the hot path, a leak), not 10% drifts.",
+    "load": "The CI load profile publishes at a fixed 400 ev/s (1,000 readers, 15 s), well under the server's capacity even on 2 vCPUs, so accepted_eps must keep up with the schedule (95%), nothing may be lost (delivered/expected, errors), and the latencies/lag show queueing.",
+    "local overrides": "BENCH_<BENCH>_<METRIC>_<MIN|MAX>=n for one bound, BENCH_SCALE=f to multiply every min (and divide every max) by f, BENCH_THRESHOLDS=<file> for another file."
+  },
+  "load": {
+    "_local": "accepted 500/500 ev/s target run, ok p95 7.8 ms, delivery p95 8.0 ms, ratio 1.0, 0 errors, RSS peak 133 MB, loop lag p99 6.3 ms",
+    "accepted_eps": { "min": 380 },
+    "ok_p95_ms": { "max": 200 },
+    "delivered_ratio": { "min": 0.999 },
+    "delivery_p95_ms": { "max": 200 },
+    "errors": { "max": 0 },
+    "server_rss_peak_mb": { "max": 450 },
+    "loop_lag_p99_ms": { "max": 60 }
+  },
+  "verify": {
+    "_local": "inline 2,486 ev/s, pool (2 threads) 2,611 ev/s; on a 2-vCPU runner the default pool is 1 thread",
+    "inline_eps": { "min": 900 },
+    "pool_eps": { "min": 800 }
+  },
+  "storage": {
+    "_local": "ingest 4,133 ev/s (30k events), author feed query 1.46 ms",
+    "ingest_eps": { "min": 1500 },
+    "query_author_feed_ms": { "max": 6 }
+  },
+  "fanout": {
+    "_local": "broadcast 56,004 ev/s through 10k subscriptions, engine ingest 2,873 ev/s",
+    "broadcast_eps": { "min": 20000 },
+    "ingest_eps": { "min": 1000 }
+  }
+}

@@ -21,6 +21,7 @@ import { homeActions } from './mocks/home.ts';
 import { registerMediaMocks } from './mocks/media.ts';
 import { registerPeopleMocks } from './mocks/people.ts';
 import { pluginWriterActions } from './mocks/plugins.ts';
+import { registerTopTaskMocks } from './mocks/top-tasks.ts';
 
 type Relay = z.infer<typeof RelaySchema>;
 type Diff = {
@@ -1338,6 +1339,7 @@ const fail = (status: number, code: string, message: string) =>
 
 const app = new Hono();
 registerActivityMocks({ app, actions: ACTIONS as never, state: () => S as never, token });
+registerTopTaskMocks({ app, actions: ACTIONS as never, state: () => S as never, token });
 
 app.post('/__reset', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as ResetOptions;
