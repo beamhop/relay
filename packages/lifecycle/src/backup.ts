@@ -89,6 +89,9 @@ export interface BackupRecord {
   /** Config secrets kept or masked in the archive. */
   secrets?: 'included' | 'masked';
   durationMs: number;
+  /** When "Check this backup" last ran (unix seconds) and whether it passed. */
+  verifiedAt?: number;
+  verifiedOk?: boolean;
 }
 
 /** `lifecycle.backups/last` — insights health reads this. */
@@ -561,12 +564,24 @@ export class BackupService {
   }
 
   async verify(id: string): Promise<VerifyResult> {
+    let result: VerifyResult;
     try {
       const { bytes, sha256 } = await this.fetchBytes(id);
-      return await this.verifyBytes(bytes, sha256);
+      result = await this.verifyBytes(bytes, sha256);
     } catch (err) {
-      return { ok: false, problems: [err instanceof Error ? err.message : String(err)] };
+      result = { ok: false, problems: [err instanceof Error ? err.message : String(err)] };
     }
+    // Remember the outcome on the catalog entry so the list can show "checked".
+    const rec = await this.ports.docs.get<BackupRecord>(COL.backups, id).catch(() => null);
+    if (rec?.id)
+      await this.ports.docs
+        .put(COL.backups, rec.id, {
+          ...rec,
+          verifiedAt: this.ports.clock.now(),
+          verifiedOk: result.ok,
+        })
+        .catch(() => undefined);
+    return result;
   }
 
   private async load(id: string): Promise<LoadedArchive> {

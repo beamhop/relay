@@ -16,6 +16,7 @@ import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { registerActivityMocks } from './mocks/activity.ts';
+import { registerBackupsMocks, withBackupsRoute } from './mocks/backups.ts';
 import { enterprise } from './mocks/enterprise.ts';
 import { homeActions } from './mocks/home.ts';
 import { registerMediaMocks } from './mocks/media.ts';
@@ -1291,6 +1292,7 @@ ACTIONS.push(
 enterprise.annotate(nodeSchemaJson);
 ACTIONS.push(...homeActions(() => S).filter((a) => !ACTIONS.some((x) => x.id === a.id)));
 ACTIONS.push(...(systemMockActions(() => S) as Action[]));
+registerBackupsMocks(ACTIONS, () => S);
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')
@@ -1429,19 +1431,21 @@ app.all('/api/v1/*', async (c) => {
   if (path === '/auth/me') return c.json(principal);
   if (path === '/auth/recovery-codes') return c.json({ remaining: 10, owner: true });
   if (path === '/ui')
-    return c.json({
-      routes: S.modules['enterprise-identity']
-        ? [
-            {
-              path: '/settings/company',
-              title: 'Company sign-in',
-              placement: 'settings-section',
-              chunk: 'enterprise-identity',
-            },
-            ...enterprise.routes(),
-          ]
-        : [],
-    });
+    return c.json(
+      withBackupsRoute({
+        routes: S.modules['enterprise-identity']
+          ? [
+              {
+                path: '/settings/company',
+                title: 'Company sign-in',
+                placement: 'settings-section',
+                chunk: 'enterprise-identity',
+              },
+              ...enterprise.routes(),
+            ]
+          : [],
+      }),
+    );
   if (path === '/playbooks') return c.json({ playbooks: [] });
   if (path === '/health')
     return c.json({

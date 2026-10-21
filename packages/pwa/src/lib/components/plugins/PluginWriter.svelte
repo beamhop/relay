@@ -32,9 +32,11 @@
     initialState,
     isCurrentRun,
     markAi,
+    needsApproval,
     pluginHooks,
     pluginInfo,
     reduce,
+    stepsLine,
     testCases,
     testCounts,
   } from './writer';
@@ -54,6 +56,8 @@
   let st = $state<WriterState>(initialState());
   let whyOpen = $state(false);
   let elapsed = $state(0);
+  /** Id of the plugin whose declared access was allowed in this sheet. */
+  let allowedId = $state<string | null>(null);
 
   const send = (e: WriterEvent) => {
     st = reduce(st, e);
@@ -118,6 +122,24 @@
     });
   }
 
+  /** Allow the access the plugin declares (owner; preview lists each permission in plain words). */
+  function allow() {
+    if (st.phase !== 'result' && st.phase !== 'enabled') return;
+    const def = app.action('plugins.grant-permissions');
+    const o = st.output;
+    if (!def || !needsApproval(o)) return;
+    void flow.start(def, { id: o.id, permissions: declaredPermissions(o) }, {
+      onDone: () => {
+        allowedId = o.id;
+        onchanged?.();
+      },
+      onUndo: () => {
+        allowedId = null;
+        onchanged?.();
+      },
+    });
+  }
+
   /** Throw the draft away: installed drafts are removed after the undo window. */
   function discard(thenRetry = false) {
     if (st.phase !== 'result') return;
@@ -155,6 +177,7 @@
   const cases = $derived(output ? testCases(output) : []);
   const counts = $derived(output ? testCounts(output) : { passed: 0, failed: 0 });
   const perms = $derived(output ? declaredPermissions(output) : []);
+  const allowed = $derived(!!output && allowedId === output.id);
   const block = $derived(output ? enableBlock(output) : null);
   const blockText = $derived(
     block === 'tests-failed'
@@ -276,14 +299,25 @@
           <ul class="mt-1 list-disc space-y-0.5 pl-5" data-testid="plugin-writer-perms">
             {#each perms as p}<li>{PERMISSION_TEXT[p]()}</li>{/each}
           </ul>
-          <p class="mt-1 text-xs text-muted-foreground">{m.plugin_writer_perm_approval()}</p>
+          {#if allowed}
+            <p class="mt-1 text-xs text-success" data-testid="plugin-writer-allowed">{m.plugin_writer_allowed()}</p>
+          {:else}
+            <p class="mt-1 text-xs text-muted-foreground">{m.plugin_writer_perm_approval()}</p>
+            {#if needsApproval(output)}
+              {#if app.hasAction('plugins.grant-permissions')}
+                <Button size="sm" variant="secondary" class="mt-2" onclick={allow} data-testid="plugin-writer-allow">{m.plugin_writer_allow()}</Button>
+              {:else}
+                <p class="mt-1 text-xs text-muted-foreground" data-testid="plugin-writer-allow-owner">{m.plugin_writer_allow_owner()}</p>
+              {/if}
+            {/if}
+          {/if}
         {/if}
       </section>
 
       <section data-testid="plugin-writer-code">
         <h3 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{m.plugin_writer_code()}</h3>
         <div class="mt-1">
-          <ItemLens lines={[`id ${output.id}`, `hooks: ${pluginHooks(output.code).join(', ') || '—'}`, `permissions: ${perms.join(', ') || 'none'}`]}>
+          <ItemLens lines={[`id ${output.id}`, `hooks: ${pluginHooks(output.code).join(', ') || '—'}`, `permissions: ${perms.join(', ') || 'none'}${allowed ? ' (approved)' : ''}`, stepsLine(output)].filter(Boolean)}>
             {#snippet details()}
               {#each [{ label: 'plugin.ts', text: output.code }, { label: 'plugin.test.ts', text: output.tests }] as file}
                 {#if file.text}

@@ -456,5 +456,106 @@ export function pluginActions(host: PluginHost): ActionDef[] {
     },
   });
 
-  return [catalog, install, setEnabled(true), setEnabled(false), configure, uninstall, status];
+  // Plugins the admin wrote or added from code start with no access; the owner allows it here.
+  const PERMS = Object.keys(PERMISSION_TEXT) as PluginPermission[];
+  const approvedOf = (c: BeamhopConfig, id: string): PluginPermission[] | undefined =>
+    (
+      (c.modules.plugins as { entries?: Record<string, { approvedPermissions?: unknown }> })
+        ?.entries?.[id]?.approvedPermissions as PluginPermission[] | undefined
+    )?.filter((p) => PERMS.includes(p));
+  const grant = defineAction({
+    id: 'plugins.grant-permissions',
+    title: 'Allow a plugin more access',
+    description:
+      'Let a plugin read your data, save its own data or go online. It asks for this in its code and gets nothing until you allow it.',
+    technical:
+      'Adds to modules.plugins.entries[id].approvedPermissions; a plugin asking for more than approved is not loaded.',
+    scope: 'node',
+    permission: 'node.manage',
+    sensitive: true,
+    keywords: ['plugin permissions', 'allow plugin', 'approve plugin'],
+    input: z.object({
+      id: z.string().min(1).describe('Plugin id'),
+      permissions: z
+        .array(z.enum(PERMS as [PluginPermission, ...PluginPermission[]]))
+        .min(1)
+        .describe('Access to allow'),
+    }),
+    async preview(input) {
+      const have = approvedOf(kernel.config(), input.id) ?? [];
+      const adding = input.permissions.filter((p) => !have.includes(p));
+      if (!adding.length) return [{ kind: 'info', text: 'It already has this access' }];
+      const name = nameOf(host, input.id);
+      return [
+        ...adding.map(
+          (p): DiffLine => ({
+            kind: PERMISSION_TEXT[p].risky ? 'warning' : 'add',
+            text: `“${name}” will be able to: ${PERMISSION_TEXT[p].text.toLowerCase()}`,
+            technical: `modules.plugins.entries.${input.id}.approvedPermissions += ${p} (${PERMISSION_TEXT[p].technical})`,
+          }),
+        ),
+        { kind: 'info', text: 'Only allow this if you trust what the plugin does' },
+      ];
+    },
+    async run(input, ctx) {
+      const prev = kernel.config();
+      const known =
+        prev.plugins.some((p) => p.id === input.id) || !!(await host.installedRecord(input.id));
+      if (!known) throw new Error(`There is no plugin called “${input.id}” here`);
+      const have = approvedOf(prev, input.id) ?? [];
+      const next = PERMS.filter((p) => have.includes(p) || input.permissions.includes(p));
+      await host.commitConfig(
+        (c) => {
+          const s = (c.modules.plugins ?? {}) as { entries?: Record<string, unknown> };
+          const entries = { ...(s.entries ?? {}) };
+          entries[input.id] = {
+            ...((entries[input.id] as object) ?? {}),
+            approvedPermissions: next,
+          };
+          return { ...c, modules: { ...c.modules, plugins: { ...s, entries } } };
+        },
+        {
+          principalId: ctx.principal.id,
+          summary: `Allowed plugin ${input.id}: ${input.permissions.join(', ')}`,
+          reason: ctx.reason,
+        },
+      );
+      return {
+        output: { id: input.id, approvedPermissions: next },
+        summary: `Allowed “${nameOf(host, input.id)}” the access it asked for`,
+        undo: {
+          actionId: 'plugins.grant-permissions',
+          payload: { id: input.id, prev: approvedOf(prev, input.id) ?? null },
+          expiresAt: undoAt(),
+        },
+      };
+    },
+    async undo(payload, ctx) {
+      const p = payload as { id: string; prev: PluginPermission[] | null };
+      await host.commitConfig(
+        (c) => {
+          const s = (c.modules.plugins ?? {}) as { entries?: Record<string, unknown> };
+          const entries = { ...(s.entries ?? {}) };
+          const { approvedPermissions: _drop, ...rest } = (entries[p.id] ?? {}) as Record<
+            string,
+            unknown
+          >;
+          entries[p.id] = p.prev === null ? rest : { ...rest, approvedPermissions: p.prev };
+          return { ...c, modules: { ...c.modules, plugins: { ...s, entries } } };
+        },
+        { principalId: ctx.principal.id, summary: 'Undo allowing plugin access' },
+      );
+    },
+  });
+
+  return [
+    catalog,
+    install,
+    setEnabled(true),
+    setEnabled(false),
+    configure,
+    uninstall,
+    status,
+    grant,
+  ];
 }

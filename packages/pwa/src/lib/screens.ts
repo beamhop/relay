@@ -120,7 +120,7 @@ export function resolveScreen(
   if (section && sections.includes(section))
     return { href: withQuery(path), fallback: false, tab: '/settings' };
   if (path.startsWith('/m/') && modules.includes(path.slice(2)))
-    return { href: withQuery(path), fallback: false, tab: nearestTab(path) };
+    return { href: withQuery(path), fallback: false, tab: nearestTab(path.slice(2)) };
   // Module screens named by their own path (`/settings/compliance`, `/approvals/<id>`).
   if (modules.some((p) => path === p || path.startsWith(`${p}/`)))
     return { href: withQuery(`/m${path}`), fallback: false, tab: nearestTab(path) };

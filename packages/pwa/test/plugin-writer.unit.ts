@@ -12,9 +12,11 @@ import {
   initialState,
   isCurrentRun,
   markAi,
+  needsApproval,
   pluginHooks,
   pluginInfo,
   reduce,
+  stepsLine,
   testCases,
   testCounts,
   testNames,
@@ -190,6 +192,28 @@ describe('reading the generated plugin', () => {
     ]);
     expect(cases[1]?.detail).toContain('Received: "reject"');
     expect(cases[0]?.detail).toBeUndefined();
+  });
+
+  it('prefers the server’s test cases, steps and permissions when sent', () => {
+    const o = ok({
+      testCases: [
+        { name: 'blocks spam', ok: true },
+        { name: 'lets hello through', ok: false, error: 'Expected accept' },
+      ],
+      steps: ['writing', 'checking', 'testing', 'installing'],
+      permissions: ['docs', 'network'],
+    });
+    expect(testCases(o)).toEqual([
+      { name: 'blocks spam', ok: true },
+      { name: 'lets hello through', ok: false, detail: 'Expected accept' },
+    ]);
+    expect(testCounts({ ...o, testResult: { ok: false } })).toEqual({ passed: 1, failed: 1 });
+    expect(stepsLine(o)).toBe('steps: writing → checking → testing → installing');
+    expect(stepsLine(ok())).toBe('');
+    expect(declaredPermissions(o)).toEqual(['network', 'docs']);
+    expect(needsApproval(o)).toBe(true);
+    expect(needsApproval({ ...o, installed: false })).toBe(false);
+    expect(needsApproval(ok({ code: 'definePlugin({})' }))).toBe(false);
   });
 });
 

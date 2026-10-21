@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { createBunPluginHost } from '../src/bun/index.ts';
 import { createBundledPluginHost } from '../src/bundled.ts';
 import type { PluginHost } from '../src/host/host.ts';
-import { bootKernel, ev, runEvent, tempDir, waitFor } from './helpers.ts';
+import { bootKernel, ev, runAction, runEvent, tempDir, waitFor } from './helpers.ts';
 
 const CODE = `import { definePlugin } from '@beamhop/plugins/sdk';
 export default definePlugin({
@@ -80,3 +80,51 @@ test('hosts without source support do not advertise test/install', async () => {
   expect(typeof host.install).toBe('undefined');
   expect(host.sdkGuide.length).toBeGreaterThan(100);
 });
+
+test('declared permissions stay off until the owner allows them (plugins.grant-permissions)', async () => {
+  const dir = tempDir();
+  const { kernel } = await bootKernel({}, [createBunPluginHost({ dir, watch: () => () => {} })]);
+  const host = kernel.use<PluginHost>('plugins')!;
+  const def = kernel.actions.get('plugins.grant-permissions')!;
+  expect(def.permission).toBe('node.manage');
+  expect(def.sensitive).toBe(true);
+  const ctx = {
+    principal: { id: 'o', roles: { '*': 'owner' as const }, via: 'cli' as const },
+    relayId: null,
+    ports: kernel.ports,
+  };
+  const code = CODE.replace('priority: 300,', "priority: 300,\n  permissions: ['docs'],");
+  await host.install!({ id: 'no-shouting', code, enabled: false });
+  await kernel.applyConfig({
+    ...kernel.config(),
+    plugins: [{ id: 'no-shouting', enabled: true, config: {} }],
+  });
+  await waitFor(() => host.status()[0]?.status === 'error');
+  expect(host.status()[0]!.error).toContain('not approved');
+
+  const r = await runAction(kernel, 'plugins.grant-permissions', {
+    id: 'no-shouting',
+    permissions: ['docs'],
+  });
+  expect(r.preview[0]?.text).toBe(
+    '“no-shouting” will be able to: keep its own saved data on this server',
+  );
+  expect(r.preview[0]?.technical).toContain('approvedPermissions += docs');
+  await waitFor(() => host.status()[0]?.status === 'running');
+  expect((await runEvent(kernel, ev('LOUD NOISES'))).action).toBe('reject');
+  const again = await def.preview!(
+    def.input.parse({ id: 'no-shouting', permissions: ['docs'] }),
+    ctx,
+  );
+  expect(again).toEqual([{ kind: 'info', text: 'It already has this access' }]);
+
+  await def.undo!(r.result.undo!.payload, ctx);
+  const entries = (kernel.config().modules.plugins as { entries: Record<string, object> }).entries;
+  expect(entries['no-shouting']).not.toHaveProperty('approvedPermissions');
+  // The reload with the narrower access is refused (the host reports why).
+  await waitFor(() => !!host.status()[0]?.error?.includes('not approved'));
+  await expect(
+    runAction(kernel, 'plugins.grant-permissions', { id: 'nope', permissions: ['network'] }),
+  ).rejects.toThrow('no plugin called');
+  await host.stop();
+}, 30_000);

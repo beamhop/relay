@@ -208,7 +208,7 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         kernel.bus.on('blob.uploaded', (p) => retention.track(retention.onBlobUploaded(p))),
       );
 
-      for (const a of createActions(rt, backups, retention)) kernel.actions.register(a);
+      for (const a of createActions(rt, backups, retention, litestream)) kernel.actions.register(a);
       kernel.health.push(...createHealthChecks(rt, backups, retention, litestream));
       kernel.cards.push(createCardSource(rt, backups, retention, litestream));
       kernel.playbooks.push({
@@ -216,9 +216,11 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         title: 'Standby server and failover',
         steps: FAILOVER_STEPS,
       });
+      // The backups list (make, check, restore) at /m/settings/backups; the schedule and
+      // storage stay on the generated Settings → Backups screen.
       kernel.ui.push({
         path: '/settings/backups',
-        title: 'Backups',
+        title: 'Backups and restore',
         placement: 'settings-section',
         chunk: 'lifecycle-backups',
       });

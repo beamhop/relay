@@ -109,6 +109,16 @@ describe('backups', () => {
     expect((await t.act('backups.verify', { id: rec?.id }, null)).result.output).toMatchObject({
       ok: true,
     });
+    // The list remembers the check (shown as "checked" in the app).
+    const checked = (await t.act('backups.list', {}, null)).result.output as {
+      backups: BackupRecord[];
+      running: boolean;
+      standby: { enabled: boolean };
+    };
+    expect(checked.backups[0]?.verifiedOk).toBe(true);
+    expect(checked.backups[0]?.verifiedAt).toBeGreaterThan(0);
+    expect(checked.running).toBe(false);
+    expect(checked.standby).toEqual({ enabled: false });
 
     // Tamper with one file inside the archive, keep the manifest.
     const body = await target.get(rec?.sha256 as string);
@@ -134,6 +144,7 @@ describe('backups', () => {
     );
     const v2 = await t.svc.backups.verify(rec?.id as string);
     expect(v2.problems).toContain('archive checksum does not match the catalog');
+    expect((await t.svc.backups.catalog())[0]?.verifiedOk).toBe(false);
 
     // Unreadable bytes.
     const junk = new TextEncoder().encode('not an archive');

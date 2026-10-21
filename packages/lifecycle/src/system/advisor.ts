@@ -30,6 +30,19 @@ export interface AdvisorFacts {
   /** Days until the disk is full at the recent rate (undefined: not shrinking / unknown). */
   diskDaysLeft?: number;
   backupsEnabled: boolean;
+  /**
+   * Hot/cold media tiering (media module), read duck-typed: whether cold
+   * storage is set up and how much local media nobody opened for `days`.
+   * Undefined when the media module is off.
+   */
+  coldStorage?: {
+    enabled: boolean;
+    days: number;
+    staleBytes: number;
+    staleFiles: number;
+    /** Only part of the files were looked at (very many files). */
+    partial?: boolean;
+  };
 }
 
 export interface MachineSize {
@@ -66,6 +79,12 @@ export const CONFIG_ADVICE = ['verify-workers-off', 'verify-workers-on'] as cons
 export type ConfigAdviceId = (typeof CONFIG_ADVICE)[number];
 
 const GB = 1024 ** 3;
+/** "Not opened in" window of the cold-storage advice, in days. */
+export const COLD_STALE_DAYS = 90;
+/** Smallest amount of unopened media worth a cold-storage suggestion. */
+export const COLD_MIN_BYTES = GB;
+/** Action that turns cold storage on (preview → apply → undo). */
+export const COLD_STORAGE_ACTION = 'system.cold-storage';
 const MEMORY_STEPS = [1, 2, 4, 8, 16, 32, 64];
 
 export function recommendSize(f: AdvisorFacts): MachineSize {
@@ -191,7 +210,31 @@ export function advise(f: AdvisorFacts): { size: MachineSize; advice: Advice[] }
       });
   }
 
-  if (f.blobDriver === 'fs' && (f.blobBytes ?? 0) > 20 * GB)
+  const cold = f.coldStorage;
+  const coldAdvice =
+    !!cold && !cold.enabled && f.runtime !== 'cloudflare' && cold.staleBytes >= COLD_MIN_BYTES;
+  if (cold && coldAdvice) {
+    const gb = Math.max(1, Math.round(cold.staleBytes / GB));
+    out.push({
+      id: 'cold-storage-on',
+      severity: 'suggestion',
+      title: `Turn on cold storage — ${gb} GB of files haven't been opened in ${cold.days} days`,
+      body: 'Move files nobody opens any more to a cheaper storage bucket. They keep working, and the main storage keeps room for new uploads.',
+      lens: [
+        `${cold.staleFiles} files, ${mb(cold.staleBytes)} with last access older than ${cold.days} days${cold.partial ? ' (partly counted)' : ''}`,
+        'last access: docs blossom.tiers[sha256].lastAccess, else newest BlobIndex uploadedAt',
+        `modules.blossom.tiers.cold: none → { store, afterDays: ${cold.days} }`,
+      ],
+      apply: {
+        label: 'Turn on cold storage',
+        actionId: COLD_STORAGE_ACTION,
+        input: { afterDays: cold.days },
+      },
+    });
+  }
+
+  // Cold storage (when available) is the better answer to a full media disk.
+  if (f.blobDriver === 'fs' && (f.blobBytes ?? 0) > 20 * GB && !coldAdvice && !cold?.enabled)
     out.push({
       id: 'media-to-bucket',
       severity: 'suggestion',
@@ -304,6 +347,7 @@ export async function gatherFacts(kernel: Kernel): Promise<AdvisorFacts> {
       rssBytes: host.rssBytes(),
       verifyWorkers: host.verifyWorkers,
     };
+  const sizes = new Map<string, number>();
   try {
     let bytes = 0;
     let files = 0;
@@ -313,6 +357,7 @@ export async function gatherFacts(kernel: Kernel): Promise<AdvisorFacts> {
       for (const b of page.items) {
         bytes += b.size;
         files++;
+        sizes.set(b.sha256, b.size);
       }
       cursor = page.cursor;
     } while (cursor && files < MAX_BLOB_SCAN);
@@ -322,7 +367,76 @@ export async function gatherFacts(kernel: Kernel): Promise<AdvisorFacts> {
   } catch {
     // media storage unreachable: leave unknown
   }
+  const cold = await coldStorageFacts(kernel, sizes).catch(() => undefined);
+  if (cold) f.coldStorage = { ...cold, ...(f.blobBytesPartial ? { partial: true } : {}) };
   return f;
+}
+
+/** DocStore collection where the media module keeps per-file access times (duck-typed). */
+const TIERS_DOCS = 'blossom.tiers';
+
+/** Is cold storage configured (`modules.blossom.tiers.cold`)? Read without importing the media module. */
+export function coldStorageConfigured(cfg: BeamhopConfig): boolean {
+  const blossom = cfg.modules?.blossom as { tiers?: { cold?: unknown } } | undefined;
+  return !!blossom?.tiers?.cold;
+}
+
+/**
+ * Unopened local media, for the cold-storage advice. Only when the media
+ * module with storage tiers is on (`media.storage-tiers` action present).
+ */
+async function coldStorageFacts(
+  kernel: Kernel,
+  sizes: Map<string, number>,
+): Promise<NonNullable<AdvisorFacts['coldStorage']> | undefined> {
+  if (!kernel.actions.get('media.storage-tiers')) return undefined;
+  const cfg = kernel.config();
+  const days = COLD_STALE_DAYS;
+  const enabled = coldStorageConfigured(cfg);
+  if (enabled || !sizes.size) return { enabled, days, staleBytes: 0, staleFiles: 0 };
+  const docs = kernel.ports.docs;
+  const last = new Map<string, number>();
+  const cold = new Set<string>();
+  let cursor: string | undefined;
+  let seen = 0;
+  do {
+    const page = await docs.list<{ lastAccess?: number; tier?: string }>(TIERS_DOCS, {
+      cursor,
+      limit: 1000,
+    });
+    for (const { key, value } of page.items) {
+      if (value?.tier === 'cold') cold.add(key);
+      if (typeof value?.lastAccess === 'number') last.set(key, value.lastAccess);
+    }
+    seen += page.items.length;
+    cursor = page.cursor;
+  } while (cursor && seen < MAX_BLOB_SCAN * 2);
+  // Files without an access record: newest upload time on any relay.
+  const uploaded = new Map<string, number>();
+  for (const relay of cfg.relays) {
+    let c: string | undefined;
+    let n = 0;
+    do {
+      const page = await kernel.ports.blobIndex.list(relay.id, { cursor: c, limit: 1000 });
+      for (const o of page.items)
+        if (sizes.has(o.sha256) && !last.has(o.sha256))
+          uploaded.set(o.sha256, Math.max(uploaded.get(o.sha256) ?? 0, o.uploadedAt));
+      n += page.items.length;
+      c = page.cursor;
+    } while (c && n < MAX_BLOB_SCAN * 2);
+  }
+  for (const [sha, t] of uploaded) last.set(sha, t);
+  const cutoff = kernel.ports.clock.now() - days * 86_400;
+  let staleBytes = 0;
+  let staleFiles = 0;
+  for (const [sha, size] of sizes) {
+    if (cold.has(sha)) continue;
+    const t = last.get(sha);
+    if (t === undefined || t > cutoff) continue;
+    staleBytes += size;
+    staleFiles++;
+  }
+  return { enabled, days, staleBytes, staleFiles };
 }
 
 export async function runAdvisor(kernel: Kernel): Promise<AdvisorReport> {
