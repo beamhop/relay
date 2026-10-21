@@ -6,6 +6,18 @@
   "license": "AGPL-3.0-or-later",
   "description": "Enterprise: envelope encryption, KMS/Vault, isolated signer, NIP-46 bunker",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@noble/hashes": "^1.8.0",
+    "aws4fetch": "^1.0.20",
+    "jose": "^6.2.13",
+    "nostr-tools": "^2.25.2",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@beamhop/enterprise-identity": "workspace:*",
+    "@beamhop/relay": "workspace:*",
+    "@beamhop/testkit": "workspace:*",
+    "hono": "^4.13.13"
+  }
 }
