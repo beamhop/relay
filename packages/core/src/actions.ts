@@ -56,6 +56,12 @@ export interface ActionDef<I extends z.ZodType = z.ZodType, O = unknown> {
   input: I;
   /** Read-only actions skip preview/approval/undo. */
   readOnly?: boolean;
+  /**
+   * Node-scoped, read-only action whose output is already filtered per
+   * principal (e.g. the home inbox, the admin's own stats): relay-scoped admins
+   * may run it when they hold `permission` on at least one relay.
+   */
+  anyRelay?: boolean;
   /** Requires two-person approval when the approvals module is enabled (§12.9). */
   sensitive?: boolean;
   /** Supports multi-select bulk invocation. */

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from 'bun:test';
+import { defineAction, defineModule } from '@beamhop/core';
+import { z } from 'zod';
 import { NODE, RELAY, addMember, bootClaimed, call, makeKey } from './helpers.ts';
 
 describe('RBAC', () => {
@@ -74,6 +76,42 @@ describe('RBAC', () => {
     expect(
       catMain.json.actions.find((a: { id: string }) => a.id === 'moderation.ban-pubkey').allowed,
     ).toBe(false);
+  });
+
+  test('node-scoped anyRelay read actions are open to relay-scoped admins', async () => {
+    const nodeReads = defineModule({
+      id: 'node-reads',
+      register(k) {
+        const mk = (id: string, anyRelay: boolean) =>
+          defineAction({
+            id,
+            title: `Read ${id}`,
+            description: 'test',
+            technical: 'test action',
+            scope: 'node',
+            permission: 'relay.read',
+            readOnly: true,
+            ...(anyRelay ? { anyRelay } : {}),
+            input: z.object({}),
+            async run(_i, ctx) {
+              return { output: { who: ctx.principal.id }, summary: 'ok' };
+            },
+          });
+        k.actions.register(mk('test.filtered-read', true));
+        k.actions.register(mk('test.node-read', false));
+      },
+    });
+    const env = await bootClaimed([nodeReads]);
+    const teamMod = await addMember(env, 'moderator', 'team');
+    const run = (id: string) =>
+      call(env.kernel, 'POST', `${NODE}/actions/${id}`, { token: teamMod.token, body: {} });
+    expect((await run('test.filtered-read')).status).toBe(200);
+    expect((await run('test.node-read')).status).toBe(403);
+    const cat = await call(env.kernel, 'GET', `${NODE}/actions`, { token: teamMod.token });
+    const allowed = (id: string) =>
+      cat.json.actions.find((a: { id: string }) => a.id === id)?.allowed;
+    expect(allowed('test.filtered-read')).toBe(true);
+    expect(allowed('test.node-read')).toBe(false);
   });
 
   test('admins.set-role / admins.remove with undo and last-owner protection', async () => {
