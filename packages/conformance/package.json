@@ -6,6 +6,21 @@
   "license": "AGPL-3.0-or-later",
   "description": "NIP/BUD conformance suite runnable against any relay URL",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "bin": { "conformance": "./src/cli.ts", "beamhop-conformance": "./src/cli.ts" },
+  "scripts": {
+    "conformance": "bun src/cli.ts",
+    "load": "bun bench/load.ts",
+    "relay-tester": "bun scripts/relay-tester.ts"
+  },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@beamhop/relay": "workspace:*",
+    "nostr-tools": "^2.25.2"
+  },
+  "devDependencies": {
+    "@beamhop/blossom": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/runtime-bun": "workspace:*",
+    "@beamhop/testkit": "workspace:*"
+  }
 }
