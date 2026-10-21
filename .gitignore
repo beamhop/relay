@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+.svelte-kit/
+*.log
+.env
+.env.*
+!.env.example
+data/
+coverage/
+.DS_Store
+.wrangler/
+# lockfile is regenerated at integration time during the swarm build
+bun.lock
+bun.lockb

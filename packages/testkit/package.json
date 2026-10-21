@@ -1,0 +1,12 @@
+{
+  "name": "@beamhop/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@noble/hashes": "^1.8.0"
+  }
+}
