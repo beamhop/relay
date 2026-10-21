@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from 'bun:test';
-import { type BeamhopConfig, type NostrEvent, finalizeEvent } from '@beamhop/core';
+import { type BeamhopConfig, type NostrEvent, can, finalizeEvent } from '@beamhop/core';
 import { type TestKey, makeKey } from '@beamhop/testkit';
 import { parseReport } from '../src/moderation.ts';
 import { setup } from './helpers.ts';
@@ -461,5 +461,59 @@ describe('action registry hygiene', () => {
     expect((result.output as { limits: { maxLimit: number } }).limits.maxLimit).toBe(9);
     const s = await act('policy.stats', {});
     expect(s.result.output).toMatchObject({ total: { rejected: 0 } });
+  });
+});
+
+describe('moderation.bulk-delete', () => {
+  test('moves many posts to the recycle bin; undo restores them', async () => {
+    const { act, ports, svc, kernel } = await setup(GOALS);
+    const k = makeKey();
+    const posts = [1, 2, 3].map((n) =>
+      finalizeEvent({ kind: 1, tags: [], content: `p${n}`, created_at: ports.clock.now() }, k.sk),
+    );
+    for (const p of posts) await ports.events.save('main', p);
+    const ghost = 'f'.repeat(64);
+    const ids = [...posts.map((p) => p.id), ghost];
+
+    const r = await act('moderation.bulk-delete', { eventIds: ids, reason: 'spam wave' });
+    expect(r.preview[0]).toMatchObject({
+      kind: 'remove',
+      text: 'Move 3 posts to the recycle bin (restorable for 30 days)',
+    });
+    expect(r.preview[1]?.text).toContain('1 post could not be found');
+    expect(r.result.output).toEqual({ removed: 3, notFound: 1 });
+    for (const p of posts) {
+      expect(await ports.events.getById('main', p.id)).toBeNull();
+      expect((await svc.state.getRecycled('main', p.id))?.reason).toBe('spam wave');
+    }
+    // Already in the bin: nothing to remove again.
+    const again = await act('moderation.bulk-delete', { eventIds: [posts[0]?.id] });
+    expect(again.result.output).toEqual({ removed: 0, notFound: 1 });
+
+    await r.undo();
+    for (const p of posts) {
+      expect(await ports.events.getById('main', p.id)).not.toBeNull();
+      expect(await svc.state.isRecycled('main', p.id)).toBe(false);
+    }
+
+    const def = kernel.actions.get('moderation.bulk-delete');
+    expect(def?.permission).toBe(kernel.actions.get('moderation.remove')?.permission);
+    expect(def?.technical).toBeTruthy();
+    expect(def?.input.safeParse({ eventIds: [] }).success).toBe(false);
+    expect(def?.input.safeParse({ eventIds: ['nothex'] }).success).toBe(false);
+    expect(def?.input.safeParse({ eventIds: Array(501).fill(ghost) }).success).toBe(false);
+    expect(def?.input.safeParse({ eventIds: [ghost], reason: 'x'.repeat(201) }).success).toBe(
+      false,
+    );
+  });
+
+  test('needs moderation rights', async () => {
+    const { kernel } = await setup(GOALS);
+    const def = kernel.actions.get('moderation.bulk-delete');
+    if (!def) throw new Error('missing');
+    const viewer = { id: 'v', roles: { '*': 'viewer' as const }, via: 'cli' as const };
+    const mod = { id: 'm', roles: { main: 'moderator' as const }, via: 'cli' as const };
+    expect(can(viewer, def.permission, 'main')).toBe(false);
+    expect(can(mod, def.permission, 'main')).toBe(true);
   });
 });

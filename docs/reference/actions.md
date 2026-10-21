@@ -1044,6 +1044,19 @@ Stop these accounts from posting or uploading here.
 | `reason` | string |  |  |
 | `removeRecent` | boolean | `false` |  |
 
+### Remove many posts
+
+Hide up to 500 posts at once. They stay in the recycle bin for 30 days.
+
+- **id:** `moderation.bulk-delete` · **CLI:** `beamhop moderation bulk-delete` · **scope:** relay · **permission:** `moderation.write`
+- changes settings/data · undoable · bulk · needs a second approver when approvals are on
+- *Technical:* Bulk soft delete by event id: each event copied to policy.recycle then deleteByIds (no tombstone, no NIP-09 kind 5). Gated by the two-person rule (§12.9) when enterprise-compliance approvals are on.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `eventIds` | list of string |  |  |
+| `reason` | string |  |  |
+
 ### Keep
 
 Mark items as fine. Held posts become visible.
