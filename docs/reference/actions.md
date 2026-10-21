@@ -608,7 +608,11 @@ Everything to share your relay: addresses, a QR code, a draft announcement and t
 
 - **id:** `experience.launch-kit` · **CLI:** `beamhop experience launch-kit` · **scope:** relay · **permission:** `relay.read`
 - read-only
-- *Technical:* URLs from relay.hosts + node.tls; QR via @beamhop/public-web; unsigned kind 1 draft (never published); NIP-11 field suggestions.
+- *Technical:* URLs from input.baseUrl, else the last route.publicUrl seen, else the first non-wildcard relay.hosts entry + node.tls (ws/wss follows http/https); `needsDomain: true` when none is usable. QR via @beamhop/public-web; unsigned kind 1 draft (never published); NIP-11 field suggestions.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `baseUrl` | string |  | The web address you are using right now, e.g. http://localhost:3334 |
 
 ### My time this week
 
@@ -681,11 +685,12 @@ Checks your relay from the outside the way people will use it: connect, post, re
 
 - **id:** `experience.test-relay` · **CLI:** `beamhop experience test-relay` · **scope:** relay · **permission:** `config.write`
 - read-only
-- *Technical:* NIP-11 GET, WebSocket EVENT (kind 30078, throwaway key, NIP-40 expiry) → OK, REQ ids → EVENT/EOSE, BUD-02 PUT /upload + GET; cleans up with kind 5 and DELETE.
+- *Technical:* Address: input.baseUrl → last route.publicUrl → first non-wildcard host (`needsDomain: true` when none). NIP-11 GET, WebSocket EVENT (kind 30078, throwaway key, NIP-40 expiry) → OK, REQ ids → EVENT/EOSE, BUD-02 PUT /upload + GET; cleans up with kind 5 and DELETE.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `skipUpload` | boolean | `false` |  |
+| `baseUrl` | string |  | The web address you are using right now, e.g. http://localhost:3334 |
 
 ### Why?
 
@@ -1010,6 +1015,18 @@ Give one person more (or less) space for media uploads on this relay.
 |---|---|---|---|
 | `pubkey` | string |  | Whose storage limit to change |
 | `quotaBytes` | number |  | New limit in bytes, or empty to go back to their tier’s default |
+
+### Storage use
+
+How much space people use on this relay, who is close to or over their storage limit, and who stores the most.
+
+- **id:** `media.usage-summary` · **CLI:** `beamhop media usage-summary` · **scope:** relay · **permission:** `relay.read`
+- read-only
+- *Technical:* BlobIndex.list scan (synthetic owners like "anonymous"/"media-variant" count toward totalUsedBytes only); per-pubkey quota = docs blossom.quotas override → tier.blobQuotaBytes → blossom.defaultQuotaBytes → kernel.limits().defaultBlobQuotaBytes (goals). nearQuota: ≥80% and not over; overQuota: used > quota.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `top` | number | `10` | How many of the largest to list |
 
 ## moderation
 
@@ -1408,7 +1425,7 @@ Everyone seen here recently, with their tier, activity, storage and status.
 
 - **id:** `users.list` · **CLI:** `beamhop users list` · **scope:** relay · **permission:** `relay.read`
 - read-only
-- *Technical:* Union of policy state (first-seen, last activity, tiers, bans, mutes, allowlist) and blob owners (BlobIndex); sorted by last activity; offset cursor. Activity is recorded at most every 15 minutes per pubkey.
+- *Technical:* Union of policy state (first-seen, last activity, tiers, bans, mutes, allowlist) and blob owners (BlobIndex); sorted by last activity; offset cursor. Activity is recorded at most every 15 minutes per pubkey. quotaBytes = docs blossom.quotas override ?? kernel.limits(relay, tier).defaultBlobQuotaBytes (tier.blobQuotaBytes → blossom.defaultQuotaBytes → goals).
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
