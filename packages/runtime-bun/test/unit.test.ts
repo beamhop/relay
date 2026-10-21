@@ -224,6 +224,23 @@ describe('bun ports', () => {
     expect(existsSync(join(layout.secretsDir, 'ip-salt.key'))).toBe(true);
     await res.close();
   });
+
+  test('default ports wire ports.media from @beamhop/media/bun when tools exist', async () => {
+    const dir = tempDir();
+    const layout = ensureDataDir(dir);
+    const cfg = parseConfig({ node: { dataDir: dir }, storage: { driver: 'memory' } });
+    const processor = { supports: ['resize'] as const, process: async () => [] };
+    const withMedia = await createDefaultPorts(cfg, layout, new MemoryLogger(), {
+      importMedia: async () => ({ createBunMediaProcessor: async () => ({ processor }) }),
+    });
+    expect(withMedia.ports.media).toBe(processor);
+    await withMedia.close();
+    const without = await createDefaultPorts(cfg, layout, new MemoryLogger(), {
+      importMedia: async () => ({ createBunMediaProcessor: async () => ({}) }),
+    });
+    expect(without.ports.media).toBeUndefined();
+    await without.close();
+  });
 });
 
 describe('kernel dispatch', () => {

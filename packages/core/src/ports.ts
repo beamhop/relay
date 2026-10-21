@@ -246,6 +246,11 @@ export interface MediaResult {
   type?: string;
   /** For perceptual-hash. */
   hash?: string;
+  /** Pixel size of `data` (or of the input, for perceptual-hash), when known. */
+  width?: number;
+  height?: number;
+  /** BlurHash placeholder of the image, when the processor computes one. */
+  blurhash?: string;
 }
 
 export interface MediaProcessor {
