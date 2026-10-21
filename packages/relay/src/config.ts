@@ -77,6 +77,10 @@ export const RelayModuleConfigSchema = z
         .prefault({}),
       'NIP-29 relay-based groups: h-tagged posts, moderation kinds 9000–9009, join/leave 9021/9022, relay-signed 39000–39003. Admins can always create groups via the groups.* actions.',
     ),
+    countScanLimit: technical(
+      z.number().int().positive().default(10_000),
+      'NIP-45: when filters may match audience-restricted events (gift wraps, private NIP-29 groups), COUNT scans up to this many matching events and applies REQ visibility per event; hitting the cap marks the answer approximate (a lower bound).',
+    ),
     vanishIdCap: technical(
       z.number().int().min(0).default(1000),
       'NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total.',

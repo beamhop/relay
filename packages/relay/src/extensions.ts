@@ -43,6 +43,13 @@ export interface RelayExtension {
     filters: Filter[],
     authed: ReadonlySet<string>,
   ): FilterCheck | Promise<FilterCheck>;
+  /**
+   * NIP-45: may these (already checked/rewritten) filters match events whose
+   * `audience` would hide them from some reader? When any extension says yes,
+   * COUNT is computed by scanning matching events and applying the same
+   * per-event visibility as REQ instead of the store's aggregate count.
+   */
+  restrictsCount?(relayId: RelayId, filters: Filter[]): boolean | Promise<boolean>;
   /** Write gate run after access checks and before the policy pipeline. */
   checkEvent?(event: NostrEvent, ctx: WriteContext): Promise<Rejection | undefined>;
   /**

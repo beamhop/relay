@@ -74,4 +74,10 @@ export const giftWrapExtension: RelayExtension = {
   filters(_relayId, filters, authed) {
     return giftWrapFilters(filters, authed);
   },
+  // After `giftWrapFilters`, filters naming wrap kinds are narrowed to the
+  // reader's own pubkeys; only filters without `kinds` can still match wraps
+  // addressed to someone else.
+  restrictsCount(_relayId, filters) {
+    return filters.some((f) => f.kinds === undefined);
+  },
 };

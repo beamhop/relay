@@ -1127,11 +1127,57 @@ export class RelayEngine implements ConnectionHandler {
     const prepared = await this.prepareRead(st, rawFilters, closed);
     if (!prepared) return;
     const store = this.kernel.ports.events;
-    const count =
-      prepared.filters.length === 0 ? 0 : await store.count(st.relayId, prepared.filters);
-    const body: { count: number; approximate?: boolean } = { count };
-    if (!store.capabilities.exactCount) body.approximate = true;
+    const body: { count: number; approximate?: boolean } = { count: 0 };
+    if (prepared.filters.length > 0) {
+      if (await this.countNeedsScan(st.relayId, prepared.filters)) {
+        const r = await this.scanCount(st, prepared.filters);
+        if (r === null) return;
+        body.count = r.count;
+        if (r.capped) body.approximate = true;
+      } else {
+        body.count = await store.count(st.relayId, prepared.filters);
+        if (!store.capabilities.exactCount) body.approximate = true;
+      }
+    } else if (!store.capabilities.exactCount) body.approximate = true;
+    if (st.closed) return;
     this.send(st, ['COUNT', subId, body]);
+  }
+
+  /** Could an aggregate count include events this reader may not see? */
+  private async countNeedsScan(relayId: RelayId, filters: Filter[]): Promise<boolean> {
+    for (const ext of this.extensions) {
+      if (!ext.restrictsCount) continue;
+      if (await ext.restrictsCount(relayId, filters)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Privacy-preserving COUNT: count matching events one by one with the same
+   * expiration and audience checks as REQ. Bounded by `countScanLimit`.
+   */
+  private async scanCount(
+    st: ConnState,
+    filters: Filter[],
+  ): Promise<{ count: number; capped: boolean } | null> {
+    const cap = this.cfg.countScanLimit;
+    const events = await this.kernel.ports.events.query(
+      st.relayId,
+      // Like EventStore.count, `limit` does not bound a count.
+      filters.map((f) => ({ ...f, limit: cap })),
+      { maxLimit: cap },
+    );
+    const now = this.kernel.ports.clock.now();
+    let count = 0;
+    for (const e of events) {
+      const exp = expirationOf(e);
+      if (exp !== undefined && exp <= now) continue;
+      let visible = this.visibleTo(st, e);
+      if (visible instanceof Promise) visible = await visible;
+      if (st.closed) return null;
+      if (visible) count++;
+    }
+    return { count, capped: events.length >= cap };
   }
 
   // ───────────────────────── AUTH (NIP-42) ─────────────────────────

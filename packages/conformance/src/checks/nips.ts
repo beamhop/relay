@@ -467,6 +467,94 @@ const nip45: Check[] = [
       return `count=${r.count}${r.approximate ? ' (approximate)' : ''}.`;
     },
   }),
+  check({
+    id: 'nip45.count-giftwrap-private',
+    spec: 'NIP-45',
+    title: 'Counts never include private messages addressed to someone else',
+    requiresNips: [45],
+    async run(ctx) {
+      const recipient = ctx.key();
+      const stranger = ctx.key();
+      const wrap = wrapEvent(
+        { kind: 14, content: `hi ${token()}`, tags: [['p', recipient.pk]] },
+        ctx.key().sk,
+        recipient.pk,
+      ) as unknown as NostrEvent;
+      const pubc = await ctx.connect();
+      const r = await pubc.publish({ ...wrap });
+      expect(r, 'No OK for a gift wrap.');
+      if (!r.accepted) skip(`The relay does not store gift wraps here: "${short(r.message)}".`);
+      // The fresh recipient key has exactly one event addressed to it: the wrap.
+      const leaks = (n: { count?: number; closed?: string }) =>
+        n.closed === undefined && (n.count ?? 0) > 0;
+      const anon = await ctx.connect();
+      const a1 = await anon.count([{ '#p': [recipient.pk] }]);
+      expect(!a1.timedOut, 'No COUNT answer.');
+      expect(
+        !leaks(a1),
+        `An anonymous COUNT without kinds counted ${a1.count} private message(s).`,
+      );
+      const a2 = await anon.count([{ kinds: [1059], '#p': [recipient.pk] }]);
+      expect(!leaks(a2), `An anonymous COUNT of gift wraps counted ${a2.count} message(s).`);
+      const other = await ctx.connect();
+      await mustAuth(ctx, other, stranger);
+      const o1 = await other.count([{ '#p': [recipient.pk] }]);
+      expect(!leaks(o1), `A signed-in stranger counted ${o1.count} private message(s).`);
+      const o2 = await other.count([{ kinds: [1059], '#p': [recipient.pk] }]);
+      expect(!leaks(o2), `A signed-in stranger counted ${o2.count} gift wrap(s).`);
+      const mine = await ctx.connect();
+      await mustAuth(ctx, mine, recipient);
+      const m = await mine.count([{ kinds: [1059], '#p': [recipient.pk] }]);
+      expect(!m.timedOut, 'No COUNT answer for the recipient.');
+      expect(
+        m.closed !== undefined || (m.count ?? 0) >= 1,
+        `The recipient's own count is ${m.count}.`,
+      );
+      return 'Anonymous readers and strangers count 0; the recipient counts their message.';
+    },
+  }),
+  check({
+    id: 'nip45.count-private-group',
+    spec: 'NIP-45',
+    title: 'Counts never include posts in private groups for non-members',
+    requiresNips: [45],
+    async run(ctx) {
+      if (!ctx.nips.has(29)) skip('The relay does not advertise NIP-29 groups.');
+      const admin = ctx.key();
+      const c = await ctx.connect();
+      await authenticate(ctx, c, admin).catch(() => undefined);
+      const id = `conf-${token(10)}`;
+      const created = await c.publish(
+        ctx.sign(admin, { kind: 9007, tags: [['h', id], ['private']] }),
+      );
+      expect(created, 'No OK for a create-group request.');
+      if (!created.accepted)
+        skip(`Creating a private group is not allowed here: "${short(created.message)}".`);
+      for (let i = 0; i < 2; i++)
+        await mustAccept(
+          c,
+          ctx.sign(admin, { kind: 9, content: token(), tags: [['h', id]] }),
+          'a post in the private group',
+        );
+      // Every event by this fresh key is in the private group.
+      const leaks = (n: { count?: number; closed?: string }) =>
+        n.closed === undefined && (n.count ?? 0) > 0;
+      const anon = await ctx.connect();
+      const a = await anon.count([{ authors: [admin.pk] }]);
+      expect(!a.timedOut, 'No COUNT answer.');
+      expect(!leaks(a), `An anonymous COUNT counted ${a.count} private group post(s).`);
+      const outsider = await ctx.connect();
+      await mustAuth(ctx, outsider, ctx.key());
+      const o = await outsider.count([{ authors: [admin.pk], kinds: [9] }]);
+      expect(!leaks(o), `A signed-in non-member counted ${o.count} private group post(s).`);
+      const m = await c.count([{ authors: [admin.pk], kinds: [9] }]);
+      expect(
+        m.closed !== undefined || m.approximate || m.count === 2,
+        `A member's count is ${m.count}, expected 2.`,
+      );
+      return 'Non-members count 0; members count the posts.';
+    },
+  }),
 ];
 
 // ───────────────────────────── NIP-50 ─────────────────────────────
