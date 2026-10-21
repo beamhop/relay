@@ -225,7 +225,7 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     moduleConfig<T>(id: string) {
       return current.modules[id] as T | undefined;
     },
-    http: new Hono<KernelEnv>(),
+    http: createKernelHttp(),
     authProviders: [],
     access: [],
     health: [],
@@ -259,6 +259,34 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
   }
   for (const m of ordered) await m.start?.(kernel);
   return kernel;
+}
+
+/**
+ * Kernel Hono app with a first middleware that copies `env.route` (passed by the
+ * runtime via {@link dispatchHttp}) into the `route` variable, before any module route runs.
+ */
+function createKernelHttp(): Hono<KernelEnv> {
+  const app = new Hono<KernelEnv>();
+  app.use('*', async (c, next) => {
+    const env = c.env as { route?: RouteContext } | undefined;
+    if (env && typeof env === 'object' && env.route) c.set('route', env.route);
+    await next();
+  });
+  return app;
+}
+
+/**
+ * Runtime helper: dispatch a request to `kernel.http` with the resolved route.
+ * `env` carries extra runtime bindings (e.g. Cloudflare env); `route` is added to it.
+ */
+export function dispatchHttp(
+  kernel: Pick<Kernel, 'http'>,
+  req: Request,
+  route: RouteContext,
+  env: Record<string, unknown> = {},
+  executionCtx?: Parameters<Hono<KernelEnv>['fetch']>[2],
+): Response | Promise<Response> {
+  return kernel.http.fetch(req, { ...env, route }, executionCtx);
 }
 
 export function topoSort(modules: BeamhopModule[]): BeamhopModule[] {
