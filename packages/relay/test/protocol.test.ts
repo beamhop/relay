@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { NostrEvent } from '@beamhop/core';
 import { makeKey } from '@beamhop/testkit';
-import { eventsOf, setup } from './helpers.ts';
+import { FakeConn, eventsOf, setup } from './helpers.ts';
 
 describe('NIP-01 protocol', () => {
   test('connect issues an AUTH challenge and emits conn.open / conn.close', async () => {
@@ -18,6 +18,19 @@ describe('NIP-01 protocol', () => {
     h.engine.onClose(c);
     expect(closes).toEqual([{ relayId: 'main', connId: c.id, durationMs: 5000 }]);
     expect(h.engine.connectionCount()).toBe(0);
+  });
+
+  test('conn.open carries the runtime-provided country', async () => {
+    const h = await setup();
+    const opens = h.record('conn.open');
+    const c = await h.connect();
+    expect(opens[0]?.country).toBeUndefined();
+    const withCountry = Object.assign(new FakeConn('main', h.ports.clock.nowMs()), {
+      country: 'SE',
+    });
+    await h.engine.open(withCountry);
+    expect(opens[1]).toMatchObject({ connId: withCountry.id, country: 'SE' });
+    h.engine.onClose(c);
   });
 
   test('unknown relay closes the connection', async () => {

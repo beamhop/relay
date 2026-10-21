@@ -39,6 +39,7 @@ import { ShardedPubSub, shardName } from './ports/pubsub.ts';
 import { CronScheduler } from './ports/scheduler.ts';
 import {
   CONFIG_CHANNEL,
+  H_COUNTRY,
   H_IP_HASH,
   H_RELAY,
   H_SHARD,
@@ -106,6 +107,12 @@ function randomShard(shards: number): number {
   const b = new Uint32Array(1);
   crypto.getRandomValues(b);
   return (b[0] as number) % shards;
+}
+
+/** ISO 3166 country from Cloudflare's `cf-ipcountry` (`XX` unknown and `T1` Tor are dropped). */
+export function cfCountry(req: Request): string | undefined {
+  const v = req.headers.get('cf-ipcountry')?.trim().toUpperCase();
+  return v && /^[A-Z]{2}$/.test(v) && v !== 'XX' ? v : undefined;
 }
 
 function isUpgrade(req: Request): boolean {
@@ -227,6 +234,7 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     }
     const ip = req.headers.get('cf-connecting-ip');
     const ipHash = ip ? services.crypto.hashIp(ip) : 'unknown';
+    const country = cfCountry(req);
 
     if (isUpgrade(req)) {
       const shard = randomShard(services.shards);
@@ -239,6 +247,8 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
       headers.set(H_RELAY, relay.id);
       headers.set(H_SHARD, String(shard));
       headers.set(H_IP_HASH, ipHash);
+      if (country) headers.set(H_COUNTRY, country);
+      else headers.delete(H_COUNTRY);
       return stub.fetch(new Request(req.url, { method: req.method, headers }));
     }
 
@@ -246,6 +256,7 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
       relayId: relay.id,
       publicUrl: `${url.protocol}//${url.host}${relay.pathPrefix ?? ''}`,
       ipHash,
+      ...(country ? { country } : {}),
     };
     try {
       return await kernel.http.fetch(

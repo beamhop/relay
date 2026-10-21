@@ -26,6 +26,13 @@ import { type DataLayout, ensureDataDir, parseListen, withDataDirDefaults } from
 import { BunConnection, type WsData } from './connection.ts';
 import { JsonLogger } from './ports.ts';
 import {
+  DISK_SERVICE,
+  TLS_SERVICE,
+  countryFrom,
+  diskService,
+  tlsService,
+} from './runtime-services.ts';
+import {
   type ClaimCode,
   type ConfigServiceLike,
   lastKnownGood,
@@ -211,6 +218,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   // Runtime facts for modules (lifecycle: safe mode, data dir, SQL snapshots).
   kernel.provide('runtime', { name: 'bun', safe, dataDir: layout.root });
   if (sqlService) kernel.provide('storage.sql', sqlService);
+  kernel.provide(DISK_SERVICE, diskService(layout.root));
 
   if (safe) {
     const lkg = await lastKnownGood(kernel);
@@ -278,6 +286,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     }
   }
   logger.log('info', 'TLS mode decided', { mode: tlsDecision.mode, reason: tlsDecision.reason });
+  kernel.provide(
+    TLS_SERVICE,
+    tlsService(
+      () => tlsDecision.mode,
+      () => acme,
+    ),
+  );
 
   // ── HTTP / WS ──
   const assets: AssetServer = createAssetServer({ mount: ADMIN_MOUNT, dir: opts.pwaDir });
@@ -322,6 +337,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     if (asset) return asset;
 
     const ipHash = ports.crypto.hashIp(meta.ip);
+    const country = countryFrom(req, cfg);
     const relay = resolveRelay(cfg, url, meta.host);
     if (!relay) {
       if (nodeScope.some((p) => url.pathname.startsWith(p))) {
@@ -329,6 +345,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
           relayId: '',
           publicUrl: `${meta.proto}://${meta.host}`,
           ipHash,
+          ...(country ? { country } : {}),
         };
         return dispatchHttp(kernel, req, route);
       }
@@ -340,6 +357,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       relayId: relay.id,
       publicUrl: `${meta.proto}://${meta.host}${prefix}`,
       ipHash,
+      ...(country ? { country } : {}),
     };
 
     if (isWsUpgrade(req) && kernel.ws) {
@@ -350,6 +368,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         ports.clock.now(),
         ports.crypto.randomHex(16),
         req.headers.get('user-agent') ?? undefined,
+        country,
       );
       if (server.upgrade(req, { data: { conn } })) return undefined;
       return new Response('WebSocket upgrade failed', { status: 400 });

@@ -54,6 +54,23 @@ describe('RelayRoom hibernation', () => {
     expect(got).toEqual([['EVENT', 'notes', ev]]);
   });
 
+  test('Connection.country comes from cf-ipcountry and survives hibernation', async () => {
+    const ctx = setup();
+    const res = await ctx.runtime.worker.fetch(
+      upgradeRequest('https://alpha.example/', { 'cf-ipcountry': 'jp' }),
+      ctx.env,
+    );
+    expect(res.headers.get('x-upgraded')).toBe('1');
+    const name = ctx.ns.requests.at(-1)?.name as string;
+    const room = ctx.ns.instance(name);
+    const conn = [...room.core.conns.values()][0] as HibernatableConnection;
+    expect(conn.country).toBe('JP');
+    ctx.ns.hibernate(name);
+    const woke = ctx.ns.instance(name);
+    await woke.core.ready;
+    expect(([...woke.core.conns.values()][0] as HibernatableConnection).country).toBe('JP');
+  });
+
   test('large state spills to storage and is restored', async () => {
     const ctx = setup();
     const a = await connect(ctx);

@@ -380,6 +380,7 @@ export class RelayEngine implements ConnectionHandler {
       connId: conn.id,
       ipHash: conn.ipHash,
       ...(conn.userAgent !== undefined ? { userAgent: conn.userAgent } : {}),
+      ...(conn.country !== undefined ? { country: conn.country } : {}),
     });
     this.send(st, ['AUTH', conn.challenge]);
   }

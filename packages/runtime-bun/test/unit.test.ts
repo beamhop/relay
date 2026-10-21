@@ -13,10 +13,12 @@ import {
   InProcessPubSub,
   JsonLogger,
   acmeDomains,
+  countryFrom,
   createAssetServer,
   createDefaultPorts,
   decideTls,
   deepMerge,
+  diskService,
   ensureDataDir,
   envToConfig,
   isPublicIp,
@@ -25,6 +27,7 @@ import {
   parseArgs,
   parseListen,
   registerAssets,
+  tlsService,
   truncateIp,
 } from '../src/index.ts';
 import { tempDir } from './helpers.ts';
@@ -338,6 +341,49 @@ describe('tls', () => {
     expect(orders).toBe(2);
     expect(challenges.respond('/other')).toBeNull();
     expect(challenges.respond('/.well-known/acme-challenge/x')?.status).toBe(404);
+  });
+});
+
+describe('runtime services', () => {
+  test('runtime.disk reports statfs free/total for the data dir', async () => {
+    const dir = tempDir();
+    const u = await diskService(dir).usage();
+    expect(u.path).toBe(dir);
+    expect(u.total).toBeGreaterThan(0);
+    expect(u.free).toBeGreaterThanOrEqual(0);
+    expect(u.free).toBeLessThanOrEqual(u.total);
+    expect(u.freeBytes).toBe(u.free);
+    expect(u.totalBytes).toBe(u.total);
+    const fake = diskService('/x', (() => ({ bavail: 2, blocks: 10, bsize: 4096 })) as never);
+    expect(await fake.usage()).toMatchObject({ free: 8192, total: 40960 });
+  });
+
+  test('runtime.tls exposes the mode and ACME certificate expiry (unix seconds)', async () => {
+    let mode: 'acme' | 'proxy' = 'proxy';
+    const box: { acme?: { current(): Promise<{ notAfter: Date } | null> } } = {};
+    const svc = tlsService(
+      () => mode,
+      () => box.acme as never,
+    );
+    expect(svc.mode).toBe('proxy');
+    expect(await svc.certExpiry()).toBeNull();
+    mode = 'acme';
+    box.acme = { current: async () => ({ notAfter: new Date(1_900_000_000_000) }) };
+    expect(svc.mode).toBe('acme');
+    expect(await svc.certExpiry()).toBe(1_900_000_000);
+  });
+
+  test('country only from the configured header behind a trusted proxy', () => {
+    const req = (h: Record<string, string>) => new Request('http://x/', { headers: h });
+    const cfg = (node: Record<string, unknown>) => parseConfig({ node });
+    const hdr = { 'cf-ipcountry': 'de' };
+    expect(countryFrom(req(hdr), cfg({ countryHeader: 'cf-ipcountry' }))).toBeUndefined();
+    expect(countryFrom(req(hdr), cfg({ trustProxy: true }))).toBeUndefined();
+    const on = cfg({ trustProxy: true, countryHeader: 'cf-ipcountry' });
+    expect(countryFrom(req(hdr), on)).toBe('DE');
+    expect(countryFrom(req({ 'cf-ipcountry': 'XX' }), on)).toBeUndefined();
+    expect(countryFrom(req({ 'cf-ipcountry': 'T1' }), on)).toBeUndefined();
+    expect(countryFrom(req({}), on)).toBeUndefined();
   });
 });
 

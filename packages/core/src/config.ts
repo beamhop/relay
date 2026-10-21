@@ -224,6 +224,10 @@ export const NodeSchema = z
       })
       .prefault({}),
     trustProxy: z.boolean().default(false),
+    countryHeader: technical(
+      z.string().optional(),
+      'Header set by the trusted reverse proxy with the ISO 3166 country of the client (e.g. cf-ipcountry). Read only when trustProxy is on; never derived from IPs.',
+    ),
   })
   .prefault({});
 

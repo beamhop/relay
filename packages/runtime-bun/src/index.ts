@@ -6,6 +6,7 @@ export * from './connection.ts';
 export * from './modules.ts';
 export * from './ports.ts';
 export * from './server.ts';
+export * from './runtime-services.ts';
 export * from './services.ts';
 export * from './storage.ts';
 export * from './tls.ts';
