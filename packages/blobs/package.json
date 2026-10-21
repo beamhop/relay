@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "description": "BlobStore adapters: fs, S3-compatible (S3/R2/GCS/MinIO), memory",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "description": "BlobStore adapters: fs, S3-compatible (S3/R2/GCS/MinIO), R2 binding",
+  "exports": { ".": "./src/index.ts", "./fs": "./src/fs.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*", "aws4fetch": "^1.0.20" },
+  "devDependencies": {
+    "@beamhop/testkit": "workspace:*",
+    "@noble/hashes": "^1.8.0",
+    "hono": "^4.13.13"
+  }
 }
