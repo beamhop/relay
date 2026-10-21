@@ -67,11 +67,20 @@ if (claimCode) {
     '/settings/plugins',
     '/settings/security',
     '/settings/company',
+    '/settings/system',
+    '/settings/backups',
+    '/insights',
+    '/launch',
+    '/activity?tab=alerts',
+    '/activity?tab=logs',
+    '/activity/on-call',
   ]) {
     await page.goto(`${base}/admin${path}`);
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(500);
-    const panel = await page.getByTestId('error-panel').count();
+    const panel =
+      (await page.getByTestId('error-panel').count()) +
+      (await page.getByTestId('module-missing').count());
     if (process.env.SHOTS)
       await page.screenshot({ path: `${process.env.SHOTS}/${path.replace(/[^a-z]+/g, '-')}.png` });
     console.log(`${path}: ${panel ? 'ERROR PANEL' : 'ok'}`);
