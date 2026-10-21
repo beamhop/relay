@@ -2,7 +2,14 @@
 /**
  * The relay engine: NIP-01 protocol over the runtime-neutral `Connection`,
  * live fan-out through an inverted subscription index, cross-node fan-out
- * through `ports.pubsub`, and the NIP handlers (09, 13, 40, 42, 45, 50, 62, 70, 77).
+ * through `ports.pubsub`, and the NIP handlers (09, 13, 17/59, 29, 40, 42, 45,
+ * 50, 62, 70, 77).
+ *
+ * Hibernation: everything a connection needs to survive a Cloudflare Durable
+ * Object eviction lives in `conn.state` as JSON data (`relay` key: open
+ * subscriptions and negentropy sessions as filters); NIP-42 pubkeys live in
+ * `conn.authed`. `onRestore` re-indexes subscriptions without replaying stored
+ * events or EOSE; negentropy sessions are rebuilt lazily on the next NEG-MSG.
  *
  * Concurrency model: messages of one connection are processed in order on a
  * per-connection promise chain (so AUTH-then-EVENT is deterministic). The
@@ -32,6 +39,9 @@ import {
   verifyEventSig,
 } from '@beamhop/core';
 import { type RelayModuleConfig, RelayModuleConfigSchema } from './config.ts';
+import { type Audience, type RelayExtension, allAudiences } from './extensions.ts';
+import { GIFT_WRAP_KINDS, giftWrapExtension } from './giftwrap.ts';
+import type { GroupsConfig } from './groups.ts';
 import { type IndexedSub, SubscriptionIndex } from './subindex.ts';
 import { Negentropy, NegentropyStorageVector } from './vendor/negentropy.ts';
 
@@ -54,7 +64,10 @@ export interface ConnState {
   readonly conn: Connection;
   readonly relayId: RelayId;
   readonly subs: Map<string, Subscription>;
+  /** Live negentropy sessions (rebuilt lazily from `negFilters` after hibernation). */
   readonly negs: Map<string, Negentropy>;
+  /** Filters of open negentropy sessions (persisted). */
+  readonly negFilters: Map<string, Filter[]>;
   readonly tiers: Map<string, string | undefined>;
   chain: Promise<void>;
   pending: number;
@@ -129,7 +142,38 @@ export function relayUrlMatches(relay: RelayConfig, url: string): boolean {
 const noop = () => {};
 /** Key in `Connection.state` marking a connection the engine has torn down. */
 const CLOSED_KEY = 'relay.closed';
+/** Key in `Connection.state` holding the hibernation-safe connection state. */
+export const CONN_STATE_KEY = 'relay';
 type Detached = { detached?: Promise<void> };
+
+/** JSON-serializable per-connection state kept in `conn.state` (survives hibernation). */
+export interface PersistedConnState {
+  v: 1;
+  /** subId → filters (after validation, limits and extension rewrites). */
+  subs: Record<string, Filter[]>;
+  /** NEG subId → filter. */
+  negs: Record<string, Filter[]>;
+}
+
+function readPersisted(conn: Connection): PersistedConnState | null {
+  const v = conn.state.get(CONN_STATE_KEY) as Partial<PersistedConnState> | undefined;
+  if (!v || typeof v !== 'object' || v.v !== 1) return null;
+  const clean = (rec: unknown): Record<string, Filter[]> => {
+    const out: Record<string, Filter[]> = {};
+    if (!rec || typeof rec !== 'object') return out;
+    for (const [id, fs] of Object.entries(rec as Record<string, unknown>)) {
+      if (!Array.isArray(fs)) continue;
+      const filters: Filter[] = [];
+      for (const f of fs) {
+        const check = validateFilter(f);
+        if (check.ok) filters.push(check.filter);
+      }
+      if (filters.length > 0) out[id] = filters;
+    }
+    return out;
+  };
+  return { v: 1, subs: clean(v.subs), negs: clean(v.negs) };
+}
 
 export class RelayEngine implements ConnectionHandler {
   readonly nodeId: string;
@@ -137,6 +181,7 @@ export class RelayEngine implements ConnectionHandler {
   private relays = new Map<RelayId, RelayRuntime>();
   private cfg: RelayModuleConfig;
   private offConfig: () => void;
+  private extensions: RelayExtension[] = [giftWrapExtension];
 
   constructor(private kernel: Kernel) {
     this.nodeId = kernel.ports.crypto.randomHex(8);
@@ -148,6 +193,15 @@ export class RelayEngine implements ConnectionHandler {
 
   config(): RelayModuleConfig {
     return this.cfg;
+  }
+
+  groupsConfig(): GroupsConfig {
+    return this.cfg.groups;
+  }
+
+  /** Register an internal NIP extension (read/write gates, side effects). */
+  addExtension(ext: RelayExtension): void {
+    this.extensions = [...this.extensions.filter((e) => e.id !== ext.id), ext];
   }
 
   /** Number of open connections (all relays or one relay). */
@@ -191,16 +245,35 @@ export class RelayEngine implements ConnectionHandler {
     }
   }
 
-  /** Open a connection; resolves when the connect policy has run. */
-  open(conn: Connection): Promise<void> {
-    const existing = this.conns.get(conn.id);
-    if (existing) return existing.chain;
-    conn.state.delete(CLOSED_KEY);
-    const st: ConnState = {
+  /**
+   * Rebuild a connection after socket hibernation: re-index persisted
+   * subscriptions (live only — no stored events, no EOSE) and remember
+   * negentropy sessions. The connect policy and AUTH challenge are not re-run.
+   */
+  onRestore(conn: Connection): void {
+    if (this.conns.has(conn.id) || conn.state.get(CLOSED_KEY)) return;
+    const saved = readPersisted(conn);
+    if (!saved) return;
+    const st = this.newState(conn);
+    st.opened = true;
+    this.conns.set(conn.id, st);
+    const rt = this.runtime(st.relayId);
+    for (const [subId, filters] of Object.entries(saved.subs)) {
+      const sub = this.makeSub(st, subId, filters);
+      sub.pending = null;
+      st.subs.set(subId, sub);
+      rt.index.add(sub);
+    }
+    for (const [subId, filters] of Object.entries(saved.negs)) st.negFilters.set(subId, filters);
+  }
+
+  private newState(conn: Connection): ConnState {
+    return {
       conn,
       relayId: conn.relayId,
       subs: new Map(),
       negs: new Map(),
+      negFilters: new Map(),
       tiers: new Map(),
       chain: Promise.resolve(),
       pending: 0,
@@ -209,6 +282,37 @@ export class RelayEngine implements ConnectionHandler {
       dropping: false,
       dropped: 0,
     };
+  }
+
+  private makeSub(st: ConnState, subId: string, filters: Filter[]): Subscription {
+    return {
+      key: `${st.conn.id}\u0000${subId}`,
+      subId,
+      subIdJson: JSON.stringify(subId),
+      filters,
+      conn: st,
+      abort: new AbortController(),
+      pending: [],
+    };
+  }
+
+  /** Mirror subscriptions and sync sessions into `conn.state` (hibernation). */
+  private persist(st: ConnState): void {
+    if (st.closed) return;
+    const subs: Record<string, Filter[]> = {};
+    for (const [id, sub] of st.subs) subs[id] = sub.filters;
+    const negs: Record<string, Filter[]> = {};
+    for (const [id, f] of st.negFilters) negs[id] = f;
+    const value: PersistedConnState = { v: 1, subs, negs };
+    st.conn.state.set(CONN_STATE_KEY, value);
+  }
+
+  /** Open a connection; resolves when the connect policy has run. */
+  open(conn: Connection): Promise<void> {
+    const existing = this.conns.get(conn.id);
+    if (existing) return existing.chain;
+    conn.state.delete(CLOSED_KEY);
+    const st = this.newState(conn);
     this.conns.set(conn.id, st);
     st.chain = this.connect(st).catch((err) => this.fail(st, 'connect', err));
     return st.chain;
@@ -223,7 +327,9 @@ export class RelayEngine implements ConnectionHandler {
     let st = this.conns.get(conn.id);
     if (!st) {
       if (conn.state.get(CLOSED_KEY)) return;
-      void this.open(conn);
+      // A hibernated connection whose runtime did not call onRestore.
+      if (readPersisted(conn)) this.onRestore(conn);
+      else void this.open(conn);
       st = this.conns.get(conn.id)!;
     }
     if (st.closed) return;
@@ -266,6 +372,7 @@ export class RelayEngine implements ConnectionHandler {
       return;
     }
     st.opened = true;
+    this.persist(st);
     this.runtime(st.relayId);
     this.kernel.bus.emit('conn.open', {
       relayId: st.relayId,
@@ -286,6 +393,7 @@ export class RelayEngine implements ConnectionHandler {
     }
     st.subs.clear();
     st.negs.clear();
+    st.negFilters.clear();
     this.conns.delete(st.conn.id);
   }
 
@@ -342,36 +450,99 @@ export class RelayEngine implements ConnectionHandler {
     if (!shape.ok) return;
     if (rt.seen.has(shape.event.id)) return;
     rt.seen.add(shape.event.id);
-    this.fanout(rt, shape.event);
+    void this.fanoutChecked(relayId, rt, shape.event);
   }
 
-  /** Publish an accepted event to local subscribers and other nodes. */
-  broadcast(relayId: RelayId, event: NostrEvent, json?: string): void {
+  /**
+   * Who may receive `event` (NIP-59 recipients, NIP-29 private group members).
+   * Synchronous unless an extension needs a lookup.
+   */
+  audienceOf(relayId: RelayId, event: NostrEvent): Audience | Promise<Audience> {
+    let list: Audience[] | null = null;
+    let promises: Promise<Audience>[] | null = null;
+    for (const ext of this.extensions) {
+      if (!ext.audience) continue;
+      const a = ext.audience(relayId, event);
+      if (a instanceof Promise) {
+        if (!promises) promises = [];
+        promises.push(a);
+      } else if (a) {
+        if (!list) list = [];
+        list.push(a);
+      }
+    }
+    if (promises) {
+      const base = list ?? [];
+      return Promise.all(promises).then((r) => allAudiences([...base, ...r]));
+    }
+    return list ? allAudiences(list) : null;
+  }
+
+  /**
+   * Publish an accepted event to local subscribers and other nodes. Resolves
+   * once local delivery is done.
+   */
+  broadcast(relayId: RelayId, event: NostrEvent, json?: string): Promise<void> {
     const rt = this.runtime(relayId);
     rt.seen.add(event.id);
-    this.fanout(rt, event, json);
     const message: FanoutMessage = { o: this.nodeId, e: event };
     this.kernel.ports.pubsub
       .publish(fanoutChannel(relayId), message)
       .catch((err) => this.fail(null, 'pubsub', err));
+    return this.fanoutChecked(relayId, rt, event, json);
   }
 
-  private fanout(rt: RelayRuntime, event: NostrEvent, json?: string): void {
+  private fanoutChecked(
+    relayId: RelayId,
+    rt: RelayRuntime,
+    event: NostrEvent,
+    json?: string,
+  ): Promise<void> {
+    const aud = this.audienceOf(relayId, event);
+    if (aud instanceof Promise) {
+      // Fail closed: when visibility cannot be determined, nothing is delivered live.
+      return aud.then(
+        (a) => this.fanout(rt, event, json, a),
+        (err) => this.fail(null, 'audience', err),
+      );
+    }
+    this.fanout(rt, event, json, aud);
+    return Promise.resolve();
+  }
+
+  private fanout(
+    rt: RelayRuntime,
+    event: NostrEvent,
+    json: string | undefined,
+    aud: Audience,
+  ): void {
     const subs = rt.index.match(event);
     if (subs.length === 0) return;
     const body = json ?? JSON.stringify(event);
-    for (const sub of subs) this.deliver(sub, event, body);
+    for (const sub of subs) this.deliver(sub, event, body, aud);
   }
 
-  private deliver(sub: Subscription, event: NostrEvent, json: string): void {
+  private deliver(sub: Subscription, event: NostrEvent, json: string, aud: Audience): void {
     const st = sub.conn;
     if (st.closed) return;
+    if (aud && !aud(st.conn.authed)) return;
     if (sub.pending) {
       sub.pending.push(event);
       return;
     }
     if (!this.hasRoom(st)) return;
     st.conn.send(`["EVENT",${sub.subIdJson},${json}]`);
+  }
+
+  /** May this connection receive a stored event? (fails closed on lookup errors) */
+  private visibleTo(st: ConnState, e: NostrEvent): boolean | Promise<boolean> {
+    const a = this.audienceOf(st.relayId, e);
+    if (a instanceof Promise)
+      return a.then(
+        (x) => !x || x(st.conn.authed),
+        () => false,
+      );
+    return !a || a(st.conn.authed);
   }
 
   /** Backpressure gate for live frames. */
@@ -449,7 +620,7 @@ export class RelayEngine implements ConnectionHandler {
         await this.onNegMsg(st, msg[1], msg[2]);
         return;
       case 'NEG-CLOSE':
-        st.negs.delete(msg[1]);
+        this.closeNeg(st, msg[1]);
         return;
     }
   }
@@ -633,6 +804,15 @@ export class RelayEngine implements ConnectionHandler {
       this.rejectEvent(st, event, 'restricted', 'you are not allowed to post here');
       return;
     }
+    const wctx = { relayId: st.relayId, authed: st.conn.authed };
+    for (const ext of this.extensions) {
+      if (!ext.checkEvent) continue;
+      const r = await ext.checkEvent(event, wctx);
+      if (r) {
+        this.rejectEvent(st, event, r.prefix, r.message, `relay.${ext.id}`);
+        return;
+      }
+    }
 
     const d: Decision & { by?: string } = await this.kernel.policy.run('onEvent', [
       event,
@@ -667,7 +847,7 @@ export class RelayEngine implements ConnectionHandler {
 
     if (cls === 'ephemeral') {
       this.ok(st, event.id, true, '');
-      this.accepted(st, event, json, start);
+      await this.accepted(st, event, json, start);
       return;
     }
 
@@ -694,11 +874,25 @@ export class RelayEngine implements ConnectionHandler {
     }
     if (event.kind === REPORT_KIND)
       this.kernel.bus.emit('report.received', { relayId: st.relayId, report: event });
-    this.accepted(st, event, json, start);
+    await this.accepted(st, event, json, start);
   }
 
-  private accepted(st: ConnState, event: NostrEvent, json: string, start: number): void {
-    this.broadcast(st.relayId, event, json);
+  private async accepted(
+    st: ConnState,
+    event: NostrEvent,
+    json: string,
+    start: number,
+  ): Promise<void> {
+    const wctx = { relayId: st.relayId, authed: st.conn.authed };
+    for (const ext of this.extensions) {
+      if (!ext.afterAccept) continue;
+      try {
+        await ext.afterAccept(event, wctx);
+      } catch (err) {
+        this.fail(st, `${ext.id}.afterAccept`, err);
+      }
+    }
+    await this.broadcast(st.relayId, event, json);
     this.kernel.bus.emit('event.accepted', {
       relayId: st.relayId,
       event,
@@ -719,10 +913,43 @@ export class RelayEngine implements ConnectionHandler {
       this.rejectEvent(st, event, 'invalid', 'this request to vanish names a different relay');
       return;
     }
-    await this.kernel.ports.events.vanish(st.relayId, event.pubkey, event.created_at);
+    const store = this.kernel.ports.events;
+    const until = event.created_at;
+    // Stored gift-wrap kinds addressed to the vanishing user (NIP-62 SHOULD).
+    const wraps: Filter = {
+      kinds: [...GIFT_WRAP_KINDS].filter((k) => kindClass(k) !== 'ephemeral'),
+      '#p': [event.pubkey],
+      until,
+    };
+    // Collect (capped) ids before they are gone, for event.deleted consumers.
+    const cap = this.cfg.vanishIdCap;
+    let ids: string[] = [];
+    if (cap > 0) {
+      try {
+        const evs = await store.query(
+          st.relayId,
+          [
+            { authors: [event.pubkey], until, limit: cap },
+            { ...wraps, limit: cap },
+          ],
+          { maxLimit: cap },
+        );
+        ids = evs.slice(0, cap).map((e) => e.id);
+      } catch (err) {
+        this.fail(st, 'vanish', err);
+      }
+    }
+    const removed =
+      (await store.vanish(st.relayId, event.pubkey, until)) +
+      (await store.deleteMatching(st.relayId, wraps));
     this.runtime(st.relayId).seen.add(event.id);
     this.ok(st, event.id, true, '');
-    this.kernel.bus.emit('event.deleted', { relayId: st.relayId, ids: [], cause: 'nip62' });
+    this.kernel.bus.emit('event.deleted', {
+      relayId: st.relayId,
+      ids,
+      cause: 'nip62',
+      count: Math.max(removed, ids.length),
+    });
     this.kernel.bus.emit('event.accepted', {
       relayId: st.relayId,
       event,
@@ -783,7 +1010,17 @@ export class RelayEngine implements ConnectionHandler {
       fail(reason('restricted', 'you are not allowed to read here'));
       return null;
     }
-    const d = await this.kernel.policy.run('onReq', [filters, this.ctx(st, tier)]);
+    let checked = filters;
+    for (const ext of this.extensions) {
+      if (!ext.filters) continue;
+      const r = await ext.filters(st.relayId, checked, st.conn.authed);
+      if (!r.ok) {
+        fail(reason(r.prefix, r.message));
+        return null;
+      }
+      checked = r.filters;
+    }
+    const d = await this.kernel.policy.run('onReq', [checked, this.ctx(st, tier)]);
     if (d.action === 'reject') {
       fail(reason(d.prefix, d.message));
       return null;
@@ -792,7 +1029,7 @@ export class RelayEngine implements ConnectionHandler {
       // shadow/hold on reads: serve nothing, silently.
       return { filters: [], maxLimit: limits.maxLimit };
     }
-    return { filters, maxLimit: limits.maxLimit };
+    return { filters: checked, maxLimit: limits.maxLimit };
   }
 
   private removeSub(st: ConnState, subId: string): void {
@@ -801,6 +1038,7 @@ export class RelayEngine implements ConnectionHandler {
     sub.abort.abort();
     st.subs.delete(subId);
     this.relays.get(st.relayId)?.index.remove(sub.key);
+    this.persist(st);
   }
 
   private async onReq(
@@ -827,17 +1065,10 @@ export class RelayEngine implements ConnectionHandler {
       this.send(st, ['EOSE', subId]);
       return;
     }
-    const sub: Subscription = {
-      key: `${st.conn.id}\u0000${subId}`,
-      subId,
-      subIdJson: JSON.stringify(subId),
-      filters: prepared.filters,
-      conn: st,
-      abort: new AbortController(),
-      pending: [],
-    };
+    const sub = this.makeSub(st, subId, prepared.filters);
     st.subs.set(subId, sub);
     this.runtime(st.relayId).index.add(sub);
+    this.persist(st);
     return { detached: this.serveStored(st, sub, prepared.maxLimit, start) };
   }
 
@@ -866,13 +1097,19 @@ export class RelayEngine implements ConnectionHandler {
     for (const e of events) {
       const exp = expirationOf(e);
       if (exp !== undefined && exp <= now) continue;
+      let visible = this.visibleTo(st, e);
+      if (visible instanceof Promise) {
+        visible = await visible;
+        if (sub.abort.signal.aborted || st.closed) return;
+      }
+      if (!visible) continue;
       st.conn.send(`["EVENT",${sub.subIdJson},${JSON.stringify(e)}]`);
       sent.add(e.id);
     }
     st.conn.send(`["EOSE",${sub.subIdJson}]`);
     const pending = sub.pending ?? [];
     sub.pending = null;
-    for (const e of pending) if (!sent.has(e.id)) this.deliver(sub, e, JSON.stringify(e));
+    for (const e of pending) if (!sent.has(e.id)) this.deliver(sub, e, JSON.stringify(e), null);
     if (st.conn.bufferedAmount() > this.cfg.backpressure.closeAboveBytes) {
       this.hasRoom(st);
     }
@@ -940,6 +1177,39 @@ export class RelayEngine implements ConnectionHandler {
 
   // ───────────────────────── NEG (NIP-77) ─────────────────────────
 
+  private closeNeg(st: ConnState, subId: string): void {
+    const had = st.negFilters.delete(subId);
+    st.negs.delete(subId);
+    if (had) this.persist(st);
+  }
+
+  /** Build the reconciliation set for a sync session, or an error reason. */
+  private async negStorage(
+    st: ConnState,
+    filters: Filter[],
+  ): Promise<NegentropyStorageVector | string> {
+    const neg = this.cfg.negentropy;
+    const events =
+      filters.length === 0
+        ? []
+        : await this.kernel.ports.events.query(st.relayId, filters, {
+            maxLimit: neg.maxRecords + 1,
+          });
+    if (events.length > neg.maxRecords) return reason('blocked', 'too many records');
+    const now = this.kernel.ports.clock.now();
+    const storage = new NegentropyStorageVector();
+    for (const e of events) {
+      const exp = expirationOf(e);
+      if (exp !== undefined && exp <= now) continue;
+      let visible = this.visibleTo(st, e);
+      if (visible instanceof Promise) visible = await visible;
+      if (!visible) continue;
+      storage.insert(e.created_at, e.id);
+    }
+    storage.seal();
+    return storage;
+  }
+
   private async onNegOpen(
     st: ConnState,
     subId: string,
@@ -951,30 +1221,17 @@ export class RelayEngine implements ConnectionHandler {
     if (!neg.enabled) return negErr(reason('blocked', 'sync is disabled on this relay'));
     if (typeof initial !== 'string')
       return negErr(reason('invalid', 'initial message must be hex'));
-    st.negs.delete(subId);
-    if (st.negs.size >= neg.maxSessions)
+    this.closeNeg(st, subId);
+    if (st.negFilters.size >= neg.maxSessions)
       return negErr(reason('blocked', `too many sync sessions (max ${neg.maxSessions})`));
     const prepared = await this.prepareRead(st, [rawFilter], negErr);
     if (!prepared) return;
+    const orig = (rawFilter as Filter).limit;
     const filters = prepared.filters.map(({ limit: _l, ...rest }) => {
-      const orig = (rawFilter as Filter).limit;
       return (orig !== undefined ? { ...rest, limit: orig } : rest) as Filter;
     });
-    const events =
-      filters.length === 0
-        ? []
-        : await this.kernel.ports.events.query(st.relayId, filters, {
-            maxLimit: neg.maxRecords + 1,
-          });
-    if (events.length > neg.maxRecords) return negErr(reason('blocked', 'too many records'));
-    const now = this.kernel.ports.clock.now();
-    const storage = new NegentropyStorageVector();
-    for (const e of events) {
-      const exp = expirationOf(e);
-      if (exp !== undefined && exp <= now) continue;
-      storage.insert(e.created_at, e.id);
-    }
-    storage.seal();
+    const storage = await this.negStorage(st, filters);
+    if (typeof storage === 'string') return negErr(storage);
     const session = new Negentropy(storage, neg.frameSizeLimit);
     let out: string | null;
     try {
@@ -983,19 +1240,33 @@ export class RelayEngine implements ConnectionHandler {
       return negErr(reason('invalid', err instanceof Error ? err.message : String(err)));
     }
     st.negs.set(subId, session);
+    st.negFilters.set(subId, filters);
+    this.persist(st);
     this.send(st, ['NEG-MSG', subId, out ?? '']);
   }
 
   private async onNegMsg(st: ConnState, subId: string, message: unknown): Promise<void> {
     const negErr = (why: string) => this.send(st, ['NEG-ERR', subId, why]);
-    const session = st.negs.get(subId);
-    if (!session) return negErr('closed: unknown sync session');
+    let session = st.negs.get(subId);
+    if (!session) {
+      // The responder side is stateless between messages, so a session that
+      // survived hibernation is rebuilt from its persisted filter.
+      const filters = st.negFilters.get(subId);
+      if (!filters || !this.cfg.negentropy.enabled) return negErr('closed: unknown sync session');
+      const storage = await this.negStorage(st, filters);
+      if (typeof storage === 'string') {
+        this.closeNeg(st, subId);
+        return negErr(storage);
+      }
+      session = new Negentropy(storage, this.cfg.negentropy.frameSizeLimit);
+      st.negs.set(subId, session);
+    }
     if (typeof message !== 'string') return negErr(reason('invalid', 'message must be hex'));
     try {
       const [out] = await session.reconcile(message);
       this.send(st, ['NEG-MSG', subId, out ?? '']);
     } catch (err) {
-      st.negs.delete(subId);
+      this.closeNeg(st, subId);
       negErr(reason('invalid', err instanceof Error ? err.message : String(err)));
     }
   }

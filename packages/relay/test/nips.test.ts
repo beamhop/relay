@@ -68,7 +68,10 @@ describe('NIP-11 relay information', () => {
     const doc = (await res.json()) as ReturnType<typeof relayInfo>;
     expect(doc.name).toBe('Test Relay');
     expect(doc.pubkey).toBe('a'.repeat(64));
-    expect(doc.supported_nips).toEqual([1, 9, 11, 13, 40, 42, 45, 50, 62, 70, 77]);
+    expect(doc.supported_nips).toEqual([
+      1, 2, 9, 11, 13, 17, 29, 40, 42, 45, 50, 56, 59, 62, 65, 70, 77,
+    ]);
+    expect(doc.self).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.limitation.min_pow_difficulty).toBe(8);
     expect(doc.limitation.auth_required).toBe(false);
     expect(doc.software).toContain('beamhop');
@@ -393,7 +396,13 @@ test('relayInfo omits created_at_lower_limit when unbounded', () => {
       overridden: [],
     },
     { search: false, exactCount: true },
-    { negentropy: { enabled: true }, software: 's', version: 'v', maxMessageBytes: 1 } as never,
+    {
+      negentropy: { enabled: true },
+      groups: { enabled: false },
+      software: 's',
+      version: 'v',
+      maxMessageBytes: 1,
+    } as never,
   );
   expect(doc.limitation.created_at_lower_limit).toBeUndefined();
   expect(doc.supported_nips).toContain(77);

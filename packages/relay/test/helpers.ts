@@ -33,8 +33,34 @@ export class FakeConn implements Connection {
   constructor(
     readonly relayId: string,
     readonly openedAt: number,
+    id?: string,
   ) {
-    this.id = `c${++connSeq}`;
+    this.id = id ?? `c${++connSeq}`;
+  }
+
+  /**
+   * Simulate socket hibernation: a fresh connection object with the same id,
+   * challenge, authed pubkeys and a JSON round-trip of `state` (Map/Set aware),
+   * like the Cloudflare runtime's attachment encoding.
+   */
+  hibernate(): FakeConn {
+    const c = new FakeConn(this.relayId, this.openedAt, this.id);
+    c.challenge = this.challenge;
+    for (const pk of this.authed) c.authed.add(pk);
+    const replacer = (_k: string, v: unknown) =>
+      v instanceof Map ? { $map: [...v] } : v instanceof Set ? { $set: [...v] } : v;
+    const reviver = (_k: string, v: unknown) => {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const o = v as { $map?: Array<[unknown, unknown]>; $set?: unknown[] };
+        if (o.$map) return new Map(o.$map);
+        if (o.$set) return new Set(o.$set);
+      }
+      return v;
+    };
+    const encoded = JSON.stringify([...this.state], replacer);
+    for (const [k, v] of JSON.parse(encoded, reviver) as Array<[string, unknown]>)
+      c.state.set(k, v);
+    return c;
   }
 
   send(frame: string): void {
