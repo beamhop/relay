@@ -122,7 +122,10 @@ export class PolicyRuntime {
     readonly kernel: Kernel,
     readonly opts: PolicyModuleOptions = {},
   ) {
-    this.state = new PolicyState(kernel.ports);
+    this.state = new PolicyState(kernel.ports, {
+      onError: (err) =>
+        kernel.bus.emit('error', { source: 'policy.state-flush', message: String(err) }),
+    });
     this.stats = new PolicyStats(kernel.ports.clock.now());
     this.queue = new ModerationQueue(
       kernel.ports,
@@ -158,6 +161,7 @@ export class PolicyRuntime {
 
   async idle(): Promise<void> {
     while (this.pending.size > 0) await Promise.all([...this.pending]);
+    await this.state.flush();
   }
 
   // ── tiers ──

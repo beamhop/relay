@@ -28,6 +28,8 @@ import {
 import type { DataLayout } from './config.ts';
 import { BunCrypto, BunScheduler, InProcessPubSub, systemClock } from './ports.ts';
 import { sharpLoader } from './sharp.ts';
+import { startSqliteCheckpointer } from './sqlite-checkpointer.ts';
+import { WorkerEventStore } from './sqlite-writer.ts';
 
 export interface SqlStores {
   events: EventStore;
@@ -36,6 +38,8 @@ export interface SqlStores {
   metrics: TimeSeriesStore;
   /** storage-sql executor (offered to modules as `storage.sql`, e.g. lifecycle backups). */
   exec?: unknown;
+  /** SQLite database file, when the factory opened one. */
+  file?: string;
   close?: () => Promise<void> | void;
 }
 
@@ -45,7 +49,18 @@ export type CreateSqlStores = (opts: {
   url?: string;
   dataDir: string;
   logger: Logger;
+  /** SQLite pragma overrides. */
+  pragmas?: Record<string, string | number>;
+  /** Event store options (group commit). */
+  events?: { groupCommit?: { enabled?: boolean; maxSize?: number; windowMs?: number } };
 }) => Promise<Partial<SqlStores>> | Partial<SqlStores>;
+
+/**
+ * SQLite group commit window: saves arriving within this many milliseconds share one
+ * transaction. Each commit rewrites the touched index pages into the log, so fewer,
+ * larger commits are much cheaper; 2 ms adds at most that much to an OK.
+ */
+export const SQLITE_COMMIT_WINDOW_MS = 2;
 
 /** Shape the runtime expects from `@beamhop/blobs`. */
 export type CreateBlobStore = (
@@ -59,6 +74,13 @@ export interface StorageLoaders {
     { createBlobStore?: CreateBlobStore; createBlobStoreFromConfig?: CreateBlobStore } | undefined
   >;
   importMedia?: () => Promise<{ createBunMediaProcessor?: CreateMediaProcessor } | undefined>;
+  /** Run SQLite checkpoints on a background thread (default true; see sqlite-checkpointer.ts). */
+  backgroundCheckpoint?: boolean;
+  /**
+   * Event writes on a dedicated SQLite writer thread (sqlite-writer.ts). Default: off,
+   * or on with env `BEAMHOP_SQLITE_WRITER_THREAD=1`.
+   */
+  writerThread?: boolean;
 }
 
 /** Shape the runtime expects from `@beamhop/media/bun` (sharp + ffmpeg composite). */
@@ -67,6 +89,19 @@ export type CreateMediaProcessor = (opts: {
   /** sharp loader for binaries shipping sharp next to them (see sharp.ts). */
   sharp?: { load?: () => Promise<unknown> };
 }) => Promise<{ processor?: MediaProcessor }>;
+
+function writerThreadFromEnv(): boolean {
+  const v = process.env.BEAMHOP_SQLITE_WRITER_THREAD;
+  return v === '1' || v === 'true';
+}
+
+/** SQLite's own default (pages); used again when no background checkpointer runs. */
+const DEFAULT_WAL_AUTOCHECKPOINT = 1000;
+
+async function setWalAutocheckpoint(exec: unknown, pages: number): Promise<void> {
+  const x = exec as { run?: (q: { sql: string; params: unknown[] }) => Promise<unknown> };
+  await x?.run?.({ sql: `PRAGMA wal_autocheckpoint = ${pages}`, params: [] });
+}
 
 async function tryImport<T>(load: () => Promise<unknown>): Promise<T | undefined> {
   try {
@@ -122,13 +157,32 @@ export async function createDefaultPorts(
       tryImport<{ createSqlStores?: CreateSqlStores }>(() => import('@beamhop/storage-sql')));
     if (typeof mod?.createSqlStores === 'function') {
       try {
+        const sqlite = config.storage.driver === 'sqlite';
+        const background = sqlite && loaders.backgroundCheckpoint !== false;
         sql = await mod.createSqlStores({
           driver: config.storage.driver,
           url: config.storage.url,
           dataDir: layout.root,
           logger: logger.child({ component: 'storage' }),
+          ...(sqlite ? { events: { groupCommit: { windowMs: SQLITE_COMMIT_WINDOW_MS } } } : {}),
+          // Checkpoints run on a background thread (below), not inside commits here.
+          ...(background ? { pragmas: { wal_autocheckpoint: 0 } } : {}),
         });
         if (sql.close) closers.push(sql.close.bind(sql));
+        if (background) {
+          const exec = sql.exec;
+          const selfCheckpoint = () =>
+            setWalAutocheckpoint(exec, DEFAULT_WAL_AUTOCHECKPOINT).catch(() => {});
+          const cp = sql.file
+            ? await startSqliteCheckpointer(sql.file, {
+                logger: logger.child({ component: 'storage' }),
+                onStopped: () => void selfCheckpoint(),
+              })
+            : null;
+          // Stopped before the database closes (closers run in order).
+          if (cp) closers.unshift(() => cp.stop());
+          else await selfCheckpoint();
+        }
       } catch (err) {
         logger.log('error', 'database could not be opened', { err });
         sql = {};
@@ -144,7 +198,29 @@ export async function createDefaultPorts(
     warn(name, why);
     return make();
   };
-  const events = orMemory('events', sql.events, () => new MemoryEventStore());
+  let events = orMemory('events', sql.events, () => new MemoryEventStore());
+  const sqlEvents = events;
+  if (sql.events && sql.file && (loaders.writerThread ?? writerThreadFromEnv())) {
+    // Opt-in prototype: event writes on a dedicated SQLite writer thread (reads stay
+    // here). Measured slower than the default under the load test; see
+    // docs/performance.md. Runs from source only (not embedded in the single binary).
+    const threaded = new WorkerEventStore({
+      path: sql.file,
+      reader: sql.events,
+      windowMs: SQLITE_COMMIT_WINDOW_MS,
+      logger: logger.child({ component: 'storage' }),
+    });
+    try {
+      await threaded.init();
+      events = threaded;
+      logger.log('info', 'database writes run on a separate thread', {});
+    } catch (err) {
+      await threaded.stopWriter().catch(() => {});
+      logger.log('warn', 'database writer thread could not start; writing here', {
+        err: String(err),
+      });
+    }
+  }
   const blobIndex = orMemory('blobIndex', sql.blobIndex, () => new MemoryBlobIndex());
   const docs = orMemory('docs', sql.docs, () => new MemoryDocStore());
   const metrics = orMemory('metrics', sql.metrics, () => new MemoryTimeSeries());
@@ -225,7 +301,7 @@ export async function createDefaultPorts(
     scheduler,
     crypto: bunCrypto,
     memoryFallbacks,
-    ...(sql.exec && sql.events === events
+    ...(sql.exec && sql.events === sqlEvents
       ? {
           sql: {
             exec: sql.exec,

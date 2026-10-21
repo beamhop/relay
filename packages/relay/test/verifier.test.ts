@@ -39,7 +39,37 @@ describe('relay engine: offloaded signature checks', () => {
     expect(got.map((f) => f[1])).toEqual(sent.map((e) => e.id));
     expect(got.map((f) => f[2])).toEqual([true, true, false, true, true]);
     expect(got[2]![3]).toBe('invalid: bad signature');
-    expect(verifier.calls).toEqual(sent.map((e) => e.id));
+    // Each one checked once (queued ones start early, so not necessarily in order).
+    expect([...verifier.calls].sort()).toEqual(sent.map((e) => e.id).sort());
+  });
+
+  test('queued EVENTs are checked while earlier ones are still in progress', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const verifier: SignatureVerifier = {
+      async verify(events) {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 10));
+        inFlight--;
+        return events.map((e) => verifyEventSig(e as NostrEvent));
+      },
+    };
+    const h = await setup({ ports: { verifier } });
+    const c = await h.connect();
+    const k = makeKey();
+    const evs = Array.from({ length: 6 }, () => h.event(k));
+    const tampered = { ...evs[3]!, content: 'tampered' };
+    const sent = [evs[0]!, evs[1]!, evs[2]!, tampered, evs[4]!, evs[5]!];
+    const t0 = performance.now();
+    await Promise.all(sent.map((e) => h.engine.handle(c, JSON.stringify(['EVENT', e]))));
+    // One check at a time would take 6 × 10 ms.
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(performance.now() - t0).toBeLessThan(55);
+    const got = oks(c.frames);
+    expect(got.map((f) => f[1])).toEqual(sent.map((e) => e.id));
+    expect(got.map((f) => f[2])).toEqual([true, true, true, false, true, true]);
+    expect(got[3]![3]).toBe('invalid: event id does not match its content');
   });
 
   test('duplicates are answered before (and without) a signature check', async () => {

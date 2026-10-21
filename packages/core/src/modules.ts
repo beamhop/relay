@@ -390,8 +390,9 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     setLimitsResolver(fn) {
       limitsResolver = fn;
     },
-    async applyConfig(next) {
+    async applyConfig(raw) {
       const prev = current;
+      const next = resolveSections(raw, prev);
       current = next;
       // Listeners may return a promise (e.g. hot-enabling a module); wait for all of them.
       const pending: Promise<unknown>[] = [];
@@ -449,6 +450,33 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
       active?.offs.push(off);
       return off;
     },
+  };
+
+  /**
+   * Parse every enabled module's `config.modules.<id>` section with its `configSchema`
+   * (defaults filled in), whichever path the config came from (settings file, app,
+   * import, safe mode). A missing section of a module loaded at boot gets the defaults;
+   * a missing section of a hot-enabled module stays missing (its absence is what
+   * disables it). An invalid section keeps the module's previous one.
+   */
+  const resolveSections = (next: BeamhopConfig, prev: BeamhopConfig): BeamhopConfig => {
+    let modules: Record<string, unknown> | null = null;
+    for (const [id, schema] of Object.entries(schemas)) {
+      const raw = next.modules[id];
+      if (raw === undefined && scopes.get(id)?.app) continue;
+      const r = schema.safeParse(raw ?? {});
+      const value = r.success ? r.data : prev.modules[id];
+      if (!r.success)
+        ports.logger?.log('warn', 'invalid module settings ignored, keeping the previous ones', {
+          module: id,
+          error: r.error.message,
+        });
+      if (value === raw) continue;
+      modules ??= { ...next.modules };
+      if (value === undefined) delete modules[id];
+      else modules[id] = value;
+    }
+    return modules ? { ...next, modules } : next;
   };
 
   const parseSection = (m: BeamhopModule) => {
