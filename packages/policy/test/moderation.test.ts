@@ -397,6 +397,33 @@ describe('config.apply-persona', () => {
     expect(kernel.relay('main')?.access.mode).toBe('open');
     expect(applied).toEqual(['Relay set up as Web-of-trust community', 'Undo relay type change']);
   });
+
+  test('organization switches the Team app on (modules.team.enabled); undo restores', async () => {
+    const cfgModule = {
+      id: 'admin-config-fake',
+      register(k: Parameters<NonNullable<Parameters<typeof setup>[3]>[number]['register']>[0]) {
+        k.provide('admin.config', {
+          async apply(next: BeamhopConfig) {
+            await k.applyConfig(next);
+          },
+        });
+      },
+    };
+    const { act, kernel } = await setup({}, {}, {}, [cfgModule]);
+    const team = () => (kernel.config().modules.team as { enabled?: boolean } | undefined)?.enabled;
+    expect(team()).toBeUndefined();
+    const other = await act('config.apply-persona', { persona: 'public-social' });
+    expect(team()).toBeUndefined();
+    expect(other.preview.some((l) => l.text.startsWith('Team app'))).toBe(false);
+    const { preview, undo } = await act('config.apply-persona', { persona: 'organization' });
+    expect(preview.some((l) => l.text === 'Team app turns on (at /app)')).toBe(true);
+    expect(team()).toBe(true);
+    // Another persona on the node never switches it off again.
+    await act('config.apply-persona', { persona: 'media-host' });
+    expect(team()).toBe(true);
+    await undo();
+    expect(team()).toBeUndefined();
+  });
 });
 
 describe('action registry hygiene', () => {

@@ -39,6 +39,7 @@ import {
   obtainClaimCode,
 } from './services.ts';
 import { type StorageLoaders, createDefaultPorts } from './storage.ts';
+import { createTeamApp } from './team.ts';
 import {
   type AcmeBackend,
   AcmeManager,
@@ -90,6 +91,8 @@ export interface StartServerOptions {
   };
   /** Admin PWA on disk (dev); embedded assets take precedence. */
   pwaDir?: string;
+  /** Team app build on disk (dev); embedded assets take precedence. Served at /app when `modules.team.enabled`. */
+  teamDir?: string;
   /** Unmatched hosts are still dispatched (with `relayId: ''`) for these node-scope prefixes. */
   nodeScopePrefixes?: string[];
   shutdownTimeoutMs?: number;
@@ -296,6 +299,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
 
   // ── HTTP / WS ──
   const assets: AssetServer = createAssetServer({ mount: ADMIN_MOUNT, dir: opts.pwaDir });
+  const teamApp = createTeamApp(kernel, { dir: opts.teamDir });
   const nodeScope = opts.nodeScopePrefixes ?? [`${ADMIN_MOUNT}/`, '/api/'];
   const conns = new Set<BunConnection>();
   const startedAt = ports.clock.nowMs();
@@ -339,6 +343,14 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     const ipHash = ports.crypto.hashIp(meta.ip);
     const country = countryFrom(req, cfg);
     const relay = resolveRelay(cfg, url, meta.host);
+    const team = await teamApp.serve(
+      req,
+      url.pathname,
+      relay
+        ? { relayId: relay.id, publicUrl: `${meta.proto}://${meta.host}${relay.pathPrefix ?? ''}` }
+        : {},
+    );
+    if (team) return team;
     if (!relay) {
       if (nodeScope.some((p) => url.pathname.startsWith(p))) {
         const route: RouteContext = {

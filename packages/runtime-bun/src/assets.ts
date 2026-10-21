@@ -10,14 +10,17 @@ import { join, normalize, resolve } from 'node:path';
 /** URL path (e.g. `/index.html`) → file path (embedded `$bunfs/...` or on disk). */
 export type AssetManifest = Record<string, string>;
 
-let embedded: AssetManifest = {};
+/** Embedded bundles: `admin` (PWA at /admin) and `team` (Team app at /app). */
+export type AssetBundle = 'admin' | 'team';
 
-export function registerAssets(manifest: AssetManifest): void {
-  embedded = { ...embedded, ...manifest };
+const embedded: Record<AssetBundle, AssetManifest> = { admin: {}, team: {} };
+
+export function registerAssets(manifest: AssetManifest, bundle: AssetBundle = 'admin'): void {
+  embedded[bundle] = { ...embedded[bundle], ...manifest };
 }
 
-export function embeddedAssets(): AssetManifest {
-  return embedded;
+export function embeddedAssets(bundle: AssetBundle = 'admin'): AssetManifest {
+  return embedded[bundle];
 }
 
 export interface AssetServer {
@@ -28,8 +31,13 @@ export interface AssetServer {
 
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
-export function createAssetServer(opts: { mount: string; dir?: string }): AssetServer {
+export function createAssetServer(opts: {
+  mount: string;
+  dir?: string;
+  bundle?: AssetBundle;
+}): AssetServer {
   const mount = opts.mount.replace(/\/$/, '');
+  const embedded = embeddedAssets(opts.bundle ?? 'admin');
   const hasEmbedded = Object.keys(embedded).length > 0;
   const dir = !hasEmbedded && opts.dir && existsSync(opts.dir) ? resolve(opts.dir) : undefined;
   const source = hasEmbedded ? 'embedded' : dir ? 'disk' : 'none';

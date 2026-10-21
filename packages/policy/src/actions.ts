@@ -17,7 +17,14 @@ import {
 import { z } from 'zod';
 import { explainLimits } from './goals.ts';
 import type { QueueItem, QueueStatus } from './moderation.ts';
-import { applyPersona, diffRelayConfig, personaInfo, personaPresets } from './personas.ts';
+import {
+  applyPersona,
+  applyPersonaModules,
+  diffPersonaModules,
+  diffRelayConfig,
+  personaInfo,
+  personaPresets,
+} from './personas.ts';
 import type { PolicyRuntime } from './runtime.ts';
 import type { AllowEntry, BanEntry, InviteEntry, MuteEntry, TierEntry } from './state.ts';
 import { HEX64, plural, shortKey } from './util.ts';
@@ -765,7 +772,7 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     title: 'Change relay type',
     description: 'Apply a ready-made setup (goals, who can post, media options).',
     technical:
-      'Deep-merges personaPresets[persona] into relays[id]; limits overrides, tiers, hosts and info are kept. Committed via admin.config when available.',
+      'Deep-merges personaPresets[persona] into relays[id] (limits overrides, tiers, hosts and info are kept) and personaModulePresets[persona] into modules (organization: modules.team.enabled=true; never switches modules off). Committed via admin.config when available.',
     scope: 'relay',
     permission: 'config.write',
     keywords: ['persona', 'preset', 'template', 'relay type'],
@@ -773,7 +780,10 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     async preview(input, ctx) {
       const relay = relayOf(rt, ctx);
       const next = applyPersona(relay, input.persona);
-      const lines = diffRelayConfig(relay, next);
+      const lines = [
+        ...diffRelayConfig(relay, next),
+        ...diffPersonaModules(rt.kernel.config().modules, input.persona),
+      ];
       if (lines.length === 0)
         return [{ kind: 'info', text: `Already set up as ${personaInfo[input.persona].title}` }];
       return lines;
@@ -781,11 +791,15 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     async run(input, ctx) {
       const relay = relayOf(rt, ctx);
       const next = applyPersona(relay, input.persona);
-      const diff = diffRelayConfig(relay, next);
       const cfg = rt.kernel.config();
+      const diff = [
+        ...diffRelayConfig(relay, next),
+        ...diffPersonaModules(cfg.modules, input.persona),
+      ];
       const nextConfig: BeamhopConfig = {
         ...cfg,
         relays: cfg.relays.map((r) => (r.id === relay.id ? next : r)),
+        modules: applyPersonaModules(cfg.modules, input.persona),
       };
       const svc = rt.kernel.use<AdminConfigService>('admin.config');
       const summary = `Relay set up as ${personaInfo[input.persona].title}`;
@@ -805,17 +819,31 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
         },
         summary: committed ? summary : `${summary} (not saved yet: apply the patch)`,
         ...(committed
-          ? { undo: undoToken(rt, 'config.apply-persona', { relayId: relay.id, prev: relay }) }
+          ? {
+              undo: undoToken(rt, 'config.apply-persona', {
+                relayId: relay.id,
+                prev: relay,
+                prevModules: cfg.modules,
+              }),
+            }
           : {}),
       };
     },
     async undo(payload, ctx) {
-      const p = payload as { relayId: string; prev: RelayConfig };
+      const p = payload as {
+        relayId: string;
+        prev: RelayConfig;
+        prevModules?: Record<string, unknown>;
+      };
       const svc = rt.kernel.use<AdminConfigService>('admin.config');
       if (!svc) throw new Error('config service unavailable');
       const cfg = rt.kernel.config();
       await svc.apply(
-        { ...cfg, relays: cfg.relays.map((r) => (r.id === p.relayId ? p.prev : r)) },
+        {
+          ...cfg,
+          relays: cfg.relays.map((r) => (r.id === p.relayId ? p.prev : r)),
+          ...(p.prevModules ? { modules: p.prevModules } : {}),
+        },
         { principalId: ctx.principal.id, summary: 'Undo relay type change' },
       );
     },

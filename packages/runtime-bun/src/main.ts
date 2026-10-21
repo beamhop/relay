@@ -82,6 +82,7 @@ export async function main(
   logger.log('info', 'modules loaded', { modules: modules.map((m) => m.id) });
 
   const devPwa = resolve(import.meta.dir, '../../pwa/build');
+  const devTeam = resolve(import.meta.dir, '../../team-client/build');
   const running = await startServer({
     config: loaded.config,
     modules,
@@ -89,6 +90,7 @@ export async function main(
     safe: args.safe,
     bootFile: loaded.file,
     pwaDir: env.BEAMHOP_PWA_DIR ?? (existsSync(devPwa) ? devPwa : undefined),
+    teamDir: env.BEAMHOP_TEAM_DIR ?? (existsSync(devTeam) ? devTeam : undefined),
     tls: env.BEAMHOP_ACME_HTTP_PORT ? { httpPort: Number(env.BEAMHOP_ACME_HTTP_PORT) } : undefined,
   });
 
