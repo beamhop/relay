@@ -5,7 +5,16 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "description": "Plugin SDK, host (hot reload / bundled), catalog, webhooks",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./testbed": "./src/testing/index.ts",
+    "./bun": "./src/bun/index.ts"
+  },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@beamhop/testkit": "workspace:*",
+    "zod": "^4.1.0"
+  }
 }

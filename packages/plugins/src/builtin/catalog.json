@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "name": "Beamhop built-in plugins",
+  "plugins": [
+    {
+      "id": "wot-strict",
+      "name": "Only people in your web of trust",
+      "package": "builtin:wot-strict",
+      "version": "1.0.0",
+      "description": "Accept posts only from people you follow, the people they follow, and so on up to the depth you choose.",
+      "permissions": ["read-events"],
+      "minBeamhop": "0.0.0"
+    },
+    {
+      "id": "keyword-filter",
+      "name": "Block words and phrases",
+      "package": "builtin:keyword-filter",
+      "version": "1.0.0",
+      "description": "Turn away, quietly hide, or hold for review any post containing words you list.",
+      "permissions": [],
+      "minBeamhop": "0.0.0"
+    },
+    {
+      "id": "kind-allowlist",
+      "name": "Only allow certain kinds of posts",
+      "package": "builtin:kind-allowlist",
+      "version": "1.0.0",
+      "description": "Accept only the kinds of content you choose (for example profiles, notes and reactions) and turn everything else away.",
+      "permissions": [],
+      "minBeamhop": "0.0.0"
+    },
+    {
+      "id": "rate-limit-burst",
+      "name": "Stop bursts of posts",
+      "package": "builtin:rate-limit-burst",
+      "version": "1.0.0",
+      "description": "Let people post a short burst quickly, then slow them down to a steady pace. Stops floods without bothering normal users.",
+      "permissions": [],
+      "minBeamhop": "0.0.0"
+    },
+    {
+      "id": "nip05-required",
+      "name": "Require a verified address to post",
+      "package": "builtin:nip05-required",
+      "version": "1.0.0",
+      "description": "Only people with a verified Nostr address (like name@example.com) on their profile can post. Results are remembered so checks stay fast.",
+      "permissions": ["read-events", "network"],
+      "minBeamhop": "0.0.0"
+    }
+  ]
+}
