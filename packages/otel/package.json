@@ -1,0 +1,16 @@
+{
+  "name": "@beamhop/otel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Opt-in OpenTelemetry traces (OTLP/HTTP JSON over fetch) and optional OTLP metrics",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@beamhop/insights": "workspace:*",
+    "hono": "^4.13.13",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+}

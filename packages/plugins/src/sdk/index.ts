@@ -58,6 +58,13 @@ export interface PluginDefinition<S extends z.ZodType = z.ZodType>
   readonly spec: PluginSpec<S>;
 }
 
+/**
+ * Define a plugin. Validates the manifest right away (throws on a bad id, name,
+ * version or permission) and fills in defaults: `version` `0.0.0`, no permissions,
+ * any settings, priority 300. Hooks may be given under `hooks` (an object, or a
+ * factory `(api) => hooks` that runs once per instance and again on every reload)
+ * or directly at the top level. Export the result as the module's default export.
+ */
 export function definePlugin<S extends z.ZodType = z.ZodType>(
   input: PluginInput<S>,
 ): PluginDefinition<S> {
@@ -138,13 +145,25 @@ export function toPolicyHooks(
 }
 
 // ── Decision helpers ──
+/** Let it through (same as returning nothing). */
 export const accept = (): Decision => ACCEPT;
+/**
+ * Refuse it. `prefix` is the machine-readable reason (NIP-01 `OK`/`CLOSED` prefix):
+ * `blocked`, `rate-limited`, `restricted`, `invalid`, `pow`, `auth-required`, `mute`,
+ * `duplicate` or `error` (anything else becomes `blocked`). `message` is shown to the
+ * person's app; keep it short and plain (cut at 300 characters).
+ */
 export const reject = (prefix: ReasonPrefix, message: string): Decision => ({
   action: 'reject',
   prefix,
   message,
 });
+/**
+ * Hide it quietly: the sender is told it was accepted, but it is not stored or shown to
+ * anyone else (shadow ban). `message` is for admins only.
+ */
 export const shadow = (message?: string): Decision =>
   message ? { action: 'shadow', message } : { action: 'shadow' };
+/** Hold it for review: stored hidden and put in the moderation queue until an admin decides. */
 export const hold = (message?: string): Decision =>
   message ? { action: 'hold', message } : { action: 'hold' };

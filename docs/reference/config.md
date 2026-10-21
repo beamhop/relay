@@ -447,6 +447,19 @@ Each section exists only when that feature is turned on; enterprise features are
 | `listRefreshMinutes` | number | `60` | How often blocked-image lists are reloaded |
 | `maxProcessBytes` | number | `209715200` | Larger files are stored as-is without copies or checks |
 
+### `modules.otel`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `endpoint` | string |  | Address of your tracing collector. Leave empty to keep tracing off: nothing is recorded or sent. *Technical:* OTLP/HTTP JSON base URL; spans are POSTed to {endpoint}/v1/traces (metrics to {endpoint}/v1/metrics). Read at boot: setting it for the first time needs a restart. |
+| `headers` | map |  | Extra, non-secret headers sent with each export, e.g. a tenant name. |
+| `secretHeaders` | map |  | Headers that carry a login key or token for your collector. Stored privately and never shown again. *Technical:* Merged over `headers` on each export; redacted in the admin app, audit log and config diffs. |
+| `serviceName` | string | `"beamhop"` | Name this server appears under in your tracing tool. *Technical:* Resource attribute service.name (service.instance.id is node.id). |
+| `sampleRatio` | number | `0.1` | Share of activity to trace, from 0 (none) to 1 (everything). Lower means less load. *Technical:* Head sampling: TraceIdRatio for root spans; incoming W3C traceparent with the sampled flag is always honoured (parent-based). |
+| `metrics` | section |  | Numbers (counters) export *Technical:* OTLP/HTTP JSON metrics (cumulative) built from the insights registry, POST {endpoint}/v1/metrics. Needs the insights module; do not also set modules.insights.otlp to the same collector. |
+| `metrics.enabled` | boolean | `false` | Also send the numbers shown on the monitoring page to the same collector. |
+| `metrics.intervalSeconds` | number | `60` | How often numbers are sent, in seconds. |
+
 ### `modules.plugins`
 
 | Setting | Type | Default | Description |

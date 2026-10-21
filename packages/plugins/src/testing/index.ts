@@ -28,18 +28,25 @@ import type { DefinitionLike } from '../sdk/index.ts';
 
 type MemPorts = ReturnType<typeof memoryPorts>;
 
+/** One plugin in a multi-plugin testbed. */
 export interface TestbedPlugin {
+  /** The `definePlugin(...)` result. */
   plugin: DefinitionLike;
+  /** Plugin settings (checked against its `configSchema`). */
   config?: unknown;
   /** Host run settings (fail mode, priority…). */
   run?: Partial<PluginEntrySettings>;
+  /** Turned on (default true). */
   enabled?: boolean;
 }
 
+/** Options for {@link createPluginTestbed}: one `plugin` (with `config`) or several `plugins`. */
 export interface TestbedOptions {
   /** One plugin… */
   plugin?: DefinitionLike;
+  /** …its settings… */
   config?: unknown;
+  /** …and host run settings (fail mode, priority…). */
   run?: Partial<PluginEntrySettings>;
   /** …or several. */
   plugins?: TestbedPlugin[];
@@ -47,35 +54,52 @@ export interface TestbedOptions {
   fetch?: typeof fetch;
   /** Extra modules to register before the plugin host. */
   modules?: BeamhopModule[];
+  /** Relay id hooks see in `ctx.relayId` (default `default`). */
   relayId?: string;
+  /** Replace in-memory ports (e.g. a FakeClock set to a given time). */
   ports?: Partial<MemPorts>;
 }
 
+/** A complete signed event, or just the fields to set (the testbed signs it). */
 export type EventInput =
   | NostrEvent
   | Partial<Pick<NostrEvent, 'kind' | 'tags' | 'content' | 'created_at'>>;
 
+/** Context for one simulated call. */
 export interface CtxInput {
+  /** Relay id (default: the testbed relay). */
   relayId?: string;
+  /** Membership tier of the person. */
   tier?: string;
+  /** Simulate a preview ("what would happen") run. */
   dryRun?: boolean;
   /** Connection fields (a fake connection is created when any is given). */
   conn?: { id?: string; ipHash?: string; authed?: string[]; userAgent?: string };
 }
 
+/** A running testbed: simulate relay activity and see what your plugin decides. */
 export interface PluginTestbed {
+  /** The real kernel the plugin runs in. */
   kernel: Kernel;
+  /** In-memory ports: `ports.clock.advance(seconds)`, `ports.events`, `ports.docs`… */
   ports: MemPorts;
+  /** The plugin host (same as production: stats, circuit breaker, reload). */
   host: PluginHost;
   /** Default author for events built from partials. */
   key: TestKey;
+  /** A fresh random key (another person). */
   newKey(): TestKey;
   /** Sign (when partial) and run `onEvent`. */
   event(e?: EventInput, opts?: CtxInput & { key?: TestKey }): Promise<Decision & { by?: string }>;
+  /** Run `onReq` with these filters. */
   req(filters: Filter[], opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onUpload` (defaults: a 1 KiB PNG from `key`). */
   upload(info: Partial<UploadInfo>, opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onConnect`. */
   connect(opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onAuth` for this public key. */
   auth(pubkey: string, opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onBlobServe` for this file hash. */
   blobServe(sha256: string, opts?: CtxInput): Promise<Decision & { by?: string }>;
   /** Store an event directly (e.g. follow lists, profiles) without running hooks. */
   store(e: EventInput, opts?: { key?: TestKey; relayId?: string }): Promise<NostrEvent>;
@@ -83,7 +107,9 @@ export interface PluginTestbed {
   sign(e?: EventInput, key?: TestKey): NostrEvent;
   /** Change plugin settings (hot reload through the config path). */
   configure(id: string, config: unknown): Promise<void>;
+  /** Host status per plugin (`running`, `error` with the reason, call stats…). */
   status(): ReturnType<PluginHost['status']>;
+  /** Stop the host and dispose plugin instances. */
   close(): Promise<void>;
 }
 
@@ -103,6 +129,11 @@ function fakeConn(c: NonNullable<CtxInput['conn']>, relayId: string, now: number
   };
 }
 
+/**
+ * Start a testbed: a real kernel with in-memory storage running the plugin(s) through
+ * the same host as production. Hook calls return the pipeline decision plus `by`
+ * (the hook id that decided). No network: plugins with `network` get `opts.fetch`.
+ */
 export async function createPluginTestbed(opts: TestbedOptions): Promise<PluginTestbed> {
   const list: TestbedPlugin[] = [
     ...(opts.plugin ? [{ plugin: opts.plugin, config: opts.config, run: opts.run }] : []),
@@ -197,6 +228,7 @@ export async function createPluginTestbed(opts: TestbedOptions): Promise<PluginT
 
 // ── Assertions (framework-agnostic: they throw) ──
 
+/** Throw unless the decision is accept. */
 export function expectAccept(d: Decision): void {
   if (d.action !== 'accept') {
     throw new Error(
@@ -205,6 +237,7 @@ export function expectAccept(d: Decision): void {
   }
 }
 
+/** Throw unless the decision is reject (and, when given, has this prefix and message text). */
 export function expectReject(d: Decision, prefix?: string, message?: string | RegExp): void {
   if (d.action !== 'reject') throw new Error(`expected reject, got ${d.action}`);
   if (prefix && d.prefix !== prefix) throw new Error(`expected prefix ${prefix}, got ${d.prefix}`);
@@ -216,25 +249,37 @@ export function expectReject(d: Decision, prefix?: string, message?: string | Re
   }
 }
 
+/** Throw unless the decision has this action (`accept`, `reject`, `shadow` or `hold`). */
 export function expectDecision(d: Decision, action: Decision['action']): void {
   if (d.action !== action) throw new Error(`expected ${action}, got ${d.action}`);
 }
 
 // ── Simple synchronous form (used by AI-generated tests) ──
 
+/** The testbed methods, usable before the kernel has started (see {@link createTestbed}). */
 export interface SimpleTestbed {
+  /** Sign (when partial) and run `onEvent`. */
   event(e?: EventInput, opts?: CtxInput & { key?: TestKey }): Promise<Decision & { by?: string }>;
+  /** Run `onReq` with these filters. */
   req(filters: Filter[], opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onUpload` (defaults: a 1 KiB PNG). */
   upload(info: Partial<UploadInfo>, opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onConnect`. */
   connect(opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onAuth` for this public key. */
   auth(pubkey: string, opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Run `onBlobServe` for this file hash. */
   blobServe(sha256: string, opts?: CtxInput): Promise<Decision & { by?: string }>;
+  /** Store an event without running hooks (seed data). */
   store(e: EventInput, opts?: { key?: TestKey }): Promise<NostrEvent>;
   /** The full testbed (created on first use). */
   ready(): Promise<PluginTestbed>;
 }
 
-/** `createTestbed(plugin)` — synchronous; the kernel starts on the first call. */
+/**
+ * `createTestbed(plugin)` — synchronous; the kernel starts on the first call. This is
+ * the form the AI plugin generator (`ai.generate-plugin`) writes its tests with.
+ */
 export function createTestbed(
   plugin: DefinitionLike,
   opts: Omit<TestbedOptions, 'plugin' | 'plugins'> = {},

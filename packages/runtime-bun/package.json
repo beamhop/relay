@@ -36,6 +36,7 @@
     "@beamhop/enterprise-identity": "workspace:*",
     "@beamhop/enterprise-keyvault": "workspace:*",
     "@beamhop/enterprise-compliance": "workspace:*",
+    "@beamhop/otel": "workspace:*",
     "acme-client": "^5.4.0",
     "hono": "^4.13.13",
     "reflect-metadata": "^0.2.2",
