@@ -1,11 +1,34 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Pull requests and pushes: parallel jobs, each a few single commands you can run locally
+# (see CONTRIBUTING.md). A newer push to the same branch/PR cancels the run in progress.
 name: ci
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: '1.4.3'
+
 jobs:
+  # Typecheck, lint, every bun test (incl. the vanilla-profile binary test), generated
+  # reference docs, protocol conformance, SPDX headers.
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: bun-${{ runner.os }}-
       - run: bun install
       - run: bun run typecheck
       - run: bun run lint
@@ -14,3 +37,102 @@ jobs:
       - run: bun docs/reference/generate.ts --check
       # Protocol conformance (NIP-01/11/42/…, Blossom) against every storage backend.
       - run: bun packages/conformance/scripts/self-check.ts --all
+      # Every Beamhop source file carries the AGPL SPDX header (vendored/upstream files excluded).
+      - run: bun run ci:spdx
+
+  # Admin app (packages/pwa): svelte-check, unit tests, build, bundle budget, vanilla profile
+  # (no enterprise strings in vanilla chunks, first-load budgets), Playwright E2E incl. the
+  # vanilla wizard snapshot.
+  admin-app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/pwa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install
+      - run: bun run check
+      - run: bunx vitest run
+      - run: bun run build
+      - run: bun run size
+      - run: bun ../../scripts/ci/vanilla-check.ts
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('packages/pwa/package.json') }}
+      # Both Playwright projects (iphone, desktop) render with Chromium.
+      - run: bunx playwright install --with-deps chromium
+      - run: bunx playwright test --reporter=list,html
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            packages/pwa/playwright-report
+            packages/pwa/test-results
+          retention-days: 14
+
+  # Team client (Flotilla fork): svelte-check, Beamhop unit tests, static build, then the
+  # no-payments guard again with the built output present (it also scans packages/team-client/build).
+  team-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install
+      - run: bun run check
+        working-directory: packages/team-client
+      - run: bun run build
+        working-directory: packages/team-client
+      - run: bun test packages/team-client/src/beamhop
+
+  # Cloudflare runtime: the workerd suite (Miniflare, default + enterprise worker), then
+  # `wrangler deploy --dry-run` bundles of the default and --enterprise Worker with a gzip budget.
+  cloudflare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install
+      - run: bun run test:workerd
+        working-directory: packages/runtime-cf
+      - run: bun run ci:cf-bundle
+
+  # Developer Certificate of Origin: every commit in the PR is signed off by its author.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun scripts/ci/dco-check.ts ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}

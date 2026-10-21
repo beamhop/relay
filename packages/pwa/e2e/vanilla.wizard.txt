@@ -1,0 +1,10 @@
+step claim: "Claim your relay" (progress 5)
+step persona: "What kind of relay is this?" (progress 5)
+  persona-public-social: Public social
+  persona-private-team: Private team
+  persona-wot-community: Web-of-trust community
+  persona-media-host: Media host
+  persona-organization: Company / Organization
+step domain: "Your web address" (progress 5)
+step done: "Your relay is live" (progress 5)
+step recovery: "Save your recovery codes" (progress 5)
