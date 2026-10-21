@@ -12,6 +12,7 @@ import {
   type Principal,
   type RelayId,
   can,
+  mayRunAction,
 } from '@beamhop/core';
 import { z } from 'zod';
 import { HttpError, lowerFirst } from '../util.ts';
@@ -43,9 +44,12 @@ export function mayRun(
   principal: Principal,
   relayId: RelayId | null,
 ): boolean {
-  if (can(principal, def.permission, relayId)) return true;
-  if (relayId !== null || def.scope !== 'node' || !def.anyRelay || !def.readOnly) return false;
-  return kernel.config().relays.some((r) => can(principal, def.permission, r.id));
+  return mayRunAction(
+    def,
+    principal,
+    relayId,
+    kernel.config().relays.map((r) => r.id),
+  );
 }
 
 export function catalogEntry(

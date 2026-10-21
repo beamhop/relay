@@ -7,8 +7,10 @@
 import {
   type BeamhopConfig,
   ConfigSchema,
+  type Principal,
   type RelayId,
   RelaySchema,
+  can,
   technicalNote,
 } from '@beamhop/core';
 import type { z } from 'zod';
@@ -130,21 +132,30 @@ export interface SettingExplanation {
  * `privacy.ipLogging`) or relay-level (`access.mode`, `goals.openness`) — the
  * latter are resolved against the relay in context.
  */
+/**
+ * Explain one setting. What the setting means is public; its current value is shown
+ * only where the admin API would show it to `principal`: server settings to admins of
+ * the whole server, a relay's settings to admins of that relay.
+ */
 export function explainSetting(
   config: BeamhopConfig,
   path: string,
   relayId: RelayId | null,
+  principal: Principal,
 ): SettingExplanation {
   const clean = path.trim().replace(/^config\./, '');
   const parts = clean.split('.').filter(Boolean);
   const relay = relayId ? config.relays.find((r) => r.id === relayId) : undefined;
+  const nodeWide = can(principal, 'relay.read', null);
   const attempts: Array<{ root: AnyZod; value: unknown; parts: string[] }> = [];
   if (parts[0] === 'relays' && parts.length >= 2) {
     const rid = parts[1]!;
-    const r = config.relays.find((x) => x.id === rid);
+    const r = can(principal, 'relay.read', rid)
+      ? config.relays.find((x) => x.id === rid)
+      : undefined;
     attempts.push({ root: RelaySchema, value: r, parts: parts.slice(2) });
   }
-  attempts.push({ root: ConfigSchema, value: config, parts });
+  attempts.push({ root: ConfigSchema, value: nodeWide ? config : undefined, parts });
   attempts.push({ root: RelaySchema, value: relay, parts });
   for (const a of attempts) {
     let s: AnyZod | undefined = a.root;
@@ -196,29 +207,43 @@ export const RELAY_SECTIONS = [
 ] as const;
 
 /** One config section with every secret masked (always, regardless of role: prompts may leave the box). */
+/**
+ * One settings section, secrets hidden, limited to what the admin API shows
+ * `principal`: server sections need read access to the whole server; relays only
+ * appear if the admin may read them.
+ */
 export function configSection(
   config: BeamhopConfig,
   section: string,
   relayId: RelayId | null,
+  principal: Principal,
 ): { section: string; value: unknown } | { error: string; sections: string[] } {
   const parts = section.trim().split('.').filter(Boolean);
   const head = parts[0] ?? '';
   const relay = relayId ? config.relays.find((r) => r.id === relayId) : undefined;
+  const nodeWide = can(principal, 'relay.read', null);
+  const notAllowed = { error: 'Not allowed for this admin', sections: [] as string[] };
   if (relay && (RELAY_SECTIONS as readonly string[]).includes(head))
     return { section, value: scrub(getPath(relay, parts)) };
   if ((NODE_SECTIONS as readonly string[]).includes(head))
-    return { section, value: scrub(getPath(config, parts)) };
-  if (head === 'relays')
+    return nodeWide ? { section, value: scrub(getPath(config, parts)) } : notAllowed;
+  if (head === 'relays') {
+    if (parts.length > 1) {
+      const target = config.relays.find((r) => r.id === parts[1]);
+      if (!target || !can(principal, 'relay.read', target.id)) return notAllowed;
+      return { section, value: scrub(getPath(target, parts.slice(2))) };
+    }
     return {
       section,
       value: scrub(
-        parts.length > 1
-          ? getPath(config, parts)
-          : config.relays.map((r) => ({ id: r.id, hosts: r.hosts, persona: r.persona })),
+        config.relays
+          .filter((r) => can(principal, 'relay.read', r.id))
+          .map((r) => ({ id: r.id, hosts: r.hosts, persona: r.persona })),
       ),
     };
+  }
   return {
     error: 'Unknown section',
-    sections: [...NODE_SECTIONS, 'relays', ...(relay ? RELAY_SECTIONS : [])],
+    sections: [...(nodeWide ? NODE_SECTIONS : []), 'relays', ...(relay ? RELAY_SECTIONS : [])],
   };
 }

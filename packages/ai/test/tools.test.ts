@@ -107,15 +107,15 @@ describe('built-in tools', () => {
 
   test('explain_setting reads describe() and technical notes', async () => {
     const { kernel } = await boot();
-    const r = explainSetting(kernel.config(), 'access.mode', 'main');
+    const r = explainSetting(kernel.config(), 'access.mode', 'main', P.owner);
     expect(r.found).toBe(true);
     expect(r.description).toBe('Who can post');
     expect(r.technical).toContain('allowlist');
     expect(r.currentValue).toBe('open');
     expect((r.type as { options: string[] }).options).toContain('wot');
-    const node = explainSetting(kernel.config(), 'ai.apiKey', null);
+    const node = explainSetting(kernel.config(), 'ai.apiKey', null, P.owner);
     expect(node.currentValue).toBe('•••');
-    expect(explainSetting(kernel.config(), 'nope.nothing', null).found).toBe(false);
+    expect(explainSetting(kernel.config(), 'nope.nothing', null, P.owner).found).toBe(false);
   });
 
   test('read action output is returned (IPs are scrubbed later, before prompting)', async () => {

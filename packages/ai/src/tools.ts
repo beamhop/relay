@@ -21,6 +21,7 @@ import {
   type RelayId,
   type ToolSpec,
   can,
+  mayRunAction,
 } from '@beamhop/core';
 import { z } from 'zod';
 import type { ErrorRing } from './errors.ts';
@@ -104,14 +105,19 @@ function actionRelay(def: ActionDef, relayId: RelayId | null): RelayId | null {
   return def.scope === 'relay' ? relayId : null;
 }
 
-/** Whether `def` is usable for this principal in this context (scope + permission). */
+/**
+ * Whether `def` is usable for this principal in this context: exactly the admin API's
+ * rule (`mayRunAction`), so the assistant never offers or runs more than the admin may.
+ */
 export function actionAvailable(
+  kernel: Pick<Kernel, 'config'>,
   def: ActionDef,
   principal: Principal,
   relayId: RelayId | null,
 ): boolean {
   if (def.scope === 'relay' && !relayId) return false;
-  return can(principal, def.permission, actionRelay(def, relayId));
+  const relayIds = kernel.config().relays.map((r) => r.id);
+  return mayRunAction(def, principal, actionRelay(def, relayId), relayIds);
 }
 
 function describeAction(def: ActionDef, kind: ToolKind): string {
@@ -161,7 +167,7 @@ export function readTool(def: ActionDef): AssistantTool {
       parameters: schema,
     },
     async run(args, env) {
-      if (!actionAvailable(def, env.principal, env.relayId))
+      if (!actionAvailable(env.kernel, def, env.principal, env.relayId))
         return { ok: false, error: 'Not allowed for this admin' };
       const parsed = parseInput(def, args, wrapped);
       if (!parsed.success)
@@ -184,7 +190,7 @@ export function proposeTool(def: ActionDef): AssistantTool {
       parameters: schema,
     },
     async run(args, env) {
-      if (!actionAvailable(def, env.principal, env.relayId))
+      if (!actionAvailable(env.kernel, def, env.principal, env.relayId))
         return { ok: false, error: 'Not allowed for this admin' };
       const parsed = parseInput(def, args, wrapped);
       if (!parsed.success)
@@ -226,14 +232,14 @@ export function proposeTool(def: ActionDef): AssistantTool {
 
 /** Tools generated from the registry for this principal. */
 export function actionTools(
-  kernel: Pick<Kernel, 'actions'>,
+  kernel: Pick<Kernel, 'actions' | 'config'>,
   principal: Principal,
   relayId: RelayId | null,
   opts: { proposals: boolean },
 ): AssistantTool[] {
   const out: AssistantTool[] = [];
   for (const def of kernel.actions.list()) {
-    if (!actionAvailable(def, principal, relayId)) continue;
+    if (!actionAvailable(kernel, def, principal, relayId)) continue;
     if (def.readOnly) {
       // Sensitive reads (exports, secrets) never go to a model that may be remote.
       if (!def.sensitive) out.push(readTool(def));
@@ -448,7 +454,10 @@ export function builtinTools(
       z.object({ limit: z.number().int().min(1).max(100).default(20) }),
       readInsights,
       async (a, env) => {
-        const list = env.errors?.list({ relayId: env.relayId, limit: a.limit as number }) ?? [];
+        // Server-wide errors only for admins of the whole server (like the logs screen).
+        const list = (env.errors?.list({ relayId: env.relayId, limit: 100 }) ?? [])
+          .filter((e) => can(env.principal, 'insights.read', e.relayId ?? null))
+          .slice(0, a.limit as number);
         return { ok: true, result: list, summary: `${list.length} recent errors` };
       },
     ),
@@ -458,7 +467,12 @@ export function builtinTools(
       z.object({ section: z.string().min(1).max(200) }),
       readRelay,
       async (a, env) => {
-        const r = configSection(env.kernel.config(), a.section as string, env.relayId);
+        const r = configSection(
+          env.kernel.config(),
+          a.section as string,
+          env.relayId,
+          env.principal,
+        );
         return 'error' in r
           ? { ok: false, error: `${r.error}. Known sections: ${r.sections.join(', ')}` }
           : { ok: true, result: r.value, summary: `Read settings: ${a.section}` };
@@ -470,7 +484,7 @@ export function builtinTools(
       z.object({ path: z.string().min(1).max(200) }),
       readRelay,
       async (a, env) => {
-        const r = explainSetting(env.kernel.config(), a.path as string, env.relayId);
+        const r = explainSetting(env.kernel.config(), a.path as string, env.relayId, env.principal);
         return r.found
           ? { ok: true, result: r, summary: `Explained ${r.path}` }
           : { ok: false, error: `No setting called "${r.path}"` };
@@ -494,6 +508,7 @@ export function builtinTools(
         const items = page.items
           .filter(
             (e) =>
+              can(env.principal, 'relay.read', e.relayId ?? null) &&
               (!a.actionId || e.actionId === a.actionId) &&
               (!q || `${e.summary} ${e.actionId}`.toLowerCase().includes(q)),
           )

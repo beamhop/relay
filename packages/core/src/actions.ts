@@ -8,7 +8,7 @@
  * (`preview`) and is undoable when `undo` is provided (§6.3).
  */
 import type { z } from 'zod';
-import type { Permission, Principal } from './auth.ts';
+import { type Permission, type Principal, can } from './auth.ts';
 import type { Ports, RelayId } from './ports.ts';
 
 export type ActionScope = 'node' | 'relay';
@@ -94,6 +94,23 @@ export class ActionRegistry {
   list(): ActionDef[] {
     return [...this.defs.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
+}
+
+/**
+ * Whether `principal` may run `def` with this relay context — the one rule shared by
+ * the admin API's action endpoints and the AI assistant's tools, so the assistant can
+ * never do more than the signed-in admin. `relayIds`: the relays on this node (for
+ * `anyRelay` actions, which relay-scoped admins may run on the node).
+ */
+export function mayRunAction(
+  def: Pick<ActionDef, 'scope' | 'permission' | 'readOnly' | 'anyRelay'>,
+  principal: Principal,
+  relayId: RelayId | null,
+  relayIds: readonly RelayId[],
+): boolean {
+  if (can(principal, def.permission, relayId)) return true;
+  if (relayId !== null || def.scope !== 'node' || !def.anyRelay || !def.readOnly) return false;
+  return relayIds.some((r) => can(principal, def.permission, r));
 }
 
 export function defineAction<I extends z.ZodType, O>(def: ActionDef<I, O>): ActionDef<I, O> {
