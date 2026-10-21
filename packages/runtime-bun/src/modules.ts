@@ -35,11 +35,10 @@ export const DEFAULT_MODULE_PACKAGES: ModulePackage[] = [
   { name: '@beamhop/public-web', load: () => import('@beamhop/public-web') },
   { name: '@beamhop/media', load: () => import('@beamhop/media') },
   { name: '@beamhop/ai', load: () => import('@beamhop/ai'), when: (c) => c.ai.enabled },
-  {
-    name: '@beamhop/plugins',
-    load: () => import('@beamhop/plugins'),
-    when: (c) => c.plugins.some((p) => p.enabled),
-  },
+  // Plugin host + webhooks. Always loaded so admins can browse/install plugins;
+  // with no enabled plugins and no webhooks it adds nothing to the hot path.
+  // `--safe` disables every plugin via config, so the host loads none.
+  { name: '@beamhop/plugins/bun', load: () => import('@beamhop/plugins/bun') },
   {
     name: '@beamhop/enterprise-identity',
     load: () => import('@beamhop/enterprise-identity'),
