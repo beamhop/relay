@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from 'bun:test';
-import { type AppEvents, type Kernel, type RelayId, verifyEvent } from '@beamhop/core';
+import {
+  type AppEvents,
+  type Kernel,
+  type RelayId,
+  getPublicKey,
+  verifyEvent,
+} from '@beamhop/core';
 import { makeKey } from '@beamhop/testkit';
 import {
   getConversationKey,
@@ -245,7 +251,24 @@ describe('module wiring', () => {
     expect(again.output).toMatchObject({ wrapped: [], alreadyWrapped: 2 });
   });
 
-  test('relay group keys are left alone by default', async () => {
+  test('relay group keys are wrapped by default and the relay still signs with them', async () => {
+    const { MemoryDocStore } = await import('@beamhop/testkit');
+    const { GROUPS_SERVICE } = await import('@beamhop/relay');
+    const docs = new MemoryDocStore();
+    const sk = makeKey().sk;
+    const pubkey = getPublicKey(sk);
+    await docs.put(RELAY_GROUP_KEYS_COLLECTION, 'main', { secretKey: sk, pubkey, createdAt: 1 });
+    const { kernel } = await setup({ ports: { docs }, withRelay: true });
+    const stored = await docs.get<Record<string, unknown>>(RELAY_GROUP_KEYS_COLLECTION, 'main');
+    expect(stored).toMatchObject({ pubkey, createdAt: 1, provider: 'keyvault' });
+    expect(stored?.secretKey).toBeUndefined();
+    const groups = kernel.use<{
+      relayKey(r: string): Promise<{ pubkey: string; secretKey: string }>;
+    }>(GROUPS_SERVICE)!;
+    expect(await groups.relayKey('main')).toEqual({ pubkey, secretKey: sk });
+  });
+
+  test('relay group key wrapping can be turned off', async () => {
     const { MemoryDocStore } = await import('@beamhop/testkit');
     const docs = new MemoryDocStore();
     await docs.put(RELAY_GROUP_KEYS_COLLECTION, 'main', {
@@ -253,7 +276,7 @@ describe('module wiring', () => {
       pubkey: 'p',
       createdAt: 1,
     });
-    await setup({ ports: { docs } });
+    await setup({ ports: { docs }, keyvault: { migrate: { relayGroupKeys: false } } });
     expect(await docs.get(RELAY_GROUP_KEYS_COLLECTION, 'main')).toMatchObject({ secretKey: 'ab' });
   });
 

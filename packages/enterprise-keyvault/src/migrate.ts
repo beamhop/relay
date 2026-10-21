@@ -6,8 +6,8 @@
  * - `alerts.keys` / `nostr`  — `{ sk }` → `{ wrapped, provider: 'keyvault' }`
  *   (the alerts module already reads this shape through `ports.keyWrapper`).
  * - `relay.groups.key` / `<relayId>` — `{ secretKey, pubkey, createdAt }` →
- *   `{ pubkey, createdAt, wrapped, provider: 'keyvault' }`. Opt-in
- *   (`migrate.relayGroupKeys`): the relay must read the wrapped shape first.
+ *   `{ pubkey, createdAt, wrapped, provider: 'keyvault' }` (on by default,
+ *   `migrate.relayGroupKeys`; the relay unwraps it through `ports.keyWrapper`).
  * A record wrapped by a different, earlier wrapper is re-wrapped too when that
  * wrapper is still available (`fallback`).
  */

@@ -143,6 +143,9 @@ export function relayUrlMatches(relay: RelayConfig, url: string): boolean {
 const noop = () => {};
 /** Key in `Connection.state` marking a connection the engine has torn down. */
 const CLOSED_KEY = 'relay.closed';
+
+/** PubSub channel (enterprise identity): `{ pubkey, reason }` → drop that key's sockets everywhere. */
+export const REVOKED_CHANNEL = 'enterprise.revoked';
 /** Key in `Connection.state` holding the hibernation-safe connection state. */
 export const CONN_STATE_KEY = 'relay';
 type Detached = { detached?: Promise<void> };
@@ -182,6 +185,7 @@ export class RelayEngine implements ConnectionHandler {
   private relays = new Map<RelayId, RelayRuntime>();
   private cfg: RelayModuleConfig;
   private offConfig: () => void;
+  private offRevoked: () => void;
   private extensions: RelayExtension[] = [giftWrapExtension];
 
   constructor(private kernel: Kernel) {
@@ -190,6 +194,30 @@ export class RelayEngine implements ConnectionHandler {
     this.offConfig = kernel.onConfigChange((next) => {
       this.cfg = RelayModuleConfigSchema.parse(next.modules[RELAY_MODULE_ID] ?? {});
     });
+    // Cluster-wide revocation (enterprise offboarding): every node drops the person's sockets.
+    this.offRevoked = kernel.ports.pubsub.subscribe(REVOKED_CHANNEL, (msg) => {
+      const m = msg as { pubkey?: unknown; reason?: unknown } | null;
+      if (typeof m?.pubkey !== 'string' || !/^[0-9a-f]{64}$/.test(m.pubkey)) return;
+      this.disconnectPubkey(m.pubkey, typeof m.reason === 'string' ? m.reason : undefined);
+    });
+  }
+
+  /**
+   * Close every live connection on this node authenticated (NIP-42) as `pubkey`.
+   * Returns how many were closed. Other nodes do the same when a message
+   * arrives on the `enterprise.revoked` PubSub channel.
+   */
+  disconnectPubkey(pubkey: string, reason?: string): number {
+    let n = 0;
+    for (const st of [...this.conns.values()]) {
+      if (st.closed || !st.conn.authed.has(pubkey)) continue;
+      this.send(st, ['NOTICE', `restricted: ${reason ? reason.slice(0, 200) : 'access revoked'}`]);
+      this.closeConn(st, 1008, 'restricted: access revoked');
+      n++;
+    }
+    if (n > 0)
+      this.kernel.ports.logger.log('info', 'connections closed for revoked key', { count: n });
+    return n;
   }
 
   config(): RelayModuleConfig {
@@ -219,6 +247,7 @@ export class RelayEngine implements ConnectionHandler {
 
   stop(): void {
     this.offConfig();
+    this.offRevoked();
     for (const rt of this.relays.values()) rt.unsubscribe();
     this.relays.clear();
   }
