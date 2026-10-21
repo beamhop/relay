@@ -9,7 +9,11 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "bun test",
-    "check": "bun run typecheck && bun run lint && bun test"
+    "check": "bun run typecheck && bun run lint && bun test",
+    "ci:spdx": "bun scripts/ci/spdx-check.ts",
+    "ci:dco": "bun scripts/ci/dco-check.ts main..HEAD",
+    "ci:vanilla": "cd packages/pwa && bun run build && cd ../.. && bun scripts/ci/vanilla-check.ts",
+    "ci:cf-bundle": "bun scripts/ci/cf-bundle.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
