@@ -68,6 +68,26 @@
 
   const explainFor = (k: GoalKey) => current.filter((l) => l.goal === k);
 
+  /** "3 people would be over their new limit": the server's what-if for storage and media goals. */
+  let impact = $state<{ nearQuota: number; overQuota: number } | null>(null);
+  $effect(() => {
+    const g = goals;
+    const s = saved;
+    if (!g || !s || !app.hasAction('policy.explain-limits')) return;
+    if (g.storage === s.storage && g.media === s.media) {
+      impact = null;
+      return;
+    }
+    const what = { storage: g.storage, media: g.media };
+    const t = setTimeout(async () => {
+      const r = await query<{ quotaImpact?: { nearQuota: number; overQuota: number } }>('policy.explain-limits', {
+        goals: what,
+      });
+      impact = r?.quotaImpact ?? null;
+    }, 250);
+    return () => clearTimeout(t);
+  });
+
   async function save() {
     if (!goals) return;
     await configFlow.propose(
@@ -141,6 +161,18 @@
               </li>
             {/each}
           </ul>
+        {/if}
+        {#if dirty && impact && (impact.overQuota > 0 || impact.nearQuota > 0)}
+          <div class="mt-3 rounded-lg border border-warning/40 bg-warning/10 p-2 text-sm" data-testid="quota-impact">
+            {#if impact.overQuota > 0}
+              <p>{impact.overQuota === 1 ? m.goals_quota_over_one() : m.goals_quota_over({ count: impact.overQuota })}</p>
+            {/if}
+            {#if impact.nearQuota > 0}
+              <p class="text-xs text-muted-foreground">
+                {impact.nearQuota === 1 ? m.goals_quota_near_one() : m.goals_quota_near({ count: impact.nearQuota })}
+              </p>
+            {/if}
+          </div>
         {/if}
         <div class="mt-4 flex gap-2">
           <Button variant="secondary" class="flex-1" disabled={!dirty} onclick={reset}>{m.common_reset()}</Button>

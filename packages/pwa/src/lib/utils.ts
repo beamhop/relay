@@ -21,7 +21,7 @@ export function formatBytes(n: number | undefined | null): string {
     v /= 1024;
     i++;
   }
-  return `${n < 0 ? '-' : ''}${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+  return `${n < 0 ? '-' : ''}${v >= 10 || i === 0 ? Math.round(v) : String(Number(v.toFixed(1)))} ${units[i]}`;
 }
 
 /** "2h ago" style relative time for Unix seconds or ms. */

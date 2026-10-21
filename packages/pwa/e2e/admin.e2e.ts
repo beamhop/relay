@@ -12,9 +12,14 @@ test.describe('onboarding', () => {
     await page.getByTestId('signin-extension').click();
 
     await expect(page.getByTestId('onboarding')).toHaveAttribute('data-step', 'persona');
-    // Company / Organization shows only a placeholder step in this version.
+    // Company / Organization: company sign-in can be turned on right in the wizard.
     await page.getByTestId('persona-organization').click();
-    await expect(page.getByTestId('org-placeholder')).toContainText('available soon');
+    await expect(page.getByTestId('org-intro')).toContainText('work account');
+    await page.getByTestId('company-enable').click();
+    await page.getByTestId('action-sheet').getByTestId('action-confirm').click();
+    await expect(page.getByTestId('provider-google')).toBeVisible();
+    await page.getByTestId('provider-microsoft').click();
+    await expect(page.getByTestId('redirect-uri')).toContainText('/sso/entra/callback');
     await page.getByRole('button', { name: 'Back' }).click();
     await page.getByTestId('persona-wot-community').click();
 

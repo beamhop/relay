@@ -64,6 +64,17 @@
   }
 
   const head = $derived(items?.[0]?.revision);
+
+  /** The latest undoable change, still reachable after its toast went away. */
+  const lastUndo = $derived(
+    toasts.lastUndo && (!toasts.lastUndo.undoExpiresAt || toasts.lastUndo.undoExpiresAt > Date.now() / 1000)
+      ? toasts.lastUndo
+      : null,
+  );
+
+  async function undoLast() {
+    if (await toasts.undo(lastUndo?.id)) await load();
+  }
   const sourceLabel = (s: RevisionInfo['source']) =>
     ({
       initial: m.history_src_initial(),
@@ -80,6 +91,14 @@
 <a href={to('/settings')} class="text-sm text-muted-foreground">← {m.nav_settings()}</a>
 <h1 class="mt-2 text-xl font-semibold tracking-tight">{m.history_title()}</h1>
 <p class="mt-1 text-sm text-muted-foreground">{m.history_desc()}</p>
+
+{#if lastUndo}
+  <div class="mt-4 flex items-center gap-3 rounded-xl border bg-card p-3 text-sm" data-testid="history-undo">
+    <RotateCcw class="size-4 shrink-0 text-primary" />
+    <span class="min-w-0 flex-1">{m.history_undo_last({ what: lastUndo.message })}</span>
+    <Button size="sm" variant="secondary" onclick={undoLast} data-testid="history-undo-button">{m.common_undo()}</Button>
+  </div>
+{/if}
 
 {#if items === null}
   <div class="mt-6 space-y-3">{#each Array(4) as _, i (i)}<Skeleton class="h-14 w-full" />{/each}</div>

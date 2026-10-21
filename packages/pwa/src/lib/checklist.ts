@@ -30,11 +30,17 @@ export interface ChecklistInput {
   teamSize: number;
 }
 
+export type ChecklistState = 'done' | 'todo' | 'in-progress' | 'failed';
+
 export interface ChecklistItem {
   id: string;
   /** Server-provided title (experience module); otherwise the app's own label for `id`. */
   title?: string;
   done: boolean;
+  /** Finer state (server checklist): working on it, or the last attempt failed. */
+  state: ChecklistState;
+  /** One plain sentence about the state ("Waiting for the first backup to finish"). */
+  detail?: string;
   href: string;
   /** The server named a screen this app does not have: `href` is the nearest tab. */
   fallback?: boolean;
@@ -49,6 +55,10 @@ export interface ServerChecklist {
     title: string;
     done: boolean;
     available: boolean;
+    state?: ChecklistState;
+    detail?: string;
+    /** Older servers: extra state text. */
+    status?: string;
     link: { screen: string; actionId?: string; input?: unknown };
   }>;
   hidden: boolean;
@@ -64,12 +74,21 @@ export function fromServer(c: ServerChecklist, modules: readonly string[] = []):
     .filter((i) => i.available)
     .map((i) => {
       const screen = resolveScreen(i.link.screen || '/settings', modules);
+      const state: ChecklistState =
+        i.state && ['done', 'todo', 'in-progress', 'failed'].includes(i.state)
+          ? i.state
+          : i.done
+            ? 'done'
+            : 'todo';
       const item: ChecklistItem = {
         id: i.id,
         title: i.title,
-        done: i.done,
+        done: state === 'done' || i.done,
+        state: i.done ? 'done' : state,
         href: screen.href,
       };
+      const detail = i.detail ?? i.status;
+      if (detail) item.detail = detail;
       if (screen.fallback) item.fallback = true;
       if (i.link.actionId)
         item.action = {
@@ -81,12 +100,18 @@ export function fromServer(c: ServerChecklist, modules: readonly string[] = []):
 }
 
 export function checklist(s: ChecklistInput): ChecklistItem[] {
+  const item = (id: string, done: boolean, href: string): ChecklistItem => ({
+    id,
+    done,
+    state: done ? 'done' : 'todo',
+    href,
+  });
   return [
-    { id: 'backups', done: s.backupsEnabled, href: '/settings/backups' },
-    { id: 'alerts', done: s.alertChannels > 0 || s.pushEnabled, href: '/settings/alerts' },
-    { id: 'recovery', done: s.recoverySaved, href: '/settings/security' },
-    { id: 'landing', done: s.landingCustomized, href: '/settings/profile' },
-    { id: 'moderator', done: s.teamSize > 1, href: '/people?tab=team' },
+    item('backups', s.backupsEnabled, '/settings/backups'),
+    item('alerts', s.alertChannels > 0 || s.pushEnabled, '/settings/alerts'),
+    item('recovery', s.recoverySaved, '/settings/security'),
+    item('landing', s.landingCustomized, '/settings/profile'),
+    item('moderator', s.teamSize > 1, '/people?tab=team'),
   ];
 }
 

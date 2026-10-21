@@ -49,7 +49,9 @@
   {#snippet footer()}
     <div class="flex gap-2">
       <Button variant="secondary" class="flex-1" onclick={() => configFlow.cancel()}>{m.common_cancel()}</Button>
-      <Button class="flex-1" data-testid="config-apply" disabled={cur?.phase === 'applying'} onclick={() => configFlow.apply()}>
+      <Button class="flex-1" data-testid="config-apply" disabled={cur?.phase === 'applying'} onclick={async () => {
+        if (await configFlow.apply()) open = false;
+      }}>
         {cur?.phase === 'applying' ? m.common_working() : m.config_apply()}
       </Button>
     </div>

@@ -142,6 +142,7 @@
             id={`section-${id}`}
             fields={simpleFields}
             initial={data.initial}
+            doc={data.doc}
             onsubmit={(v) => save(simpleFields, v)}
           />
         </div>
@@ -158,7 +159,7 @@
   {#if data}
     <Sheet bind:open={advancedOpen} title={m.settings_advanced_title({ section: sectionTitle(id) })} description={m.settings_advanced_desc()}>
       {#key version}
-        <GeneratedForm id={`advanced-${id}`} fields={data.advanced} initial={data.initial} onsubmit={(v) => save(data!.advanced, v)} />
+        <GeneratedForm id={`advanced-${id}`} fields={data.advanced} initial={data.initial} doc={data.doc} onsubmit={(v) => save(data!.advanced, v)} />
       {/key}
       {#snippet footer()}
         <Button class="w-full" type="submit" form={`advanced-${id}`}>{m.common_save()}</Button>

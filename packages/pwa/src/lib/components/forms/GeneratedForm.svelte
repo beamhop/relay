@@ -8,7 +8,7 @@
   import { zod4, zod4Client } from 'sveltekit-superforms/adapters';
   import { Field, Control, Label, Description, FieldErrors } from 'formsnap';
   import type { Snippet } from 'svelte';
-  import type { FieldSpec } from '$lib/forms/json-schema';
+  import { getIn, isVisible, type FieldSpec } from '$lib/forms/json-schema';
   import { formKey, leaves, zodForFields } from '$lib/forms/zod';
   import { prefs } from '$lib/stores/prefs.svelte';
   import Switch from '../ui/switch.svelte';
@@ -22,9 +22,12 @@
     onsubmit,
     onchange,
     footer,
+    doc,
   }: {
     fields: FieldSpec[];
     initial?: Record<string, unknown>;
+    /** The document the field paths point into (for `x-showWhen` on settings outside this form). */
+    doc?: unknown;
     id?: string;
     onsubmit: (values: Record<string, unknown>) => void | Promise<void>;
     onchange?: (values: Record<string, unknown>) => void;
@@ -51,6 +54,16 @@
     onchange?.({ ...($data as Record<string, unknown>) });
   });
 
+  /** Fields whose `x-showWhen` condition holds (irrelevant ones are hidden). */
+  const shown = $derived.by(() => {
+    const values = $data as Record<string, unknown>;
+    const lookup = (path: string[]) => {
+      const f = flat.find((x) => x.path.join('.') === path.join('.'));
+      return f ? values[formKey(f)] : getIn(doc, path);
+    };
+    return flat.filter((f) => isVisible(f, flat, lookup));
+  });
+
   function listText(v: unknown): string {
     return Array.isArray(v) ? v.join(', ') : '';
   }
@@ -67,7 +80,7 @@
 </script>
 
 <form method="POST" use:enhance {id} class="space-y-1" novalidate>
-  {#each flat as f (formKey(f))}
+  {#each shown as f (formKey(f))}
     {@const key = formKey(f)}
     <Field {form} name={key as never}>
       <div class="py-3" data-setting-field={f.path.join('.')}>
@@ -80,7 +93,7 @@
                     <Label class="text-sm font-medium">{f.label}</Label>
                     <InfoButton field={f} />
                   </div>
-                  {#if prefs.lens}<p class="font-mono text-[11px] text-muted-foreground" data-lens>{f.technical}</p>{/if}
+                  {#if prefs.lens}<p class="font-mono text-[11px] text-muted-foreground" data-lens>{f.technical}{f.technicalNote ? ` · ${f.technicalNote}` : ''}</p>{/if}
                 </div>
                 <Switch
                   {...props}
@@ -103,7 +116,7 @@
                 >
                   {#if !f.required}<option value={undefined}>{m.form_default_option()}</option>{/if}
                   {#each f.options ?? [] as o (o.value)}
-                    <option value={o.value}>{o.label}{prefs.lens ? ` (${o.value})` : ''}</option>
+                    <option value={o.value}>{o.label}{prefs.lens && o.label !== o.value ? ` (${o.value})` : ''}</option>
                   {/each}
                 </select>
               {:else if f.kind === 'integer' || f.kind === 'number'}
@@ -118,7 +131,7 @@
                   class="h-10 w-full rounded-lg border bg-background px-3 text-sm"
                   value={($data as Record<string, unknown>)[key] ?? ''}
                   oninput={(e) => setNumber(f, e.currentTarget.value)}
-                  placeholder={f.default !== undefined ? String(f.default) : ''}
+                  placeholder={f.example ?? (f.default !== undefined ? String(f.default) : '')}
                 />
               {:else if f.kind === 'textarea'}
                 <textarea
@@ -160,10 +173,10 @@
                   autocomplete="off"
                   class="h-10 w-full rounded-lg border bg-background px-3 text-sm"
                   bind:value={($data as Record<string, unknown>)[key]}
-                  placeholder={f.default !== undefined ? String(f.default) : ''}
+                  placeholder={f.example ?? (f.default !== undefined ? String(f.default) : '')}
                 />
               {/if}
-              {#if prefs.lens}<p class="mt-1 font-mono text-[11px] text-muted-foreground" data-lens>{f.technical}</p>{/if}
+              {#if prefs.lens}<p class="mt-1 font-mono text-[11px] text-muted-foreground" data-lens>{f.technical}{f.technicalNote ? ` · ${f.technicalNote}` : ''}</p>{/if}
             {/if}
           {/snippet}
         </Control>

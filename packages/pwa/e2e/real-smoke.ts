@@ -64,6 +64,9 @@ if (claimCode) {
     '/settings/access',
     '/settings/goals',
     '/settings/history',
+    '/settings/plugins',
+    '/settings/security',
+    '/settings/company',
   ]) {
     await page.goto(`${base}/admin${path}`);
     await page.waitForLoadState('networkidle').catch(() => {});

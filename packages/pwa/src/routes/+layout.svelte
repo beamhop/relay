@@ -146,7 +146,7 @@
 {:else}
   <div class="min-h-dvh md:grid md:grid-cols-[232px_1fr]">
     <aside class="sticky top-0 hidden h-dvh flex-col gap-4 border-r p-4 md:flex">
-      <a href={to('/')} class="flex items-center gap-2 px-2 pt-1 text-sm font-semibold">
+      <a href={to('/')} class="flex items-center gap-2 rounded-lg px-2 pt-1 text-sm font-semibold hover:opacity-80" aria-label={m.brand_home()} data-testid="brand-home">
         <img src={to('/favicon.svg')} alt="" class="size-6" />
         {m.app_name()}
       </a>
@@ -192,8 +192,10 @@
     <div class="min-w-0">
       <header class="sticky top-0 z-30 flex items-center gap-2 border-b bg-background/85 px-4 pt-safe backdrop-blur-xl md:px-8">
         <div class="flex h-14 flex-1 items-center gap-2">
-          <img src={to('/favicon.svg')} alt="" class="size-6 md:hidden" />
-          <span class="truncate text-sm font-semibold md:hidden">{app.relay?.name ?? m.app_name()}</span>
+          <a href={to('/')} class="flex min-w-0 items-center gap-2 md:hidden" aria-label={m.brand_home()} data-testid="brand-home-mobile">
+            <img src={to('/favicon.svg')} alt="" class="size-6" />
+            <span class="truncate text-sm font-semibold">{app.relay?.name ?? m.app_name()}</span>
+          </a>
           <RelaySwitcher />
         </div>
         <button

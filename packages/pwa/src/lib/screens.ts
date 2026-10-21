@@ -36,6 +36,8 @@ const ALIASES: Record<string, string> = {
   '/settings/revisions': '/settings/history',
   '/settings/time-machine': '/settings/history',
   '/settings/recovery': '/settings/security',
+  '/settings/sso': '/settings/company',
+  '/settings/identity': '/settings/company',
 };
 
 /**
@@ -58,6 +60,7 @@ export const SETTINGS_SECTIONS = [
 const FIXED = new Set([
   '/help',
   '/settings/goals',
+  '/settings/company',
   '/settings/history',
   '/settings/plugins',
   '/settings/security',

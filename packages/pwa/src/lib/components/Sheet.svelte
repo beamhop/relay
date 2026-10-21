@@ -8,6 +8,7 @@
   import X from '@lucide/svelte/icons/x';
   import { swipe } from '$lib/gestures/swipe';
   import { isDesktop } from '$lib/utils';
+  import { overlays } from '$lib/stores/overlays.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
   let {
@@ -46,6 +47,10 @@
       close();
     }
   }
+
+  $effect(() => {
+    if (open) return overlays.open();
+  });
 
   $effect(() => {
     if (open && panel) {

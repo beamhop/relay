@@ -2,7 +2,8 @@
   /**
    * 60-second wizard (§7): claim → sign in → persona → domain + TLS → done
    * (relay URL, Blossom URL, QR, share, phone alerts) → save recovery codes.
-   * "Company / Organization" only shows a placeholder step in this version.
+   * "Company / Organization" adds a company sign-in step (turn it on, connect
+   * Google / Microsoft / another provider, map groups); it can be finished later.
    */
   import { onMount } from 'svelte';
   import Check from '@lucide/svelte/icons/check';
@@ -20,6 +21,7 @@
   import { markRecoverySaved } from '$lib/checklist';
   import type { Persona, SelfCheck } from '$lib/api/types';
   import SignInMethods from './SignInMethods.svelte';
+  import CompanySignIn from '../company/CompanySignIn.svelte';
   import QrCode from '../QrCode.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
@@ -232,7 +234,9 @@
     <div class="flex flex-1 flex-col">
       <Building2 class="size-8 text-muted-foreground" />
       <h1 class="mt-4 text-2xl font-semibold tracking-tight">{m.wizard_org_title()}</h1>
-      <p class="mt-2 text-sm text-muted-foreground" data-testid="org-placeholder">{m.wizard_org_soon()}</p>
+      <p class="mt-2 text-sm text-muted-foreground" data-testid="org-intro">{m.wizard_org_body()}</p>
+      <div class="mt-4"><CompanySignIn compact /></div>
+      <p class="mt-3 text-xs text-muted-foreground">{m.wizard_org_later()}</p>
       <div class="mt-auto flex gap-2 pt-8">
         <Button variant="secondary" class="flex-1" onclick={() => go('persona')}>{m.common_back()}</Button>
         <Button class="flex-1" disabled={busy} onclick={() => applyPersona('organization')}>{m.common_continue()}</Button>

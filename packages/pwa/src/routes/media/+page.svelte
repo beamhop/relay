@@ -8,10 +8,12 @@
   import List from '@lucide/svelte/icons/list';
   import Check from '@lucide/svelte/icons/check';
   import { app } from '$lib/stores/app.svelte';
-  import { announce, asApiError, flow, runNow } from '$lib/stores/actions.svelte';
+  import { announce, asApiError, flow, query, runNow } from '$lib/stores/actions.svelte';
+  import { quotaOf } from '$lib/components/people/users';
+  import QuotaBar from '$lib/components/people/QuotaBar.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
-  import type { BlobItem, RelayConfig } from '$lib/api/types';
+  import type { BlobItem, RelayConfig, UsageSummary } from '$lib/api/types';
   import { ago, cn, formatBytes, short } from '$lib/utils';
   import { to } from '$lib/nav';
   import Segmented from '$lib/components/ui/Segmented.svelte';
@@ -30,6 +32,7 @@
   let selected = $state<Set<string>>(new Set());
   let view = $state<'grid' | 'list'>('grid');
   let relayCfg = $state<RelayConfig | null>(null);
+  let summary = $state<UsageSummary | null>(null);
 
   async function load(more = false) {
     try {
@@ -45,6 +48,7 @@
       blobs ??= [];
     }
     relayCfg = (await app.api.relayConfig().catch(() => null))?.relay ?? relayCfg;
+    if (!more) summary = await query<UsageSummary>('media.usage-summary');
   }
   onMount(() => load());
 
@@ -130,6 +134,56 @@
     {#if blobs === null}
       <div class="grid grid-cols-3 gap-2 md:grid-cols-6">{#each Array(9) as _, i (i)}<Skeleton class="aspect-square" />{/each}</div>
     {:else if tab === 'usage'}
+      {#if summary}
+        <div class="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="usage-summary">
+          <div class="rounded-xl border p-3">
+            <p class="text-xs text-muted-foreground">{m.media_total()}</p>
+            <p class="text-lg font-semibold" data-testid="usage-total">{formatBytes(summary.totalUsedBytes)}</p>
+          </div>
+          <div class="rounded-xl border p-3">
+            <p class="text-xs text-muted-foreground">{m.media_people()}</p>
+            <p class="text-lg font-semibold">{summary.people}</p>
+          </div>
+          <div class="rounded-xl border p-3">
+            <p class="text-xs text-muted-foreground">{m.media_near_quota()}</p>
+            <p class={cn('text-lg font-semibold', summary.nearQuota > 0 && 'text-warning')} data-testid="usage-near">{summary.nearQuota}</p>
+          </div>
+          <div class="rounded-xl border p-3">
+            <p class="text-xs text-muted-foreground">{m.media_over_quota()}</p>
+            <p class={cn('text-lg font-semibold', summary.overQuota > 0 && 'text-destructive')} data-testid="usage-over">{summary.overQuota}</p>
+          </div>
+        </div>
+        <a href={to('/settings/media')} class="mb-4 block text-right text-xs text-primary">
+          {m.media_default_quota()}: {quota !== undefined ? formatBytes(quota) : m.media_quota_tier()}
+        </a>
+        <h2 class="mb-2 text-sm font-medium">{m.media_largest()}</h2>
+        <ul class="divide-y rounded-xl border" data-testid="usage-largest">
+          {#each summary.largest as u (u.pubkey)}
+            {@const q = quotaOf(u)}
+            <li class="flex items-center gap-3 p-3">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate font-mono text-xs">{short(u.pubkey, 8)}</span>
+                  {#if !q}<span class="text-sm tabular-nums">{formatBytes(u.usedBytes)}</span>{/if}
+                </div>
+                {#if q}<QuotaBar {q} compact />{/if}
+              </div>
+              {#if app.hasAction('media.set-quota') && app.can('media.write')}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onclick={() => {
+                    const def = app.action('media.set-quota');
+                    if (def) void flow.start(def, { pubkey: u.pubkey, quotaBytes: null }, { form: true });
+                  }}>{m.media_set_quota()}</Button
+                >
+              {/if}
+            </li>
+          {:else}
+            <li class="p-6 text-center text-sm text-muted-foreground">{m.media_empty()}</li>
+          {/each}
+        </ul>
+      {:else}
       <div class="mb-4 grid grid-cols-2 gap-3">
         <div class="rounded-xl border p-3">
           <p class="text-xs text-muted-foreground">{m.media_total()}</p>
@@ -161,6 +215,7 @@
           <li class="p-6 text-center text-sm text-muted-foreground">{m.media_empty()}</li>
         {/each}
       </ul>
+      {/if}
     {:else if files.length === 0}
       <div class="flex flex-col items-center gap-2 rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
         {#if tab === 'quarantine'}<ShieldAlert class="size-6" />{m.media_quarantine_empty()}{:else}<FileIcon class="size-6" />{m.media_empty()}{/if}

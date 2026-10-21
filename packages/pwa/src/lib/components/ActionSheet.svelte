@@ -9,7 +9,11 @@
   import DiffList from './DiffList.svelte';
   import Button from './ui/button.svelte';
   import GeneratedForm from './forms/LazyForm.svelte';
+  import type { TestRelayReport } from '$lib/api/types';
   import { m } from '$lib/paraglide/messages.js';
+
+  /** Read-only actions whose result has its own friendly view (raw output only under the lens). */
+  const FRIENDLY = new Set(['experience.test-relay']);
 
   let open = $state(false);
   $effect(() => {
@@ -66,7 +70,7 @@
       {/if}
     {:else if cur.phase === 'done' && cur.result}
       {@const out = (cur.result.output ?? {}) as { code?: string; codes?: string[]; token?: string }}
-      <p class="mb-3 text-sm">{cur.result.summary}</p>
+      {#if !FRIENDLY.has(cur.action.id)}<p class="mb-3 text-sm">{cur.result.summary}</p>{/if}
       {#if out.code || out.token || out.codes}
         <p class="mb-2 text-xs text-warning">{m.action_shown_once()}</p>
         <div class="mb-3 rounded-xl border bg-muted/40 p-4 font-mono text-sm break-all select-all" data-testid="action-secret">
@@ -78,7 +82,12 @@
           onclick={() => navigator.clipboard?.writeText(out.codes ? out.codes.join('\n') : (out.code ?? out.token ?? ''))}
         >{m.common_copy()}</Button>
       {/if}
-      {#if prefs.lens || cur.action.readOnly}
+      {#if cur.action.id === 'experience.test-relay'}
+        {#await import('./TestRelayResult.svelte') then { default: TestRelayResult }}
+          <TestRelayResult report={cur.result.output as TestRelayReport} onnavigate={() => flow.close()} />
+        {/await}
+      {/if}
+      {#if prefs.lens || (cur.action.readOnly && !FRIENDLY.has(cur.action.id))}
         <pre class="max-h-[50dvh] overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px]" data-testid="action-output">{JSON.stringify(cur.result.output, null, 2)}</pre>
       {/if}
     {/if}

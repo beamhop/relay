@@ -7,7 +7,8 @@
   import Sheet from '../Sheet.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
-  import type { UserRow } from './users';
+  import { quotaOf, type UserRow } from './users';
+  import QuotaBar from './QuotaBar.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
   let { user = $bindable(null), onchange }: { user: UserRow | null; onchange?: () => void } = $props();
@@ -65,13 +66,20 @@
       <dl class="grid grid-cols-2 gap-3 text-sm">
         <div class="rounded-lg bg-muted/50 p-3">
           <dt class="text-xs text-muted-foreground">{m.people_storage()}</dt>
-          <dd class="font-medium">{formatBytes(user.storageBytes ?? 0)}</dd>
+          <dd class="font-medium">{formatBytes(user.usedBytes ?? user.storageBytes ?? 0)}</dd>
         </div>
         <div class="rounded-lg bg-muted/50 p-3">
           <dt class="text-xs text-muted-foreground">{m.people_last_seen()}</dt>
           <dd class="font-medium">{user.lastSeen ? ago(user.lastSeen) : '—'}</dd>
         </div>
       </dl>
+      {#if quotaOf(user)}
+        {@const q = quotaOf(user)!}
+        <div class="rounded-lg bg-muted/50 p-3" data-testid="user-quota">
+          <p class="text-xs text-muted-foreground">{m.quota_title()}</p>
+          <QuotaBar {q} />
+        </div>
+      {/if}
       {#if prefs.lens}<p class="break-all font-mono text-[11px] text-muted-foreground" data-lens>{user.pubkey}</p>{/if}
 
       <div class="grid grid-cols-2 gap-2">

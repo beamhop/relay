@@ -18,9 +18,12 @@ export interface SignedEvent extends EventTemplate {
   sig: string;
 }
 
-/** Anything that can sign Nostr events: a NIP-07 extension, a NIP-46 bunker, a test key. */
+/**
+ * Anything that can sign Nostr events: a NIP-07 extension, a NIP-46 bunker,
+ * or a private key held in memory by this page (`local`).
+ */
 export interface NostrSigner {
-  via: 'nip07' | 'nip46';
+  via: 'nip07' | 'nip46' | 'local';
   getPublicKey(): Promise<string>;
   signEvent(t: EventTemplate): Promise<SignedEvent>;
   close?(): Promise<void>;

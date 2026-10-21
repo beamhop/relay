@@ -188,6 +188,42 @@ export class AppState {
     return res;
   }
 
+  /**
+   * Sign in (or claim) with a private key held in memory only. The NIP-98
+   * login is signed here; the key itself never leaves this page.
+   */
+  async signInWithKey(
+    sk: Uint8Array,
+    opts: { claimCode?: string; inviteCode?: string; recoveryCode?: string } = {},
+  ): Promise<SessionResponse> {
+    const { localKeySigner } = await import('../auth/local-key.ts');
+    const signer = await localKeySigner(sk);
+    const codes: Record<string, string> = {};
+    if (opts.claimCode) codes.claimCode = opts.claimCode;
+    if (opts.inviteCode) codes.inviteCode = opts.inviteCode;
+    if (opts.recoveryCode) codes.recoveryCode = opts.recoveryCode;
+    try {
+      const res = await this.api.signInNostr(signer, codes);
+      await this.signer?.close?.();
+      this.signer = signer;
+      if (res.recoveryCodes) this.recoveryCodes = res.recoveryCodes;
+      return res;
+    } catch (err) {
+      await signer.close?.();
+      throw err;
+    }
+  }
+
+  /** Re-fetch the action catalog and module screens (after a feature is turned on or off). */
+  async refreshCatalog(): Promise<void> {
+    const [catalog, ui] = await Promise.all([
+      this.api.actions().catch(() => this.catalog),
+      this.api.ui().catch(() => this.uiRoutes),
+    ]);
+    this.catalog = catalog;
+    this.uiRoutes = ui;
+  }
+
   /** Re-sign a NIP-98 login with the kept signer (bunker, or an extension that allows it). */
   async silentRefresh(): Promise<boolean> {
     try {

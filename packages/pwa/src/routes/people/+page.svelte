@@ -10,7 +10,8 @@
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
   import type { BlobItem, RelayConfig, RunResult } from '$lib/api/types';
-  import { mergeUsers, type UserRow } from '$lib/components/people/users';
+  import { mergeUsers, quotaOf, type UserRow } from '$lib/components/people/users';
+  import QuotaBar from '$lib/components/people/QuotaBar.svelte';
   import { ago, formatBytes, short } from '$lib/utils';
   import { to } from '$lib/nav';
   import Segmented from '$lib/components/ui/Segmented.svelte';
@@ -207,14 +208,16 @@
                     ]
                   : []}
               >
+                {@const q = quotaOf(u)}
                 <button class="flex w-full items-center gap-3 p-3 text-left" onclick={() => (selected = u)}>
                   <div class="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px]">{u.pubkey.slice(0, 2)}</div>
                   <div class="min-w-0 flex-1">
                     <p class="truncate text-sm font-medium">{u.name ?? short(u.pubkey, 8)}</p>
                     <p class="text-xs text-muted-foreground">
                       {u.tier ?? m.people_default_tier()} · {u.lastSeen ? ago(u.lastSeen) : m.people_not_seen()}
-                      {#if u.storageBytes}· {formatBytes(u.storageBytes)}{/if}
+                      {#if u.storageBytes && !q}· {formatBytes(u.storageBytes)}{/if}
                     </p>
+                    {#if q}<QuotaBar {q} compact />{/if}
                   </div>
                   {#if u.banned}<Badge tone="critical">{m.people_banned()}</Badge>{/if}
                   {#if u.admin}<Badge>{m.people_team_member()}</Badge>{/if}
