@@ -60,6 +60,7 @@ export const EVENT_PERMISSIONS: Record<AppEventName, Permission> = {
   'event.rejected': 'relay.read',
   'event.held': 'moderation.write',
   'event.deleted': 'relay.read',
+  'user.vanished': 'users.write',
   'req.served': 'insights.read',
   'auth.success': 'insights.read',
   'report.received': 'moderation.write',

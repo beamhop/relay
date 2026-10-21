@@ -1002,6 +1002,13 @@ export class RelayEngine implements ConnectionHandler {
       cause: 'nip62',
       count: Math.max(removed, ids.length),
     });
+    // Files and media of the person (blossom, media) follow the same request.
+    this.kernel.bus.emit('user.vanished', {
+      relayId: st.relayId,
+      pubkey: event.pubkey,
+      until,
+      scope: targets.includes('ALL_RELAYS') ? 'all' : 'relay',
+    });
     this.kernel.bus.emit('event.accepted', {
       relayId: st.relayId,
       event,
