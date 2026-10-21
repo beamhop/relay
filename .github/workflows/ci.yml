@@ -136,3 +136,49 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
       - run: bun scripts/ci/dco-check.ts ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
+  # Performance regression gate (GAPS D1, PLAN §3.5): a CI-sized load test against the real
+  # server (sockets, SQLite) plus signature, storage and fan-out benches, compared with the
+  # floors in scripts/bench/thresholds.json (`bun run bench:gate` locally). Runs on pushes to
+  # main, and on pull requests touching the hot path (relay, storage-sql, runtime-bun, core)
+  # or the gate itself. results.json is uploaded as the `bench-results` artifact.
+  bench:
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Hot-path change?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" \
+            | grep -qE '^(packages/(relay|storage-sql|runtime-bun|core)/|scripts/bench/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No relay/storage-sql/runtime-bun/core change: bench gate skipped."
+          fi
+      - if: steps.scope.outputs.run == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: bun-${{ runner.os }}-
+      - if: steps.scope.outputs.run == 'true'
+        run: bun install
+      - if: steps.scope.outputs.run == 'true'
+        run: ulimit -n 65536 && bun run bench:gate --out bench-results
+      - if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench-results/results.json
+          if-no-files-found: ignore
+          retention-days: 30
