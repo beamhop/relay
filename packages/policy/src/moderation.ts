@@ -92,13 +92,51 @@ export function parseReport(report: NostrEvent):
   return { eventId, pubkey, sha256, type: norm };
 }
 
+/** Structural view of lifecycle's legal-hold registry (`kernel.use('lifecycle.holds')`). */
+export interface LegalHoldsLike {
+  isHeld(
+    relayId: RelayId,
+    subject: {
+      pubkey?: string;
+      eventId?: string;
+      createdAt?: number;
+      kind?: number;
+      sha256?: string;
+    },
+  ): Promise<boolean>;
+  active?(): boolean;
+}
+
 export class ModerationQueue {
   constructor(
     private readonly ports: Ports,
     private readonly bus: EventBus,
     private readonly state: PolicyState,
     private readonly recycleDays: () => number,
+    /** Legal holds (§12.7): held recycle entries are never purged. */
+    private readonly holds: () => LegalHoldsLike | undefined = () => undefined,
   ) {}
+
+  /** Is a recycle entry frozen by a legal hold? (fails safe: errors count as held) */
+  private async isHeld(relayId: RelayId, entry: RecycleEntry): Promise<boolean> {
+    const holds = this.holds();
+    if (!holds || (typeof holds.active === 'function' && !holds.active())) return false;
+    try {
+      if (entry.type === 'event') {
+        const e = entry.event;
+        return await holds.isHeld(relayId, {
+          eventId: entry.id,
+          ...(e ? { pubkey: e.pubkey, createdAt: e.created_at, kind: e.kind } : {}),
+        });
+      }
+      if (await holds.isHeld(relayId, { sha256: entry.id })) return true;
+      for (const pubkey of entry.owners ?? [])
+        if (await holds.isHeld(relayId, { sha256: entry.id, pubkey })) return true;
+      return false;
+    } catch {
+      return true;
+    }
+  }
 
   async get(relayId: RelayId, id: string): Promise<QueueItem | null> {
     return this.ports.docs.get<QueueItem>(COLLECTIONS.queue, rkey(relayId, id));
@@ -319,6 +357,8 @@ export class ModerationQueue {
     for (const { key, value } of all) {
       if (value.purgeAt > now) continue;
       const relayId = key.slice(0, key.length - value.id.length - 1);
+      // Legal hold freezes deletion: keep the entry (re-checked on every pass).
+      if (await this.isHeld(relayId, value)) continue;
       if (value.type === 'event') {
         // Tombstone regular events so a re-broadcast of the exact event is refused after purge.
         // (Stores only tombstone ids they hold, so re-insert first; never touches replaceables.)

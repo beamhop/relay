@@ -42,6 +42,7 @@ import { type RelayModuleConfig, RelayModuleConfigSchema } from './config.ts';
 import { type Audience, type RelayExtension, allAudiences } from './extensions.ts';
 import { GIFT_WRAP_KINDS, giftWrapExtension } from './giftwrap.ts';
 import type { GroupsConfig } from './groups.ts';
+import { archiveHeld, deletionTargets, holdsOf, queryAll } from './holds.ts';
 import { type IndexedSub, SubscriptionIndex } from './subindex.ts';
 import { Negentropy, NegentropyStorageVector } from './vendor/negentropy.ts';
 
@@ -868,6 +869,12 @@ export class RelayEngine implements ConnectionHandler {
     }
     this.ok(st, event.id, true, '');
     if (event.kind === DELETION_KIND) {
+      // Legal hold: held targets are archived first, then deleted as asked.
+      const holds = holdsOf(this.kernel);
+      if (holds) {
+        const targets = await deletionTargets(this.kernel, st.relayId, event);
+        await archiveHeld(this.kernel, holds, st.relayId, targets, 'nip09');
+      }
       const ids = await store.applyDeletion(st.relayId, event);
       if (ids.length > 0)
         this.kernel.bus.emit('event.deleted', { relayId: st.relayId, ids, cause: 'nip09' });
@@ -938,6 +945,15 @@ export class RelayEngine implements ConnectionHandler {
       } catch (err) {
         this.fail(st, 'vanish', err);
       }
+    }
+    // Legal hold: archive held events (the user's own and wraps addressed to
+    // them) before they are erased; the request itself is still honoured.
+    const holds = holdsOf(this.kernel);
+    if (holds) {
+      const own = await queryAll(this.kernel, st.relayId, { authors: [event.pubkey], until });
+      await archiveHeld(this.kernel, holds, st.relayId, own, 'nip62');
+      const received = await queryAll(this.kernel, st.relayId, wraps);
+      await archiveHeld(this.kernel, holds, st.relayId, received, 'nip62', () => event.pubkey);
     }
     const removed =
       (await store.vanish(st.relayId, event.pubkey, until)) +

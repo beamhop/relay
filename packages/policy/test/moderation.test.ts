@@ -165,6 +165,33 @@ describe('moderation actions', () => {
     expect((r.result.output as { failed: unknown[] }).failed).toHaveLength(1);
   });
 
+  test('legal hold freezes recycle-bin purge until released', async () => {
+    let held = true;
+    const holdsModule = {
+      id: 'fake-holds',
+      register(k: import('@beamhop/core').Kernel) {
+        k.provide('lifecycle.holds', {
+          active: () => true,
+          isHeld: async (_r: string, s: { pubkey?: string }) => held && s.pubkey === author.pk,
+        });
+      },
+    };
+    const author = makeKey();
+    const { svc, act, ports } = await setup(GOALS, {}, {}, [holdsModule]);
+    const post = finalizeEvent(
+      { kind: 1, tags: [], content: 'x', created_at: ports.clock.now() },
+      author.sk,
+    );
+    await ports.events.save('main', post);
+    await act('moderation.remove', { eventIds: [post.id] });
+    ports.clock.advance(30 * 86400 + 1);
+    expect(await svc.queue.purge(ports.clock.now())).toBe(0);
+    expect(await svc.state.isRecycled('main', post.id)).toBe(true);
+    held = false;
+    expect(await svc.queue.purge(ports.clock.now())).toBe(1);
+    expect(await svc.state.isRecycled('main', post.id)).toBe(false);
+  });
+
   test('restore refuses events the author deleted (NIP-09)', async () => {
     const { act, ports } = await setup(GOALS);
     const k = makeKey();

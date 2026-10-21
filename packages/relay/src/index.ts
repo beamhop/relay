@@ -13,6 +13,11 @@ export * from './engine.ts';
 export * from './extensions.ts';
 export * from './giftwrap.ts';
 export * from './groups.ts';
+export {
+  HELD_ARCHIVE_COLLECTION,
+  type HeldArchiveEntry,
+  type LegalHoldsLike,
+} from './holds.ts';
 export { createGroupActions } from './groups-actions.ts';
 export * from './nip11.ts';
 export * from './pow.ts';

@@ -448,6 +448,39 @@ describe('dedupe across relays and GC', () => {
   });
 });
 
+describe('legal hold', () => {
+  test('held bytes survive owner delete and orphan GC until the hold is released', async () => {
+    const s = await setup();
+    const key = makeKey();
+    const sha = hashOf(PNG);
+    const orphan = enc('held orphan');
+    const orphanSha = hashOf(orphan);
+    const held = new Set([sha, orphanSha]);
+    s.kernel.provide('lifecycle.holds', {
+      active: () => true,
+      isHeld: async (_r: string, subj: { sha256?: string }) => held.has(subj.sha256 ?? ''),
+    });
+    await s.ports.blobs.put({ sha256: orphanSha, size: orphan.length, type: 'text/plain' }, orphan);
+    expect((await put(s, key, PNG)).status).toBe(200);
+    const del = await s.req(`/${sha}`, {
+      method: 'DELETE',
+      headers: { authorization: authHeader(key, 'delete', { x: [sha] }) },
+    });
+    expect(del.status).toBe(204);
+    // Ownership is gone (not listed / served for the owner), bytes are frozen.
+    expect(await s.ports.blobIndex.refCount(sha)).toBe(0);
+    expect(await s.ports.blobs.head(sha)).not.toBeNull();
+    await s.ports.scheduler.tick(BLOSSOM_GC_JOB);
+    expect(await s.ports.blobs.head(sha)).not.toBeNull();
+    expect(await s.ports.blobs.head(orphanSha)).not.toBeNull();
+
+    held.clear();
+    await s.ports.scheduler.tick(BLOSSOM_GC_JOB);
+    expect(await s.ports.blobs.head(sha)).toBeNull();
+    expect(await s.ports.blobs.head(orphanSha)).toBeNull();
+  });
+});
+
 describe('mirror (BUD-04)', () => {
   function remote(files: Record<string, { data: Uint8Array; type: string }>) {
     const app = new Hono();
