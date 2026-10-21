@@ -18,6 +18,7 @@
   import RoomTranscript from "@app/components/RoomTranscript.svelte"
   import PublicationToast from "@app/components/PublicationToast.svelte"
   import CallControlBar from "@app/components/CallControlBar.svelte"
+  import GroupRelayNotice from "@src/beamhop/components/GroupRelayNotice.svelte" // beamhop: §12.10
   import {user} from "@app/core/app"
   import {deletes, publisher, relays, rooms} from "@app/core/plugins"
   import {writer} from "@app/core/domain"
@@ -210,6 +211,11 @@
       onEdit={onEditEvent}
       bind:events
       bind:this={transcript} />
+
+    {#if h}
+      <!-- beamhop: per-group outbound relay notice -->
+      <GroupRelayNotice {h} />
+    {/if}
 
     <div class="room__compose flex items-center gap-1 px-2">
       <div class="room__compose-inner min-w-0 flex-1">

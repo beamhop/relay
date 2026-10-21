@@ -19,6 +19,7 @@
   import EventAdminDeleteConfirm from "@app/components/EventAdminDeleteConfirm.svelte"
   import EventDeleteConfirm from "@app/components/EventDeleteConfirm.svelte"
   import ThreadCreate from "@app/components/ThreadCreate.svelte"
+  import MessageMenuItems from "@src/beamhop/components/MessageMenuItems.svelte" // beamhop: swipe actions on desktop
   import {user} from "@app/core/app"
   import {roomPinLists} from "@app/core/plugins"
   import {deriveUserAdminDelete, deriveUserIsRoomAdmin} from "@app/features/rooms"
@@ -135,6 +136,8 @@
       </Button>
     </li>
   {/if}
+  <!-- beamhop: Hide / Remove person (same actions as the swipe row) -->
+  <MessageMenuItems {url} {event} {onClick} />
   {#if event.pubkey === $user.pubkey}
     <li>
       <Button onclick={showDelete} class="text-error">
