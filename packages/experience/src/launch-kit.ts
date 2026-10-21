@@ -24,17 +24,118 @@ export interface RelayUrls {
   nip11: string;
 }
 
-export function relayUrls(cfg: BeamhopConfig, relay: RelayConfig): RelayUrls {
-  const host = relay.hosts[0] ?? 'localhost';
-  const secure = cfg.node.tls.mode !== 'off';
-  const prefix = (relay.pathPrefix ?? '').replace(/\/+$/, '');
-  const http = `${secure ? 'https' : 'http'}://${host}${prefix}`;
+/** Where the relay's address came from (most specific first). */
+export type UrlSource = 'baseUrl' | 'learned' | 'host';
+
+/** Admin app route where a web address (domain) is set up. */
+export const DOMAINS_ROUTE = '/settings/domains';
+
+/** Plain summary when no usable address is known (wildcard hosts, no request seen yet). */
+export const NEEDS_DOMAIN_SUMMARY =
+  'No web address is set yet, so there is nothing to share or test. Add your domain first.';
+
+/** Returned instead of a launch kit / test report when the relay has no usable address. */
+export interface NeedsDomain {
+  ok: false;
+  needsDomain: true;
+  summary: string;
+  technical: string;
+  link: { screen: string };
+}
+
+export function needsDomain(relay: RelayConfig): NeedsDomain {
   return {
-    relay: `${secure ? 'wss' : 'ws'}://${host}${prefix}`,
+    ok: false,
+    needsDomain: true,
+    summary: NEEDS_DOMAIN_SUMMARY,
+    technical: `relay ${relay.id}: hosts = ${JSON.stringify(relay.hosts)} (wildcard only), no baseUrl given and no route.publicUrl seen yet`,
+    link: { screen: DOMAINS_ROUTE },
+  };
+}
+
+/** Duck-typed `kernel.use('blossom')`: the last `route.publicUrl` seen for a relay. */
+export interface LearnedUrlSource {
+  learnedPublicUrl?(relayId: string): string | null;
+}
+
+export interface ResolveUrlInput {
+  /** The origin the admin is using (e.g. `http://localhost:3334`). */
+  baseUrl?: string | undefined;
+  /** Last `route.publicUrl` the runtime resolved for this relay. */
+  learned?: string | null | undefined;
+}
+
+/** Normalise an http(s)/ws(s) URL to `http(s)://host[:port][/path]` without a trailing slash. */
+function httpBase(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  const proto =
+    u.protocol === 'https:' || u.protocol === 'wss:'
+      ? 'https'
+      : u.protocol === 'http:' || u.protocol === 'ws:'
+        ? 'http'
+        : null;
+  if (!proto || !u.host || u.hostname.includes('*')) return null;
+  return `${proto}://${u.host}${u.pathname.replace(/\/+$/, '')}`;
+}
+
+/**
+ * The relay's public http(s) base URL: explicit `baseUrl` (origin + the relay's path
+ * prefix) → last-seen `route.publicUrl` → first non-wildcard host (+ `node.tls`).
+ * Null when none is usable (e.g. `hosts: ['*']` and nothing seen yet).
+ */
+export function resolveRelayBase(
+  cfg: BeamhopConfig,
+  relay: RelayConfig,
+  input: ResolveUrlInput = {},
+): { base: string; source: UrlSource } | null {
+  const prefix = (relay.pathPrefix ?? '').replace(/\/+$/, '');
+  if (input.baseUrl) {
+    const b = httpBase(input.baseUrl);
+    if (b) return { base: `${new URL(b).origin}${prefix}`, source: 'baseUrl' };
+  }
+  if (input.learned) {
+    const b = httpBase(input.learned);
+    if (b) return { base: b, source: 'learned' };
+  }
+  const host = relay.hosts.find((h) => h && !h.includes('*'));
+  if (host) {
+    const secure = cfg.node.tls.mode !== 'off';
+    return { base: `${secure ? 'https' : 'http'}://${host}${prefix}`, source: 'host' };
+  }
+  return null;
+}
+
+/** All public addresses derived from an http(s) base URL (ws/wss follows the scheme). */
+export function urlsFromBase(relay: RelayConfig, base: string): RelayUrls {
+  const http = base.replace(/\/+$/, '');
+  return {
+    relay: http.replace(/^http/, 'ws'),
     blossom: relay.blossom.enabled ? http : null,
     landing: `${http}/`,
     nip11: http,
   };
+}
+
+/**
+ * Public addresses for a relay. Without a resolvable address this falls back to
+ * `localhost` (kept for callers that need a value); use {@link resolveRelayBase}
+ * to detect the "no address yet" case.
+ */
+export function relayUrls(
+  cfg: BeamhopConfig,
+  relay: RelayConfig,
+  input: ResolveUrlInput = {},
+): RelayUrls {
+  const r = resolveRelayBase(cfg, relay, input);
+  if (r) return urlsFromBase(relay, r.base);
+  const secure = cfg.node.tls.mode !== 'off';
+  const prefix = (relay.pathPrefix ?? '').replace(/\/+$/, '');
+  return urlsFromBase(relay, `${secure ? 'https' : 'http'}://localhost${prefix}`);
 }
 
 // ───────────────────────────── NIP-11 polish ─────────────────────────────
@@ -99,6 +200,10 @@ export function nip11Polish(relay: RelayConfig): PolishSuggestion[] {
 // ───────────────────────────── launch kit ─────────────────────────────
 
 export interface LaunchKit {
+  ok: true;
+  needsDomain: false;
+  /** Where the addresses came from. */
+  urlSource: UrlSource;
   urls: RelayUrls;
   qr: { landing: string; relay: string };
   /** Kind 1 draft. Unsigned and never published by Beamhop — the admin posts it from their own client. */
@@ -118,13 +223,21 @@ export function announcementText(relay: RelayConfig, urls: RelayUrls): string {
   return lines.filter(Boolean).join('\n');
 }
 
+/** Launch kit result when no address is known yet (polish tips still apply). */
+export interface LaunchKitNeedsDomain extends NeedsDomain {
+  polish: PolishSuggestion[];
+}
+
 export function buildLaunchKit(
   cfg: BeamhopConfig,
   relay: RelayConfig,
   now: number,
   pubkey?: string,
-): LaunchKit {
-  const urls = relayUrls(cfg, relay);
+  resolve: ResolveUrlInput = {},
+): LaunchKit | LaunchKitNeedsDomain {
+  const resolved = resolveRelayBase(cfg, relay, resolve);
+  if (!resolved) return { ...needsDomain(relay), polish: nip11Polish(relay) };
+  const urls = urlsFromBase(relay, resolved.base);
   const text = announcementText(relay, urls);
   const draft: UnsignedEvent = {
     kind: 1,
@@ -138,6 +251,9 @@ export function buildLaunchKit(
     ],
   };
   return {
+    ok: true,
+    needsDomain: false,
+    urlSource: resolved.source,
     urls,
     qr: {
       landing: qrSvg(urls.landing, { label: 'Landing page' }),
@@ -239,6 +355,9 @@ export interface TestStep {
 export interface TestRelayReport {
   relayId: string;
   ok: boolean;
+  needsDomain: false;
+  /** Where the tested addresses came from. */
+  urlSource: UrlSource;
   /** Plain summary line. */
   summary: string;
   urls: RelayUrls;
@@ -254,6 +373,15 @@ export interface TestRelayOptions {
   sha256Hex: (data: Uint8Array) => Promise<string>;
   /** Skip the Blossom upload/download round-trip. */
   skipUpload?: boolean;
+  /** How to find the relay's address (see {@link resolveRelayBase}). */
+  resolve?: ResolveUrlInput;
+}
+
+/** "Test my relay" result when no address is known yet: nothing was checked. */
+export interface TestRelayNeedsDomain extends NeedsDomain {
+  relayId: string;
+  steps: TestStep[];
+  at: number;
 }
 
 /** Reject prefixes that mean "the relay works, it just doesn't let strangers post". */
@@ -291,8 +419,10 @@ export async function testRelay(
   cfg: BeamhopConfig,
   relay: RelayConfig,
   opts: TestRelayOptions,
-): Promise<TestRelayReport> {
-  const urls = relayUrls(cfg, relay);
+): Promise<TestRelayReport | TestRelayNeedsDomain> {
+  const resolved = resolveRelayBase(cfg, relay, opts.resolve);
+  if (!resolved) return { ...needsDomain(relay), relayId: relay.id, steps: [], at: opts.now() };
+  const urls = urlsFromBase(relay, resolved.base);
   const steps: TestStep[] = [];
   const t = opts.timeoutMs;
   const step = async (
@@ -566,6 +696,8 @@ export async function testRelay(
   return {
     relayId: relay.id,
     ok,
+    needsDomain: false,
+    urlSource: resolved.source,
     summary: !ok
       ? `${failed.length} of ${steps.filter((x) => x.status !== 'skip').length} checks failed: ${failed.map((f) => f.title.toLowerCase()).join(', ')}.`
       : warned.length

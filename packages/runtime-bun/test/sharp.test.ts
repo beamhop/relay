@@ -2,13 +2,32 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { copySharp, sharpPackages } from '../scripts/build.ts';
+import {
+  binaryPath,
+  copySharp,
+  parseBuildArgs,
+  sharpPackages,
+  sharpPlatform,
+} from '../scripts/build.ts';
 import { sharpCandidates, sharpLoader } from '../src/index.ts';
 import { tempDir } from './helpers.ts';
 
 const host = `${process.platform}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
 
 describe('sharp next to the single binary', () => {
+  test('sharp is shipped by default; --no-sharp opts out', () => {
+    expect(parseBuildArgs(['--host']).withSharp).toBe(true);
+    expect(parseBuildArgs(['--host', '--with-sharp']).withSharp).toBe(true);
+    expect(parseBuildArgs(['--host', '--no-sharp']).withSharp).toBe(false);
+    const rel = parseBuildArgs(['--target', 'linux-x64,darwin-arm64', '--version', '1.2.3']);
+    expect(rel.targets).toEqual(['linux-x64', 'darwin-arm64']);
+    expect(rel.withSharp).toBe(true);
+    expect(binaryPath('/o', 'linux-x64', true)).toBe('/o/linux-x64/beamhop');
+    expect(binaryPath('/o', 'linux-x64', false)).toBe('/o/beamhop-linux-x64');
+    expect(sharpPlatform('windows-x64')).toBe('win32-x64');
+    expect(sharpPlatform('darwin-arm64')).toBe('darwin-arm64');
+  });
+
   test('candidates: BEAMHOP_SHARP_PATH, then node_modules beside the executable', () => {
     expect(sharpCandidates({}, '/usr/local/bin/bun')).toEqual([]);
     expect(sharpCandidates({}, '/opt/beamhop/beamhop')).toEqual([

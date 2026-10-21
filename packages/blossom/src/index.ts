@@ -59,3 +59,4 @@ export {
   type UploadLimits,
 } from './service.ts';
 export { BlossomError, isPrivateHost } from './util.ts';
+export { NEAR_QUOTA_RATIO, type UsageSummary, usageSummary } from './admin.ts';

@@ -137,13 +137,24 @@ f.elements.event.value=JSON.stringify(ev);f.dataset.signed='1';f.submit()}catch(
             max={Math.max(1, data.storage.quota)}
             value={Math.min(data.storage.used, data.storage.quota)}
             aria-labelledby="st-txt"
+            data-testid="storage-bar"
           />
-          <p id="st-txt" class="small">
-            {t('portal.storage.used', {
+          <p id="st-txt" class="small" data-testid="storage-text">
+            {t('portal.storage.left', {
               used: formatBytes(data.storage.used),
               quota: formatBytes(data.storage.quota),
+              left: formatBytes(Math.max(0, data.storage.quota - data.storage.used)),
             })}
           </p>
+          {data.storage.used > data.storage.quota ? (
+            <output class="note err small">
+              {t('portal.storage.over', {
+                over: formatBytes(data.storage.used - data.storage.quota),
+              })}
+            </output>
+          ) : data.storage.used === data.storage.quota && data.storage.quota > 0 ? (
+            <output class="note err small">{t('portal.storage.full')}</output>
+          ) : null}
         </section>
       ) : null}
 

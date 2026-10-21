@@ -9,7 +9,10 @@
  *   bun scripts/release.ts --version 0.2.0 --target linux-x64,linux-arm64 --notes-file NOTES.md
  *
  * Output (upload everything under v<version>/ plus latest.json as release assets):
- *   dist/release/v<version>/beamhop-<os>-<arch>[.exe]   binaries
+ *   dist/release/v<version>/beamhop-<os>-<arch>[.exe]   binaries (what `beamhop update` swaps in)
+ *   dist/release/v<version>/beamhop-<os>-<arch>.tar.gz    standard download: the binary plus
+ *                                                         node_modules/ with sharp (photo
+ *                                                         resizing), when sharp was available
  *   dist/release/v<version>/SHA256SUMS                    `sha256  filename` lines
  *   dist/release/v<version>/<binary>.minisig              when MINISIGN_KEY_FILE is set
  *   dist/release/latest.json                              { version, notes, assets:{<os-arch>:{url,sha256,signature?}} }
@@ -46,6 +49,37 @@ export const RELEASE_TARGETS = [
 
 export function assetName(target: string): string {
   return `beamhop-${target}${target.startsWith('windows-') ? '.exe' : ''}`;
+}
+
+/** The standard-download archive for a target (binary + sharp in node_modules/). */
+export function archiveName(target: string): string {
+  return `beamhop-${target}.tar.gz`;
+}
+
+/**
+ * The build script writes `<dir>/<target>/beamhop[.exe]` plus `node_modules/` (sharp).
+ * Pack that folder as `beamhop-<target>.tar.gz` (when it has node_modules), move the bare
+ * binary to `beamhop-<target>[.exe]`, and drop the folder.
+ */
+export function collectTargetDirs(dir: string, targets: readonly string[]): void {
+  for (const t of targets) {
+    const src = join(dir, t);
+    if (!existsSync(src)) continue;
+    const bin = ['beamhop', 'beamhop.exe'].find((n) => existsSync(join(src, n)));
+    if (!bin) continue;
+    // Source maps stay out of the archive (parked with the others by the caller).
+    for (const m of readdirSync(src).filter((n) => n.endsWith('.map')))
+      renameSync(join(src, m), join(dir, `${t}-${m}`));
+    if (existsSync(join(src, 'node_modules'))) {
+      const tar = Bun.spawnSync(
+        ['tar', '-czf', join(dir, archiveName(t)), '-C', src, bin, 'node_modules'],
+        { stderr: 'pipe' },
+      );
+      if (tar.exitCode !== 0) throw new Error(`tar failed for ${t}: ${tar.stderr.toString()}`);
+    }
+    renameSync(join(src, bin), join(dir, assetName(t)));
+    rmSync(src, { recursive: true, force: true });
+  }
 }
 
 export function sha256File(path: string): string {
@@ -120,6 +154,11 @@ export function finalizeDir(dir: string, targets: readonly string[], keyFile?: s
     const sha256 = sha256File(path);
     sums[file] = sha256;
     assets.push({ target, file, sha256, signature: signFile(path, keyFile) });
+    const archive = join(dir, archiveName(target));
+    if (existsSync(archive)) {
+      sums[archiveName(target)] = sha256File(archive);
+      signFile(archive, keyFile);
+    }
   }
   writeFileSync(join(dir, 'SHA256SUMS'), checksumsText(sums));
   if (keyFile) signFile(join(dir, 'SHA256SUMS'), keyFile);
@@ -153,6 +192,8 @@ export async function build(
   // Keep the release folder to uploadable files: drop the generated entry, park source maps
   // next to it (useful for crash reports, not for users).
   rmSync(join(outDir, '.gen'), { recursive: true, force: true });
+  // sharp ships by default: <outDir>/<target>/{beamhop,node_modules} → archive + bare binary.
+  collectTargetDirs(outDir, targets);
   const maps = join(outDir, '..', 'sourcemaps', basename(outDir));
   for (const f of readdirSync(outDir).filter((n) => n.endsWith('.map'))) {
     mkdirSync(maps, { recursive: true });

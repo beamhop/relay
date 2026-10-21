@@ -6,6 +6,7 @@
  *   bun scripts/build.ts                 # linux-x64, linux-arm64, darwin-arm64
  *   bun scripts/build.ts --host          # only the current platform
  *   bun scripts/build.ts --target linux-x64 --outdir dist
+ *   bun scripts/build.ts --host --no-sharp   # bare binary, no image processing
  *
  * If `packages/pwa/build` exists, every file in it is embedded and registered via a
  * generated asset manifest (served at /admin). Otherwise the PWA is skipped.
@@ -14,10 +15,12 @@
  * Cross-compiling downloads the target Bun runtime on first use.
  *
  * Image processing (sharp) is a native addon + libvips and cannot live inside
- * the single file. `--with-sharp` writes each target to `dist/<target>/beamhop`
- * and copies that platform's sharp, `@img/sharp-<target>`,
- * `@img/sharp-libvips-<target>` and their JS dependencies into
- * `dist/<target>/node_modules`; ship the directory as one archive. At runtime
+ * the single file. By default (sharp is part of the standard download) each target
+ * is written to `dist/<target>/beamhop` and that platform's sharp,
+ * `@img/sharp-<platform>`, `@img/sharp-libvips-<platform>` and their JS dependencies
+ * are copied into `dist/<target>/node_modules`; ship the directory as one archive.
+ * `--no-sharp` opts out and writes a bare `dist/beamhop-<target>` instead
+ * (`--with-sharp` is still accepted; it is the default). At runtime
  * the binary loads sharp from `node_modules` next to itself or from
  * `BEAMHOP_SHARP_PATH` (see src/sharp.ts); without it, media is stored as-is.
  * Cross-target sharp packages must be installed first, e.g.
@@ -189,9 +192,15 @@ async function compile(
   if (code !== 0) throw new Error(`bun build failed for ${target} (exit ${code})`);
 }
 
+/** sharp's platform name for a build target (`windows-x64` → `win32-x64`). */
+export function sharpPlatform(target: string): string {
+  return target.replace(/^windows-/, 'win32-');
+}
+
 /** sharp native packages for a target: `linux-x64` → `@img/sharp-linux-x64` + libvips. */
 function sharpNativeFor(target: string): Set<string> {
-  return new Set([`@img/sharp-${target}`, `@img/sharp-libvips-${target}`]);
+  const p = sharpPlatform(target);
+  return new Set([`@img/sharp-${p}`, `@img/sharp-libvips-${p}`]);
 }
 
 /**
@@ -247,21 +256,45 @@ export function copySharp(target: string, dest: string, fromDir = MEDIA_PKG): st
   return missing;
 }
 
-async function run(argv: string[]): Promise<void> {
-  let outDir = join(PKG, 'dist');
-  let targets: string[] = [...ALL_TARGETS];
-  let pwaDir = PWA_BUILD;
-  let teamDir = TEAM_BUILD;
-  let withSharp = false;
+export interface BuildArgs {
+  outDir: string;
+  targets: string[];
+  pwaDir: string;
+  teamDir: string;
+  /** Ship sharp next to each binary (default true; `--no-sharp` turns it off). */
+  withSharp: boolean;
+}
+
+export function parseBuildArgs(argv: string[]): BuildArgs {
+  const a: BuildArgs = {
+    outDir: join(PKG, 'dist'),
+    targets: [...ALL_TARGETS],
+    pwaDir: PWA_BUILD,
+    teamDir: TEAM_BUILD,
+    withSharp: true,
+  };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--with-sharp') withSharp = true;
-    else if (a === '--host') targets = [hostTarget()];
-    else if (a === '--target') targets = (argv[++i] ?? '').split(',').filter(Boolean);
-    else if (a === '--outdir') outDir = resolve(argv[++i] ?? outDir);
-    else if (a === '--pwa') pwaDir = resolve(argv[++i] ?? pwaDir);
-    else if (a === '--team') teamDir = resolve(argv[++i] ?? teamDir);
+    const x = argv[i];
+    if (x === '--with-sharp') a.withSharp = true;
+    else if (x === '--no-sharp') a.withSharp = false;
+    else if (x === '--host') a.targets = [hostTarget()];
+    else if (x === '--target') a.targets = (argv[++i] ?? '').split(',').filter(Boolean);
+    else if (x === '--outdir') a.outDir = resolve(argv[++i] ?? a.outDir);
+    else if (x === '--pwa') a.pwaDir = resolve(argv[++i] ?? a.pwaDir);
+    else if (x === '--team') a.teamDir = resolve(argv[++i] ?? a.teamDir);
+    // scripts/release.ts passes `--version` (the binary reads BEAMHOP_VERSION).
+    else if (x === '--version') i++;
   }
+  return a;
+}
+
+/** Binary location: `<out>/<target>/beamhop` with sharp, else `<out>/beamhop-<target>`. */
+export function binaryPath(outDir: string, target: string, withSharp: boolean): string {
+  return withSharp ? join(outDir, target, 'beamhop') : join(outDir, `beamhop-${target}`);
+}
+
+async function run(argv: string[]): Promise<void> {
+  const { outDir, targets, pwaDir, teamDir, withSharp } = parseBuildArgs(argv);
   mkdirSync(outDir, { recursive: true });
   const { entry, assets, teamAssets, worker } = generateEntry(outDir, pwaDir, teamDir);
   if (!worker) console.warn('plugin sandbox worker not found; sandboxed plugins will not load');
@@ -275,17 +308,20 @@ async function run(argv: string[]): Promise<void> {
   );
   for (const t of targets) {
     // With sharp: dist/<target>/{beamhop,node_modules/} so sharp sits next to the binary.
-    const outfile = withSharp ? join(outDir, t, 'beamhop') : join(outDir, `beamhop-${t}`);
+    const outfile = binaryPath(outDir, t, withSharp);
     mkdirSync(dirname(outfile), { recursive: true });
     console.log(`compiling ${outfile}`);
     await compile(entry, t, outfile, worker);
     if (withSharp) {
       const missing = copySharp(t, join(outDir, t));
-      if (missing.length)
+      if (missing.length) {
+        // A partial copy cannot load; ship the bare binary for this target instead.
+        rmSync(join(outDir, t, 'node_modules'), { recursive: true, force: true });
+        const [os, cpu] = sharpPlatform(t).split('-');
         console.warn(
-          `sharp for ${t} is incomplete (missing ${missing.join(', ')}); install it with \`bun install --os=${t.split('-')[0]} --cpu=${t.split('-')[1]}\`. Image processing will be off for this target.`,
+          `sharp for ${t} is incomplete (missing ${missing.join(', ')}); install it with \`bun install --os=${os} --cpu=${cpu}\`. Image processing will be off for this target.`,
         );
-      else console.log(`copied sharp for ${t} into ${join(outDir, t, 'node_modules')}`);
+      } else console.log(`copied sharp for ${t} into ${join(outDir, t, 'node_modules')}`);
     }
   }
 }

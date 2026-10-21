@@ -121,6 +121,11 @@ export class BlossomService {
     if (/^https?:\/\//.test(publicUrl)) this.publicUrls.set(relayId, publicUrl.replace(/\/+$/, ''));
   }
 
+  /** The last `route.publicUrl` seen for a relay (no config fallback), or null. */
+  learnedPublicUrl(relayId: RelayId): string | null {
+    return this.publicUrls.get(relayId) ?? null;
+  }
+
   /**
    * Absolute public base URL of a relay's media server (no trailing slash), for links
    * built outside a request (admin actions): the last `route.publicUrl` seen for the
@@ -176,21 +181,37 @@ export class BlossomService {
     else await this.ports.docs.put(QUOTAS, key, { quotaBytes });
   }
 
-  async limitsFor(relay: RelayConfig, pubkey: string): Promise<UploadLimits> {
-    const tier = await this.tierOf(relay, pubkey);
-    const lim = this.kernel.limits(relay.id, tier);
-    const tierDef = relay.tiers.find((t) => t.id === tier);
+  /** Effective storage limit: admin override → tier → relay media setting → goals. */
+  async quotaFor(
+    relay: RelayConfig,
+    pubkey: string,
+    tier?: string,
+  ): Promise<{ tier: string; quotaBytes: number; overridden: boolean }> {
+    const t = tier ?? (await this.tierOf(relay, pubkey));
+    const lim = this.kernel.limits(relay.id, t);
+    const tierDef = relay.tiers.find((x) => x.id === t);
     const override = await this.quotaOverride(relay.id, pubkey);
     return {
-      tier,
-      maxBlobBytes: tierDef?.maxBlobBytes ?? relay.blossom.maxBlobBytes ?? lim.maxBlobBytes,
+      tier: t,
       quotaBytes:
         override ??
         tierDef?.blobQuotaBytes ??
         relay.blossom.defaultQuotaBytes ??
         lim.defaultBlobQuotaBytes,
+      overridden: override !== undefined,
+    };
+  }
+
+  async limitsFor(relay: RelayConfig, pubkey: string): Promise<UploadLimits> {
+    const q = await this.quotaFor(relay, pubkey);
+    const lim = this.kernel.limits(relay.id, q.tier);
+    const tierDef = relay.tiers.find((t) => t.id === q.tier);
+    return {
+      tier: q.tier,
+      maxBlobBytes: tierDef?.maxBlobBytes ?? relay.blossom.maxBlobBytes ?? lim.maxBlobBytes,
+      quotaBytes: q.quotaBytes,
       usedBytes: await this.ports.blobIndex.usage(relay.id, pubkey),
-      quotaOverridden: override !== undefined,
+      quotaOverridden: q.overridden,
     };
   }
 

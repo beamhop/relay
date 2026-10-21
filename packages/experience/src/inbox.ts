@@ -50,6 +50,11 @@ export interface InboxCard {
   primary?: CardAction;
   secondary?: CardAction;
   playbook?: string;
+  /**
+   * False when there is nothing to approve (no `primary` action): the card is
+   * information only, so apps hide "approve" / swipe-right and offer dismiss instead.
+   */
+  approvable: boolean;
 }
 
 export interface CardStateEntry {
@@ -136,11 +141,15 @@ export function batchCards(
       sources: [...new Set(items.map((i) => i.source))],
       createdAt,
       ageSeconds: Math.max(0, now - createdAt),
+      approvable: false,
     };
     const tech = [...new Set(cards.map((c) => c.technical).filter(Boolean))];
     if (tech.length) card.technical = tech.slice(0, 5).join('; ');
     const primary = sameAction(cards, (c) => c.primary);
-    if (primary) card.primary = primary;
+    if (primary) {
+      card.primary = primary;
+      card.approvable = true;
+    }
     const secondary = sameAction(cards, (c) => c.secondary);
     if (secondary) card.secondary = secondary;
     const playbook = cards.find((c) => c.playbook)?.playbook;

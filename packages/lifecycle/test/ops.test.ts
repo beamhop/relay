@@ -24,6 +24,66 @@ describe('service', () => {
   });
 });
 
+describe('first backup when backups are turned on', () => {
+  test('backups.setup (disabled → enabled) makes the first backup right away', async () => {
+    const t = await setup({
+      modules: [
+        {
+          id: 'fake-admin-config',
+          register(kernel) {
+            kernel.provide('admin.config', {
+              apply: (next: unknown) => kernel.applyConfig(next as never),
+            });
+          },
+        },
+      ],
+    });
+    expect(t.svc.backupInProgress()).toBe(false);
+    const { result } = await t.act(
+      'backups.setup',
+      { enabled: true, schedule: 'daily', keep: 3 },
+      null,
+    );
+    expect((result.output as { committed: boolean }).committed).toBe(true);
+    expect(t.svc.backupInProgress()).toBe(true);
+    await t.svc.idle();
+    expect(t.svc.backupInProgress()).toBe(false);
+    const last = await t.svc.lastBackup();
+    expect(last?.ok).toBe(true);
+    expect(await t.svc.backups.due()).toBe(false);
+  });
+
+  test('a plain config change turns it on too; staying on or turning off does not back up', async () => {
+    const t = await setup();
+    const cfg = t.kernel.config();
+    await t.kernel.applyConfig({ ...cfg, backups: { ...cfg.backups, enabled: true } });
+    expect(t.svc.backupInProgress()).toBe(true);
+    await t.svc.idle();
+    const first = await t.svc.lastBackup();
+    expect(first?.ok).toBe(true);
+    t.ports.clock.advance(60);
+    const on = t.kernel.config();
+    await t.kernel.applyConfig({ ...on, backups: { ...on.backups, keep: 9 } });
+    expect(t.svc.backupInProgress()).toBe(false);
+    await t.kernel.applyConfig({ ...on, backups: { ...on.backups, enabled: false } });
+    expect(t.svc.backupInProgress()).toBe(false);
+    expect((await t.svc.lastBackup())?.at).toBe(first?.at as number);
+  });
+
+  test('a failing first backup lands in lastBackup with the reason', async () => {
+    const t = await setup({ target: null });
+    const cfg = t.kernel.config();
+    await t.kernel.applyConfig({
+      ...cfg,
+      backups: { ...cfg.backups, enabled: true, target: { driver: 's3' } },
+    } as never);
+    await t.svc.idle();
+    const last = await t.svc.lastBackup();
+    expect(last?.ok).toBe(false);
+    expect(last?.error).toBeTruthy();
+  });
+});
+
 describe('litestream', () => {
   test('config generation snapshot (R2 replica, secrets as env references)', () => {
     const config = parseConfig({

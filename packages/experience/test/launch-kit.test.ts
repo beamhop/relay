@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from 'bun:test';
-import { type NostrEvent, verifyEvent } from '@beamhop/core';
+import { type NostrEvent, defineModule, verifyEvent } from '@beamhop/core';
 import type { OutsideDialer, TestSocket } from '../src/index.ts';
 import { COL } from '../src/index.ts';
 import { setup } from './helpers.ts';
@@ -159,5 +159,83 @@ describe('test my relay', () => {
     expect(connect.status).toBe('fail');
     expect(connect.technical).toContain('ECONNREFUSED');
     expect(output.summary).toContain('connect');
+  });
+});
+
+describe('address resolution (no domain configured)', () => {
+  const wildcard = { hosts: ['*'] };
+
+  test('wildcard host with nothing else known → needsDomain with a link, no checks run', async () => {
+    const out = fakeOutside();
+    const { act, ports } = await setup({
+      relay: wildcard,
+      experience: { dialer: out.dialer, testTimeoutMs: 200 },
+    });
+    const { output, result } = await act('experience.test-relay', {});
+    expect(output.ok).toBe(false);
+    expect(output.needsDomain).toBe(true);
+    expect(output.summary).toStartWith('No web address is set yet');
+    expect(output.link.screen).toBe('/settings/domains');
+    expect(output.steps).toEqual([]);
+    expect(result.summary).toBe(output.summary);
+    expect(out.log).toEqual([]);
+    expect(await ports.docs.get(COL.testRuns, 'main')).toBeNull();
+    const kit = (await act('experience.launch-kit', {})).output;
+    expect(kit.needsDomain).toBe(true);
+    expect(kit.link.screen).toBe('/settings/domains');
+    expect(JSON.stringify(kit)).not.toContain('wss://*');
+  });
+
+  test('explicit baseUrl wins and sets the scheme (http → ws, https → wss)', async () => {
+    const out = fakeOutside();
+    const { act } = await setup({
+      relay: wildcard,
+      experience: { dialer: out.dialer, testTimeoutMs: 200 },
+    });
+    const { output } = await act('experience.test-relay', {
+      baseUrl: 'http://127.0.0.1:3334/admin/',
+    });
+    expect(output.ok).toBe(true);
+    expect(output.needsDomain).toBe(false);
+    expect(output.urlSource).toBe('baseUrl');
+    expect(output.urls.relay).toBe('ws://127.0.0.1:3334');
+    expect(out.log).toContain('WS ws://127.0.0.1:3334');
+    expect(out.log).toContain('GET http://127.0.0.1:3334/');
+    const kit = (await act('experience.launch-kit', { baseUrl: 'https://cats.example' })).output;
+    expect(kit.ok).toBe(true);
+    expect(kit.urls).toEqual({
+      relay: 'wss://cats.example',
+      blossom: 'https://cats.example',
+      landing: 'https://cats.example/',
+      nip11: 'https://cats.example',
+    });
+    expect(kit.announcement.text).toContain('wss://cats.example');
+  });
+
+  test('baseUrl beats configured hosts; path prefix is kept', async () => {
+    const { act } = await setup({ relay: { hosts: ['relay.example.com'], pathPrefix: '/r1' } });
+    const kit = (await act('experience.launch-kit', { baseUrl: 'http://localhost:3334' })).output;
+    expect(kit.urls.relay).toBe('ws://localhost:3334/r1');
+    const cfgOnly = (await act('experience.launch-kit', {})).output;
+    expect(cfgOnly.urlSource).toBe('host');
+    expect(cfgOnly.urls.relay).toBe('wss://relay.example.com/r1');
+  });
+
+  test('falls back to the last address the relay was reached at', async () => {
+    const learned = defineModule({
+      id: 'blossom',
+      register(kernel) {
+        kernel.provide('blossom', {
+          learnedPublicUrl: (id: string) => (id === 'main' ? 'http://192.168.1.5:3334' : null),
+        });
+      },
+    });
+    const { act } = await setup({ relay: wildcard, modules: [learned] });
+    const kit = (await act('experience.launch-kit', {})).output;
+    expect(kit.urlSource).toBe('learned');
+    expect(kit.urls.relay).toBe('ws://192.168.1.5:3334');
+    // An unusable baseUrl is ignored.
+    const bad = (await act('experience.launch-kit', { baseUrl: 'javascript:alert(1)' })).output;
+    expect(bad.urlSource).toBe('learned');
   });
 });

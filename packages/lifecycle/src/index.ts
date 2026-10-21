@@ -108,6 +108,8 @@ export interface LifecycleService {
   generateLitestreamConfig(opts?: Parameters<typeof generateLitestreamConfig>[1]): string;
   /** Latest backup status (`lifecycle.backups/last`), or null if none ran yet. */
   lastBackup(): Promise<BackupLast | null>;
+  /** True while a backup is being made (e.g. the first one right after backups were turned on). */
+  backupInProgress(): boolean;
   /** True while a restore is running (writes are refused). */
   restoring(): boolean;
   /** Wait for background bus handlers (tests). */
@@ -125,6 +127,8 @@ interface Entry {
   rt: LifecycleRuntime;
   service: LifecycleService;
   cleanup: Array<() => void>;
+  /** Background work the module started itself (first backup), awaited by `idle()`. */
+  pending: Set<Promise<unknown>>;
 }
 
 const runtimes = new WeakMap<Kernel, Entry>();
@@ -163,6 +167,7 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         opts.fetch ?? ((url: string, init?: RequestInit) => globalThis.fetch(url, init));
       const litestream = new LitestreamMonitor(fetchImpl, () => kernel.ports.clock.now());
       const cleanup: Array<() => void> = [];
+      const pending = new Set<Promise<unknown>>();
 
       const service: LifecycleService = {
         holds: rt.holds,
@@ -174,8 +179,12 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         exportUserData: (relayId, pubkey, o) => exportUserData(kernel.ports, relayId, pubkey, o),
         generateLitestreamConfig: (o) => generateLitestreamConfig(kernel.config(), o),
         lastBackup: () => backups.last(),
+        backupInProgress: () => backups.inProgress(),
         restoring: () => rt.restoring,
-        idle: () => retention.idle(),
+        idle: async () => {
+          await retention.idle();
+          while (pending.size) await Promise.all([...pending]);
+        },
       };
       kernel.provide(HOLDS_SERVICE, rt.holds);
       kernel.provide(RETENTION_PROVIDERS_SERVICE, rt.retentionProviders);
@@ -213,7 +222,7 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         placement: 'settings-section',
         chunk: 'lifecycle-backups',
       });
-      runtimes.set(kernel, { rt, service, cleanup });
+      runtimes.set(kernel, { rt, service, cleanup, pending });
     },
 
     start(kernel) {
@@ -260,6 +269,19 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
       entry.cleanup.push(() => {
         for (const j of Object.values(JOBS)) sched.cancel(j);
       });
+      // Backups just turned on (settings change or backups.setup): make the first copy now
+      // instead of waiting for the schedule, so the checklist and health clear quickly.
+      entry.cleanup.push(
+        kernel.onConfigChange((next, prev) => {
+          if (!next.backups.enabled || prev.backups.enabled || rt.restoring) return;
+          rt.log('info', 'backups turned on; making the first backup');
+          const p: Promise<unknown> = service.backups
+            .run('manual')
+            .catch(() => {})
+            .finally(() => entry.pending.delete(p));
+          entry.pending.add(p);
+        }),
+      );
     },
 
     async stop(kernel) {

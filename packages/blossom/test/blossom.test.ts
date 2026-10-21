@@ -303,6 +303,41 @@ describe('upload integrity and limits', () => {
     expect((await put(s, key, enc('z'.repeat(30)))).status).toBe(200);
   });
 
+  test('media.usage-summary: total, people, near/over quota, largest', async () => {
+    const s = await setup({ blossom: { defaultQuotaBytes: 100 } });
+    const [a, b, c] = [makeKey(), makeKey(), makeKey()];
+    const own = (pubkey: string, size: number, n: string) =>
+      s.ports.blobIndex.addOwner({
+        relayId: 'main',
+        sha256: n.repeat(64),
+        pubkey,
+        size,
+        type: 'image/png',
+        uploadedAt: s.ports.clock.now(),
+      });
+    await own(a.pk, 85, 'a'); // near (≥80)
+    await own(b.pk, 20, 'b');
+    await own(b.pk, 20, 'c');
+    await own(c.pk, 10, 'd'); // over its 5-byte override
+    await own('anonymous', 7, 'e');
+    await s.ports.docs.put('blossom.quotas', `main:${c.pk}`, { quotaBytes: 5 });
+    const action = s.kernel.actions.get('media.usage-summary')!;
+    const ctx = { principal: admin, relayId: 'main', ports: s.ports };
+    const res = await action.run(action.input.parse({ top: 2 }), ctx);
+    expect(res.output).toEqual({
+      totalUsedBytes: 142,
+      people: 3,
+      nearQuota: 1,
+      overQuota: 1,
+      largest: [
+        { pubkey: a.pk, usedBytes: 85, quotaBytes: 100 },
+        { pubkey: b.pk, usedBytes: 40, quotaBytes: 100 },
+      ],
+    });
+    expect(action.readOnly).toBe(true);
+    expect(res.summary).toContain('3 people');
+  });
+
   test('allowed types and blossom disabled', async () => {
     const s = await setup({ blossom: { allowedTypes: ['image/*'] } });
     const key = makeKey();
