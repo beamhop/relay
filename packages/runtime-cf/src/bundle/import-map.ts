@@ -9,6 +9,7 @@ import { BUILTIN_PLUGINS } from '@beamhop/plugins';
 
 /** Feature packages bundled by default. Missing ones are skipped with a warning. */
 export const DEFAULT_BUILTINS = [
+  '@beamhop/otel', // first: its tracing middleware wraps every route; inert without modules.otel.endpoint
   '@beamhop/relay',
   '@beamhop/policy',
   '@beamhop/blossom',

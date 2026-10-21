@@ -2,10 +2,17 @@
 import { z } from 'zod';
 import type { PluginManifest } from './types.ts';
 
+/** Lowest pipeline priority a plugin can have: plugins run after built-in policies (0-299). */
 export const PLUGIN_BAND = 300;
+/** Plugin ids: lowercase, optionally npm-scoped (`@acme/name`), at most 63 characters. */
 export const PLUGIN_ID_RE = /^(@[a-z0-9][a-z0-9-]*\/)?[a-z0-9][a-z0-9._-]{0,62}$/;
+/** `MAJOR.MINOR.PATCH` with an optional pre-release/build suffix. */
 export const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
+/**
+ * The manifest every plugin carries (built by `definePlugin`, re-checked by the host
+ * and on manifests reported back by sandboxed plugins).
+ */
 export const ManifestSchema = z.object({
   id: z.string().regex(PLUGIN_ID_RE, 'lowercase letters, digits, dot, dash or underscore'),
   name: z.string().min(1).max(80),

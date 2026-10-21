@@ -7,8 +7,11 @@
  *                                plain-language `.describe()` texts and `technical()` notes
  *   docs/reference/actions.md  ← the action registry of a fully loaded kernel (every built-in
  *                                and optional module registered in-process on memory ports)
+ *   docs/reference/plugin-sdk.md ← the plugin SDK's exported declarations and TSDoc (TypeScript
+ *                                compiler API), its zod manifest schema, and a worked example
+ *                                taken from a built-in plugin and its tests (see plugin-sdk.ts)
  *
- *   bun docs/reference/generate.ts            # write both files
+ *   bun docs/reference/generate.ts            # write all pages
  *   bun docs/reference/generate.ts --check    # exit 1 if they are out of date (CI)
  *
  * The admin API reference is served live at /api/v1/openapi.json; the CLI reference is
@@ -26,6 +29,7 @@ import {
 } from '../../packages/core/src/index.ts';
 import { DEFAULT_MODULE_PACKAGES, loadModules } from '../../packages/runtime-bun/src/index.ts';
 import { memoryPorts } from '../../packages/testkit/src/index.ts';
+import { pluginSdkPage } from './plugin-sdk.ts';
 
 /** zod's ZodType, taken from core (zod is not a root dependency). */
 type ZodType = Parameters<typeof technicalNote>[0];
@@ -280,6 +284,7 @@ export async function generate(): Promise<Record<string, string>> {
   return {
     'config.md': await configPage(modules),
     'actions.md': actionsPage(kernel.actions.list()),
+    'plugin-sdk.md': pluginSdkPage(HEADER),
   };
 }
 

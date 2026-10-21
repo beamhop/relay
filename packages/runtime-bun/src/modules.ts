@@ -65,6 +65,8 @@ export function ensureMasterKeyFile(secretsDir: string): string {
 }
 
 export const DEFAULT_MODULE_PACKAGES: ModulePackage[] = [
+  // First, so its HTTP tracing middleware wraps every route. Only with `modules.otel`.
+  { name: '@beamhop/otel', load: () => import('@beamhop/otel'), optIn: true },
   { name: '@beamhop/policy', load: () => import('@beamhop/policy') },
   { name: '@beamhop/relay', load: () => import('@beamhop/relay') },
   {
