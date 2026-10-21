@@ -33,6 +33,8 @@ export interface SqlStores {
   blobIndex: BlobIndex;
   docs: DocStore;
   metrics: TimeSeriesStore;
+  /** storage-sql executor (offered to modules as `storage.sql`, e.g. lifecycle backups). */
+  exec?: unknown;
   close?: () => Promise<void> | void;
 }
 
@@ -77,6 +79,8 @@ export interface DefaultPortsResult {
   crypto: BunCrypto;
   /** Which ports fell back to memory. */
   memoryFallbacks: string[];
+  /** SQL access for modules (`kernel.provide('storage.sql', …)`), when SQL storage is open. */
+  sql?: { exec: unknown; path?: string; url?: string };
   close(): Promise<void>;
 }
 
@@ -213,6 +217,18 @@ export async function createDefaultPorts(
     scheduler,
     crypto: bunCrypto,
     memoryFallbacks,
+    ...(sql.exec && sql.events === events
+      ? {
+          sql: {
+            exec: sql.exec,
+            ...(config.storage.driver === 'sqlite'
+              ? { path: config.storage.url ?? layout.sqlitePath }
+              : config.storage.url
+                ? { url: config.storage.url }
+                : {}),
+          },
+        }
+      : {}),
     async close() {
       await scheduler.stop();
       try {
