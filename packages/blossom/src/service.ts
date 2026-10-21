@@ -102,11 +102,54 @@ export interface QuarantineRecord {
   at: number;
 }
 
+/** Optional view of `kernel.use('media')` (media module): the thumbnail of a blob. */
+export interface MediaThumbnailsLike {
+  thumbnailOf?(sha256: string): Promise<{ sha256: string; type: string } | null>;
+}
+
 export class BlossomService {
+  /** Public base URL per relay, learned from routed requests (`route.publicUrl`). */
+  private readonly publicUrls = new Map<RelayId, string>();
+
   constructor(
     readonly kernel: Kernel,
     readonly opts: BlossomOptions = {},
   ) {}
+
+  /** Remember the relay's public URL as the runtime resolved it for a request. */
+  notePublicUrl(relayId: RelayId, publicUrl: string): void {
+    if (/^https?:\/\//.test(publicUrl)) this.publicUrls.set(relayId, publicUrl.replace(/\/+$/, ''));
+  }
+
+  /**
+   * Absolute public base URL of a relay's media server (no trailing slash), for links
+   * built outside a request (admin actions): the last `route.publicUrl` seen for the
+   * relay, else derived from config (`hosts[0]`, `node.tls`, `pathPrefix`).
+   */
+  publicUrlFor(relayId: RelayId): string | null {
+    const learned = this.publicUrls.get(relayId);
+    if (learned) return learned;
+    const relay = this.kernel.relay(relayId);
+    const host = relay?.hosts.find((h) => h && !h.includes('*'));
+    if (!relay || !host) return null;
+    const secure = this.kernel.config().node.tls.mode !== 'off';
+    const prefix = (relay.pathPrefix ?? '').replace(/\/+$/, '');
+    return `${secure ? 'https' : 'http'}://${host}${prefix}`;
+  }
+
+  /** Absolute URL of a blob on a relay (`<publicUrl>/<sha256>.<ext>`), or null. */
+  blobUrl(relayId: RelayId, sha256: string, type: string): string | null {
+    const base = this.publicUrlFor(relayId);
+    return base ? `${base}/${sha256}${extFor(type)}` : null;
+  }
+
+  /** Absolute URL of the blob's thumbnail (media module variants), or null. */
+  async thumbUrl(relayId: RelayId, sha256: string): Promise<string | null> {
+    const media = this.kernel.use<MediaThumbnailsLike>('media');
+    if (!media?.thumbnailOf) return null;
+    const t = await media.thumbnailOf(sha256);
+    return t ? this.blobUrl(relayId, t.sha256, t.type) : null;
+  }
 
   get ports(): Ports {
     return this.kernel.ports;
@@ -373,6 +416,17 @@ export class BlossomService {
     }
   }
 
+  /** Is this relay's ownership row frozen by a legal hold? Errors count as held. */
+  async ownershipHeld(o: { relayId: RelayId; sha256: string; pubkey: string }): Promise<boolean> {
+    const holds = this.kernel.use<LegalHoldsLike>(HOLDS_SERVICE);
+    if (!holds || (typeof holds.active === 'function' && !holds.active())) return false;
+    try {
+      return await holds.isHeld(o.relayId, { sha256: o.sha256, pubkey: o.pubkey });
+    } catch {
+      return true;
+    }
+  }
+
   /** Delete bytes when no relay owns the blob any more (and no legal hold freezes them). */
   async collect(sha256: string, owner?: { relayId: RelayId; pubkey: string }): Promise<boolean> {
     if ((await this.ports.blobIndex.refCount(sha256)) > 0) return false;
@@ -404,6 +458,12 @@ export class BlossomService {
       if (batch.length === 0) break;
       let progressed = false;
       for (const o of batch) {
+        // Legal hold (§12.7): a held ownership is not expired; check again tomorrow.
+        if (await this.ownershipHeld(o)) {
+          await this.ports.blobIndex.addOwner({ ...o, expiresAt: now + 86_400 });
+          progressed = true;
+          continue;
+        }
         const r = await this.removeOwnership(o.relayId, o.sha256, o.pubkey, 'expired');
         if (r.removed) {
           progressed = true;

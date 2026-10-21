@@ -10,3 +10,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun test
+      # Generated settings/actions reference must match the code.
+      - run: bun docs/reference/generate.ts --check
+      # Protocol conformance (NIP-01/11/42/…, Blossom) against every storage backend.
+      - run: bun packages/conformance/scripts/self-check.ts --all

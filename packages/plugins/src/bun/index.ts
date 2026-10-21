@@ -18,7 +18,12 @@ import { BunPluginLoader } from './loader.ts';
 
 export { BunPluginLoader, pluginPackageName } from './loader.ts';
 export { BunPluginInstaller } from './installer.ts';
-export { WorkerSandbox } from './sandbox.ts';
+export {
+  WorkerSandbox,
+  DEFAULT_WORKER_URL,
+  sandboxWorkerUrl,
+  setSandboxWorkerUrl,
+} from './sandbox.ts';
 export { createBunAuthoring, rewriteImports, bunRun, type RunCommand } from './authoring.ts';
 
 export interface BunPluginHostOptions
@@ -67,9 +72,13 @@ export const fsWatch: NonNullable<PluginHostModuleOptions['watch']> = (path, onC
 export const dnsResolveHost: ResolveHost = async (hostname) =>
   (await lookup(hostname, { all: true })).map((a) => a.address);
 
+/** Reads `file://` catalogs and tarballs from disk. */
+export const readTextFile = (path: string): Promise<string> => Bun.file(path).text();
+
 export function createBunPluginHost(opts: BunPluginHostOptions = {}): BeamhopModule {
   const { dir, run, hardKillMs, watch: watchFn, ...rest } = opts;
   return createPluginHostModule({
+    readFile: readTextFile,
     ...rest,
     watch: watchFn ?? fsWatch,
     loader: (kernel) =>

@@ -104,6 +104,64 @@ export function verifyCatalogEvent(input: unknown, trustedPubkeys: readonly stri
   return r.data;
 }
 
+/** `file:` URL (offline catalog or tarball on local disk). */
+export function isFileUrl(url: string): boolean {
+  return /^file:/i.test(url.trim());
+}
+
+/** Local path of a `file:` URL (`file:///srv/catalog.json` → `/srv/catalog.json`). */
+export function filePathOf(url: string): string {
+  return decodeURIComponent(new URL(url.trim()).pathname);
+}
+
+export interface CatalogSourceOptions {
+  fetch?: typeof fetch;
+  /** Reads local files for `file:` catalogs (runtimes with a file system). */
+  readFile?: (path: string) => Promise<string>;
+}
+
+/**
+ * Load the catalog behind `modules.plugins.catalogUrl`: `https://…` (signed,
+ * {@link fetchCatalog}) or `file://…` for offline / air-gapped installs. A local
+ * file is under the admin's control, so with no trusted keys configured it may be a
+ * plain catalog JSON (or a catalog event, checked for a valid signature only); with
+ * trusted keys it must be signed by one of them, like a remote catalog.
+ */
+export async function loadCatalog(
+  url: string,
+  trustedPubkeys: readonly string[],
+  opts: CatalogSourceOptions = {},
+): Promise<Catalog> {
+  if (!isFileUrl(url)) return fetchCatalog(url, trustedPubkeys, opts.fetch ?? fetch);
+  if (!opts.readFile)
+    throw new CatalogError('Catalog files on disk are not supported on this server');
+  let path: string;
+  try {
+    path = filePathOf(url);
+  } catch {
+    throw new CatalogError('The catalog address is not a valid file:// URL');
+  }
+  let text: string;
+  try {
+    text = await opts.readFile(path);
+  } catch (err) {
+    throw new CatalogError(`The catalog file could not be read (${path}): ${String(err)}`);
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new CatalogError('The catalog file is not JSON');
+  }
+  if (trustedPubkeys.length > 0) return verifyCatalogEvent(json, trustedPubkeys);
+  const ev = json as Partial<NostrEvent> | null;
+  if (ev && typeof ev === 'object' && typeof ev.sig === 'string' && typeof ev.pubkey === 'string')
+    return verifyCatalogEvent(ev, [ev.pubkey]);
+  const r = CatalogSchema.safeParse(json);
+  if (!r.success) throw new CatalogError(`The catalog is malformed: ${r.error.issues[0]?.message}`);
+  return r.data;
+}
+
 /** Fetch and verify a remote catalog. */
 export async function fetchCatalog(
   url: string,

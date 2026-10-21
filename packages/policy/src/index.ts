@@ -22,6 +22,7 @@ export * from './config.ts';
 export * from './goals.ts';
 export * from './hooks.ts';
 export * from './insights.ts';
+export * from './lists.ts';
 export * from './moderation.ts';
 export * from './personas.ts';
 export * from './runtime.ts';
@@ -64,11 +65,16 @@ export function createPolicyModule(opts: PolicyModuleOptions = {}): BeamhopModul
       for (const a of createActions(rt)) kernel.actions.register(a);
 
       cleanup.push(
-        kernel.bus.on('event.accepted', ({ relayId, event }) =>
-          rt.track(
-            rt.state.markSeen(relayId, event.pubkey, kernel.ports.clock.now()),
-            'policy.first-seen',
-          ),
+        kernel.bus.on('event.accepted', ({ relayId, event }) => {
+          const at = kernel.ports.clock.now();
+          rt.track(rt.state.markSeen(relayId, event.pubkey, at), 'policy.first-seen');
+          rt.track(rt.state.markActive(relayId, event.pubkey, at), 'policy.active');
+        }),
+        kernel.bus.on('auth.success', ({ relayId, pubkey }) =>
+          rt.track(rt.state.markActive(relayId, pubkey, kernel.ports.clock.now()), 'policy.active'),
+        ),
+        kernel.bus.on('blob.uploaded', ({ relayId, pubkey }) =>
+          rt.track(rt.state.markActive(relayId, pubkey, kernel.ports.clock.now()), 'policy.active'),
         ),
         kernel.bus.on('event.held', ({ relayId, event, by, reason }) =>
           rt.track(rt.queue.addHeld(relayId, event, by, reason), 'policy.queue'),

@@ -429,6 +429,55 @@ export function authRoutes(api: Api, deps: Deps): void {
     api,
     deps,
     {
+      method: 'post',
+      path: '/session/refresh',
+      scope: 'node',
+      guard: 'public',
+      tags,
+      summary: 'Stay signed in: swap a still-valid session for a fresh one',
+      description:
+        'Send the current session as `Authorization: Bearer <jwt>` (passkey, company SSO or Nostr sign-in; not API tokens). Returns a new session with a sliding expiry, never beyond `sessionMaxAgeSeconds` after the original sign-in (`auth_time`).',
+    },
+    async (c) => {
+      const h = c.req.header('authorization') ?? '';
+      const t = h.replace(/^bearer\s+/i, '').trim();
+      if (!/^bearer\s/i.test(h) || !t)
+        throw new HttpError(401, 'unauthenticated', 'Please sign in', 'Bearer session required');
+      if (t.startsWith('bh_'))
+        throw new HttpError(
+          400,
+          'not_a_session',
+          'API tokens do not expire this way and cannot be refreshed',
+        );
+      const claims = await deps.sessions.verify(t);
+      if (!claims)
+        throw new HttpError(
+          401,
+          'session_expired',
+          'Your sign-in has ended. Please sign in again.',
+        );
+      const rec = await dir.get(claims.sub);
+      if (!rec) throw new HttpError(401, 'not_admin', 'This account no longer has access');
+      const next = await deps.sessions.refresh(claims);
+      if (!next)
+        throw new HttpError(
+          401,
+          'session_too_old',
+          'For your security, please sign in again.',
+          'session max age reached (auth_time + sessionMaxAgeSeconds)',
+        );
+      return c.json({
+        token: next.token,
+        expiresAt: next.expiresAt,
+        principal: describePrincipal(deps, dir.principalOf(rec, claims.via)),
+      });
+    },
+  );
+
+  op(
+    api,
+    deps,
+    {
       method: 'get',
       path: '/auth/recovery-codes',
       scope: 'node',

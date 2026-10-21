@@ -35,6 +35,26 @@ A code people can use to join as members.
 | `maxUses` | number | `1` |  |
 | `note` | string |  |  |
 
+### Allowed accounts
+
+Accounts that may post here when the relay is invite-only.
+
+- **id:** `access.list-allowed-pubkeys` · **CLI:** `beamhop access list-allowed-pubkeys` · **scope:** relay · **permission:** `relay.read`
+- read-only
+- *Technical:* policy.allowlist for this relay (NIP-86 listallowedpubkeys).
+
+### Invite codes
+
+Invite codes for this relay, with how often each was used.
+
+- **id:** `access.list-invites` · **CLI:** `beamhop access list-invites` · **scope:** relay · **permission:** `users.write`
+- read-only
+- *Technical:* policy.invites for this relay; codes are secrets, so this needs users.write.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `includeExpired` | boolean | `false` | Also show expired or used-up codes |
+
 ### Remove members
 
 These people can no longer post (unless the relay is open).
@@ -513,7 +533,7 @@ Apply a ready-made setup (goals, who can post, media options).
 
 - **id:** `config.apply-persona` · **CLI:** `beamhop config apply-persona` · **scope:** relay · **permission:** `config.write`
 - changes settings/data · undoable
-- *Technical:* Deep-merges personaPresets[persona] into relays[id]; limits overrides, tiers, hosts and info are kept. Committed via admin.config when available.
+- *Technical:* Deep-merges personaPresets[persona] into relays[id] (limits overrides, tiers, hosts and info are kept) and personaModulePresets[persona] into modules (organization: modules.team.enabled=true; never switches modules off). Committed via admin.config when available.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
@@ -841,6 +861,7 @@ Permanently erases the person’s private key after a waiting period. Their old 
 | `subjectId` | string |  |  |
 | `afterDays` | number |  |  |
 | `reason` | string |  |  |
+| `approvalId` | string |  | Approved request id (when the approval gate does not wrap this action) |
 
 ### Sign a person out of all apps
 
@@ -865,6 +886,7 @@ Re-wraps every data key with the master key currently configured. Keep the old o
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `force` | boolean | `false` |  |
+| `approvalId` | string |  | Approved request id (when the approval gate does not wrap this action) |
 
 ### Show key vault status
 
@@ -931,7 +953,7 @@ See files uploaded to this relay, optionally for one person.
 
 - **id:** `media.list-blobs` · **CLI:** `beamhop media list-blobs` · **scope:** relay · **permission:** `relay.read`
 - read-only
-- *Technical:* BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent).
+- *Technical:* BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent). `url` / `thumbUrl` are absolute, based on the relay’s public URL (route.publicUrl, else hosts[0] + node.tls), so an admin app on another host can load them.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
@@ -1015,6 +1037,22 @@ Mark items as fine. Held posts become visible.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `itemIds` | list of string |  |  |
+
+### Blocked accounts
+
+Accounts that cannot post or upload here.
+
+- **id:** `moderation.list-banned-pubkeys` · **CLI:** `beamhop moderation list-banned-pubkeys` · **scope:** relay · **permission:** `relay.read`
+- read-only
+- *Technical:* policy.bans for this relay (NIP-86 listbannedpubkeys).
+
+### Muted accounts
+
+Accounts whose posts are hidden for now.
+
+- **id:** `moderation.list-muted-pubkeys` · **CLI:** `beamhop moderation list-muted-pubkeys` · **scope:** relay · **permission:** `relay.read`
+- read-only
+- *Technical:* policy.mutes for this relay; expired mutes are left out.
 
 ### Mute account
 
@@ -1236,6 +1274,13 @@ Shows every limit, where it comes from, and what it means.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `tier` | string |  |  |
+| `goals` | section |  | What-if: preview the limits these goal values would give (nothing is saved) |
+| `goals.openness` | number | `70` | How open the relay is: 0 = very strict, 100 = anyone can post |
+| `goals.spamTolerance` | number | `40` | 0 = aggressive spam blocking, 100 = relaxed |
+| `goals.storage` | number | `60` | 0 = keep it lean (short retention), 100 = keep everything |
+| `goals.media` | number | `50` | 0 = basic media, 100 = rich media (resizing, video) |
+| `goals.speedVsCost` | number | `50` | 0 = cheapest to run, 100 = fastest |
+| `persona` | `public-social` \| `private-team` \| `wot-community` \| `media-host` \| `organization` |  | What-if: preview the limits of this relay type (applied before `goals`) |
 
 ### Filter activity
 
@@ -1355,6 +1400,22 @@ The token stops working immediately.
 | `id` | string |  | Token id |
 
 ## users
+
+### People
+
+Everyone seen here recently, with their tier, activity, storage and status.
+
+- **id:** `users.list` · **CLI:** `beamhop users list` · **scope:** relay · **permission:** `relay.read`
+- read-only
+- *Technical:* Union of policy state (first-seen, last activity, tiers, bans, mutes, allowlist) and blob owners (BlobIndex); sorted by last activity; offset cursor. Activity is recorded at most every 15 minutes per pubkey.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `limit` | number | `50` | How many to show |
+| `cursor` | string |  | Paging cursor from the previous page |
+| `search` | string |  | Part of a public key (hex) or a full npub |
+| `status` | `all` \| `banned` \| `muted` \| `allowlisted` \| `active` | `"all"` | Only show people in this state |
+| `activeWithinDays` | number |  | Only people active in the last N days |
 
 ### Change plan
 

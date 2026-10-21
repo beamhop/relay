@@ -157,14 +157,29 @@ export function registerRoutes(deps: RouteDeps): void {
       let b = await identity.upsertFromLogin(idp, claims);
       const headers = new Headers({ 'cache-control': 'no-store' });
       headers.append('set-cookie', clearState);
+      const signedIn = (audience: 'admin' | 'team') =>
+        identity.siem({
+          stream: 'auth',
+          type: audience === 'admin' ? 'sso.admin-sign-in' : 'sso.sign-in',
+          summary: `${b.name ?? b.email ?? b.subject} signed in with ${idp.label ?? idp.id}${audience === 'admin' ? ' (admin app)' : ''}`,
+          principalId: audience === 'admin' ? identity.adminId(b) : bindingKey(b.idp, b.subject),
+          data: {
+            idp: idp.id,
+            binding: bindingKey(b.idp, b.subject),
+            audience,
+            ...(b.npub ? { pubkey: b.npub } : {}),
+          },
+        });
       if (rec.audience === 'admin') {
         const s = await identity.issueAdminSession(b);
+        signedIn('admin');
         const frag = new URLSearchParams({ sso_token: s.token, expires_at: String(s.expiresAt) });
         headers.set('location', `${rec.returnTo}#${frag.toString()}`);
         return new Response(null, { status: 302, headers });
       }
       b = await identity.ensureManaged(b);
       const { token } = await identity.sessions.issue(bindingKey(b.idp, b.subject));
+      signedIn('team');
       headers.append(
         'set-cookie',
         setCookie(TEAM_COOKIE, token, {

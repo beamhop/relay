@@ -13,6 +13,8 @@
     "@beamhop/core": "workspace:*",
     "@beamhop/runtime-bun": "workspace:*",
     "@beamhop/storage-sql": "workspace:*",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
     "aws4fetch": "^1.0.20",
     "nostr-tools": "^2.25.2"
   },

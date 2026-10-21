@@ -45,6 +45,28 @@ const TEAM_BUILD = resolve(PKG, '../team-client/build');
 const ALL_TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64'] as const;
 /** CLI dispatch (`beamhop serve` + CLI subcommands); falls back to the server-only entry. */
 const CLI_ENTRY = resolve(PKG, '../cli/src/binary.ts');
+/**
+ * Plugin sandbox Worker script. Compiled as an extra entrypoint so sandboxed
+ * (untrusted) plugins work in the single binary; the entry tells the sandbox where
+ * it lives inside the embedded file system.
+ */
+export const PLUGIN_WORKER = resolve(PKG, '../plugins/src/bun/worker-entry.ts');
+const PLUGIN_SANDBOX = resolve(PKG, '../plugins/src/bun/sandbox.ts');
+
+/** Deepest directory containing every path (the `bun build --root`). */
+export function commonRoot(paths: string[]): string {
+  const parts = paths.map((p) => resolve(p).split(sep));
+  const first = parts[0] ?? [];
+  let n = 0;
+  while (n < first.length && parts.every((p) => p[n] === first[n])) n++;
+  return first.slice(0, n).join(sep) || sep;
+}
+
+/** Path of the worker inside the binary's embedded file system (relative to the build root). */
+export function embeddedWorkerPath(entry: string, worker = PLUGIN_WORKER): string {
+  const root = commonRoot([dirname(entry), dirname(worker)]);
+  return `./${relative(root, worker).split(sep).join('/')}`;
+}
 
 function hostTarget(): string {
   const os = process.platform === 'darwin' ? 'darwin' : process.platform;
@@ -75,8 +97,10 @@ export function generateEntry(
   outDir: string,
   pwaDir = PWA_BUILD,
   teamDir = TEAM_BUILD,
-): { entry: string; assets: number; teamAssets: number } {
+): { entry: string; assets: number; teamAssets: number; worker: string | null } {
   const genDir = join(outDir, '.gen');
+  const entry = join(genDir, 'entry.ts');
+  const worker = existsSync(PLUGIN_WORKER) ? PLUGIN_WORKER : null;
   rmSync(genDir, { recursive: true, force: true });
   mkdirSync(genDir, { recursive: true });
   const files = filesIn(pwaDir);
@@ -90,6 +114,12 @@ export function generateEntry(
       ? `import { runBinary as main } from ${JSON.stringify(CLI_ENTRY)};`
       : `import { main } from ${JSON.stringify(join(PKG, 'src/main.ts'))};`,
   ];
+  if (worker) {
+    lines.push(
+      `import { setSandboxWorkerUrl } from ${JSON.stringify(PLUGIN_SANDBOX)};`,
+      `setSandboxWorkerUrl(${JSON.stringify(embeddedWorkerPath(entry, worker))});`,
+    );
+  }
   const manifest: string[] = [];
   files.forEach((f, i) => {
     lines.push(`import a${i} from ${JSON.stringify(f)} with { type: 'file' };`);
@@ -105,9 +135,8 @@ export function generateEntry(
   });
   if (teamFiles.length > 0) lines.push(`registerAssets({\n${teamManifest.join('\n')}\n}, 'team');`);
   lines.push('await main();', '');
-  const entry = join(genDir, 'entry.ts');
   writeFileSync(entry, lines.join('\n'));
-  return { entry, assets: files.length, teamAssets: teamFiles.length };
+  return { entry, assets: files.length, teamAssets: teamFiles.length, worker };
 }
 
 /** Release version baked into the binary: BEAMHOP_VERSION env, else the root package.json. */
@@ -120,24 +149,42 @@ export function releaseVersion(): string {
   return pkg.version ?? '0.0.0';
 }
 
-async function compile(entry: string, target: string, outfile: string): Promise<void> {
-  const proc = Bun.spawn(
-    [
-      process.execPath,
-      'build',
-      '--compile',
-      '--minify',
-      '--sourcemap',
-      `--define=__BEAMHOP_VERSION__=${JSON.stringify(releaseVersion())}`,
-      // Lets the binary resolve packages shipped next to it (sharp's own dependencies).
-      '--compile-autoload-package-json',
-      `--target=bun-${target}`,
-      entry,
-      '--outfile',
-      outfile,
-    ],
-    { cwd: PKG, stdout: 'inherit', stderr: 'inherit' },
-  );
+/** `bun build` arguments: the entry, plus the plugin worker as an extra entrypoint. */
+export function compileArgs(
+  entry: string,
+  target: string,
+  outfile: string,
+  worker: string | null,
+): string[] {
+  const entries = worker ? [entry, worker] : [entry];
+  return [
+    'build',
+    '--compile',
+    '--minify',
+    '--sourcemap',
+    `--define=__BEAMHOP_VERSION__=${JSON.stringify(releaseVersion())}`,
+    // Lets the binary resolve packages shipped next to it (sharp's own dependencies).
+    '--compile-autoload-package-json',
+    `--target=bun-${target}`,
+    // Fixed root so the worker's embedded path matches `embeddedWorkerPath()`.
+    `--root=${commonRoot(entries.map((e) => dirname(e)))}`,
+    ...entries,
+    '--outfile',
+    outfile,
+  ];
+}
+
+async function compile(
+  entry: string,
+  target: string,
+  outfile: string,
+  worker: string | null,
+): Promise<void> {
+  const proc = Bun.spawn([process.execPath, ...compileArgs(entry, target, outfile, worker)], {
+    cwd: PKG,
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
   const code = await proc.exited;
   if (code !== 0) throw new Error(`bun build failed for ${target} (exit ${code})`);
 }
@@ -216,7 +263,8 @@ async function run(argv: string[]): Promise<void> {
     else if (a === '--team') teamDir = resolve(argv[++i] ?? teamDir);
   }
   mkdirSync(outDir, { recursive: true });
-  const { entry, assets, teamAssets } = generateEntry(outDir, pwaDir, teamDir);
+  const { entry, assets, teamAssets, worker } = generateEntry(outDir, pwaDir, teamDir);
+  if (!worker) console.warn('plugin sandbox worker not found; sandboxed plugins will not load');
   console.log(
     assets ? `embedding ${assets} admin app files` : 'admin app build not found; skipping PWA',
   );
@@ -230,7 +278,7 @@ async function run(argv: string[]): Promise<void> {
     const outfile = withSharp ? join(outDir, t, 'beamhop') : join(outDir, `beamhop-${t}`);
     mkdirSync(dirname(outfile), { recursive: true });
     console.log(`compiling ${outfile}`);
-    await compile(entry, t, outfile);
+    await compile(entry, t, outfile, worker);
     if (withSharp) {
       const missing = copySharp(t, join(outDir, t));
       if (missing.length)

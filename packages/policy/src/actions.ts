@@ -6,8 +6,10 @@
 import {
   type ActionContext,
   type ActionDef,
+  type ActionResult,
   type BeamhopConfig,
   type DiffLine,
+  GoalsSchema,
   type NostrEvent,
   PersonaSchema,
   type RelayConfig,
@@ -15,7 +17,8 @@ import {
   defineAction,
 } from '@beamhop/core';
 import { z } from 'zod';
-import { explainLimits } from './goals.ts';
+import { deriveLimits, explainLimits } from './goals.ts';
+import { createListActions } from './lists.ts';
 import type { QueueItem, QueueStatus } from './moderation.ts';
 import {
   applyPersona,
@@ -860,13 +863,48 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     permission: 'relay.read',
     readOnly: true,
     keywords: ['limits', 'goals', 'why', 'explain'],
-    input: z.object({ tier: z.string().optional() }),
-    async run(input, ctx) {
+    input: z.object({
+      tier: z.string().optional(),
+      goals: GoalsSchema.partial()
+        .optional()
+        .describe('What-if: preview the limits these goal values would give (nothing is saved)'),
+      persona: PersonaSchema.optional().describe(
+        'What-if: preview the limits of this relay type (applied before `goals`)',
+      ),
+    }),
+    async run(input, ctx): Promise<ActionResult<Record<string, unknown>>> {
       const relay = relayOf(rt, ctx);
-      const lines = explainLimits(relay, input.tier);
+      const current = rt.kernel.limits(relay.id, input.tier);
+      if (!input.goals && !input.persona) {
+        const lines = explainLimits(relay, input.tier);
+        return { output: { limits: current, lines }, summary: `${lines.length} values explained` };
+      }
+      // What-if: same relay with the persona preset and/or goal values applied.
+      let hypo: RelayConfig = input.persona ? applyPersona(relay, input.persona) : relay;
+      if (input.goals) hypo = { ...hypo, goals: { ...hypo.goals, ...input.goals } };
+      const lines = explainLimits(hypo, input.tier);
+      const limits = deriveLimits(hypo, input.tier);
+      const currentLines = new Map(explainLimits(relay, input.tier).map((l) => [l.field, l]));
+      const changes = lines
+        .filter((l) => JSON.stringify(currentLines.get(l.field)?.value) !== JSON.stringify(l.value))
+        .map((l) => ({
+          field: l.field,
+          from: currentLines.get(l.field)?.value ?? null,
+          to: l.value,
+          text: l.text,
+          technical: l.technical,
+        }));
       return {
-        output: { limits: rt.kernel.limits(relay.id, input.tier), lines },
-        summary: `${lines.length} values explained`,
+        output: {
+          limits,
+          lines,
+          whatIf: { goals: hypo.goals, persona: hypo.persona },
+          current: current,
+          changes,
+        },
+        summary: changes.length
+          ? `${plural(changes.length, 'value')} would change`
+          : 'Nothing would change',
       };
     },
   });
@@ -903,6 +941,7 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     persona,
     explain,
     stats,
+    ...createListActions(rt),
   ] as unknown as ActionDef[];
 }
 

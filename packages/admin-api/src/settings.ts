@@ -13,6 +13,14 @@ export const AdminApiConfigSchema = z
       .min(300)
       .default(12 * 3600)
       .describe('How long a sign-in lasts before admins must sign in again'),
+    sessionMaxAgeSeconds: technical(
+      z
+        .number()
+        .int()
+        .min(300)
+        .default(7 * 86400),
+      'Absolute max age of a session JWT across sliding refreshes (POST …/session/refresh); measured from auth_time.',
+    ).describe('Longest time someone can stay signed in without signing in again'),
     keyRotationDays: technical(
       z.number().int().min(1).max(365).default(7),
       'HS256 session signing key rotation period; previous keys stay valid for one session lifetime.',

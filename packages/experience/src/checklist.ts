@@ -42,9 +42,32 @@ export interface ChecklistItem {
   /** Extra state, e.g. "Backups are on, waiting for the first one to finish". */
   status?: string;
   technical: string;
-  /** Where to complete it: a PWA screen and/or an action to run. */
-  link: { screen: string; actionId?: string; input?: unknown };
+  /**
+   * Where to complete it: a real admin-app route (see {@link PWA_ROUTES}) and/or an
+   * action to run. `related` names extra actions the app may offer next to it
+   * (e.g. the launch kit, which is an action, not a screen).
+   */
+  link: {
+    screen: string;
+    actionId?: string;
+    input?: unknown;
+    related?: Array<{ actionId: string; input?: unknown }>;
+  };
 }
+
+/**
+ * Admin app (packages/pwa) routes the server links to. Settings sections are
+ * `/settings/<simple screen id>`; the People screen selects its tab with `?tab=`.
+ */
+export const PWA_ROUTES = {
+  home: '/',
+  team: '/people?tab=team',
+  people: '/people?tab=users',
+  security: '/settings/security',
+  backups: '/settings/backups',
+  alerts: '/settings/alerts',
+  profile: '/settings/profile',
+} as const;
 
 export interface Checklist {
   items: ChecklistItem[];
@@ -87,7 +110,7 @@ export async function buildChecklist(
     done: codes > 0,
     available: !!dir,
     technical: `admin.recovery codes left = ${codes}`,
-    link: { screen: '/people/admins', actionId: 'admins.recovery-codes', input: {} },
+    link: { screen: PWA_ROUTES.security, actionId: 'admins.recovery-codes', input: {} },
   });
 
   // 2. Backups.
@@ -105,7 +128,7 @@ export async function buildChecklist(
     done: backupsDone,
     available: true,
     technical: `backups.enabled = ${cfg.backups.enabled}; schedule = ${cfg.backups.schedule}${lifecycle?.lastBackup ? '; lifecycle.lastBackup checked' : ''}`,
-    link: { screen: '/settings/backups' },
+    link: { screen: PWA_ROUTES.backups },
   };
   if (backupStatus) backupItem.status = backupStatus;
   items.push(backupItem);
@@ -119,7 +142,7 @@ export async function buildChecklist(
     done: channels > 0,
     available: true,
     technical: `alerts.channels.length = ${channels}`,
-    link: { screen: '/settings/alerts' },
+    link: { screen: PWA_ROUTES.alerts },
   });
 
   // 4. Landing page.
@@ -131,7 +154,7 @@ export async function buildChecklist(
     done: relays.length > 0 && custom.length === relays.length,
     available: relays.length > 0,
     technical: `relays[].info.name != "${DEFAULT_INFO.name}" and info.description set (${custom.length}/${relays.length})`,
-    link: { screen: '/settings/profile' },
+    link: { screen: PWA_ROUTES.profile },
   });
 
   // 5. Moderator invited.
@@ -143,7 +166,7 @@ export async function buildChecklist(
     done: admins.length > 1,
     available: !!dir,
     technical: `admin directory size = ${admins.length}`,
-    link: { screen: '/people/admins', actionId: 'admins.invite', input: { role: 'moderator' } },
+    link: { screen: PWA_ROUTES.team, actionId: 'admins.invite', input: { role: 'moderator' } },
   });
 
   // 6. Test my relay.
@@ -158,7 +181,12 @@ export async function buildChecklist(
     done: relays.length > 0 && passed === relays.length,
     available: relays.length > 0,
     technical: `experience.test-relay passed for ${passed}/${relays.length} relays`,
-    link: { screen: '/home/launch-kit', actionId: 'experience.test-relay', input: {} },
+    link: {
+      screen: PWA_ROUTES.home,
+      actionId: 'experience.test-relay',
+      input: {},
+      related: [{ actionId: 'experience.launch-kit', input: {} }],
+    },
   });
 
   const counted = items.filter((i) => i.available);

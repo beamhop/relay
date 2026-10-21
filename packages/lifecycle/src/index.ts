@@ -23,6 +23,8 @@ import { FAILOVER_PLAYBOOK, createCardSource, createHealthChecks } from './healt
 import { HOLDS_SERVICE, type LegalHolds } from './holds.ts';
 import { KnownGoodMarker } from './known-good.ts';
 import { LitestreamMonitor, generateLitestreamConfig } from './litestream.ts';
+import type { RetentionProviders } from './retention-providers.ts';
+import { RETENTION_PROVIDERS_SERVICE } from './retention-providers.ts';
 import { RetentionEngine } from './retention.ts';
 import { type LifecycleOptions, LifecycleRuntime } from './runtime.ts';
 import { LifecycleConfigSchema, MODULE_ID } from './settings.ts';
@@ -37,6 +39,14 @@ export {
 export type { LifecycleConfig, StorageCap } from './settings.ts';
 export { HOLDS_SERVICE, createHolds } from './holds.ts';
 export type { HoldProvider, HoldSubject, LegalHolds } from './holds.ts';
+export {
+  RETENTION_PROVIDERS_SERVICE,
+  DEFAULT_PROVIDER_MIN_DAYS,
+  createRetentionProviders,
+  longest,
+  type RetentionProvider,
+  type RetentionProviders,
+} from './retention-providers.ts';
 export {
   ARCHIVE_TYPE,
   ARCHIVE_TYPE_ENCRYPTED,
@@ -85,6 +95,7 @@ export {
 /** `kernel.use<LifecycleService>('lifecycle')`. */
 export interface LifecycleService {
   holds: LegalHolds;
+  retentionProviders: RetentionProviders;
   backups: BackupService;
   retention: RetentionEngine;
   knownGood: KnownGoodMarker;
@@ -155,6 +166,7 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
 
       const service: LifecycleService = {
         holds: rt.holds,
+        retentionProviders: rt.retentionProviders,
         backups,
         retention,
         knownGood,
@@ -166,6 +178,7 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
         idle: () => retention.idle(),
       };
       kernel.provide(HOLDS_SERVICE, rt.holds);
+      kernel.provide(RETENTION_PROVIDERS_SERVICE, rt.retentionProviders);
       kernel.provide(MODULE_ID, service);
 
       // Writes pause while a backup is being restored (cheap flag check otherwise).

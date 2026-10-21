@@ -114,10 +114,10 @@ export const KeyvaultConfigSchema = z
         /** Wrap the alerts module's relay DM key (`alerts.keys`/`nostr`) on start. */
         alertsKey: z.boolean().default(true),
         /**
-         * Wrap NIP-29 group signing keys (`relay.groups.key`). Off by default: the relay
-         * must understand the `{ wrapped, provider }` record shape first.
+         * Wrap NIP-29 group signing keys (`relay.groups.key`) on start. The relay reads
+         * the `{ pubkey, createdAt, wrapped, provider }` shape through `ports.keyWrapper`.
          */
-        relayGroupKeys: z.boolean().default(false),
+        relayGroupKeys: z.boolean().default(true),
       })
       .prefault({}),
   })

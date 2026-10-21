@@ -124,7 +124,8 @@ export function registerActions(kernel: Kernel, svc: BlossomService): void {
       id: 'media.list-blobs',
       title: 'List media files',
       description: 'See files uploaded to this relay, optionally for one person.',
-      technical: 'BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent).',
+      technical:
+        'BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent). `url` / `thumbUrl` are absolute, based on the relay’s public URL (route.publicUrl, else hosts[0] + node.tls), so an admin app on another host can load them.',
       scope: 'relay',
       permission: 'relay.read',
       readOnly: true,
@@ -150,13 +151,18 @@ export function registerActions(kernel: Kernel, svc: BlossomService): void {
           items = page.items;
           cursor = page.cursor;
         }
-        const quarantined = new Set<string>();
-        for (const i of items) if (await svc.quarantined(i.sha256)) quarantined.add(i.sha256);
+        const out = [];
+        for (const i of items) {
+          const thumbUrl = await svc.thumbUrl(relay.id, i.sha256).catch(() => null);
+          out.push({
+            ...i,
+            quarantined: !!(await svc.quarantined(i.sha256)),
+            url: svc.blobUrl(relay.id, i.sha256, i.type),
+            ...(thumbUrl ? { thumbUrl } : {}),
+          });
+        }
         return {
-          output: {
-            items: items.map((i) => ({ ...i, quarantined: quarantined.has(i.sha256) })),
-            cursor,
-          },
+          output: { items: out, cursor },
           summary: `${items.length} file${items.length === 1 ? '' : 's'}`,
         };
       },

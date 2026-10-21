@@ -10,7 +10,7 @@ export const MODULE_ID = 'enterprise-compliance';
 
 /** Gated by default (§12.9). Ids that are not registered on this node are ignored. */
 export const DEFAULT_GATED_ACTIONS = [
-  'keyvault.escrow-decrypt',
+  'escrow.decrypt-dm',
   'keyvault.destroy-key',
   'keyvault.rotate-kek',
   'compliance.release-hold',

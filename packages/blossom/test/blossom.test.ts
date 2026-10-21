@@ -479,6 +479,31 @@ describe('legal hold', () => {
     expect(await s.ports.blobs.head(sha)).toBeNull();
     expect(await s.ports.blobs.head(orphanSha)).toBeNull();
   });
+
+  test('held ownerships do not expire; they are checked again later', async () => {
+    const s = await setup();
+    const key = makeKey();
+    const sha = hashOf(PNG);
+    let held = true;
+    s.kernel.provide('lifecycle.holds', {
+      active: () => true,
+      isHeld: async (_r: string, subj: { pubkey?: string }) => held && subj.pubkey === key.pk,
+    });
+    expect((await put(s, key, PNG)).status).toBe(200);
+    const now = s.ports.clock.now();
+    const own = (await s.ports.blobIndex.owners('main', sha))[0]!;
+    await s.ports.blobIndex.addOwner({ ...own, expiresAt: now + 10 });
+    s.ports.clock.advance(60);
+    await s.ports.scheduler.tick(BLOSSOM_GC_JOB);
+    const kept = (await s.ports.blobIndex.owners('main', sha))[0];
+    expect(kept?.pubkey).toBe(key.pk);
+    expect(kept?.expiresAt).toBe(s.ports.clock.now() + 86_400);
+
+    held = false;
+    s.ports.clock.advance(86_401);
+    await s.ports.scheduler.tick(BLOSSOM_GC_JOB);
+    expect(await s.ports.blobIndex.refCount(sha)).toBe(0);
+  });
 });
 
 describe('mirror (BUD-04)', () => {
@@ -669,6 +694,9 @@ describe('admin actions and health', () => {
       items: Array<{ sha256: string }>;
     };
     expect(listed.items.map((i) => i.sha256)).toEqual([sha]);
+    // Absolute URL on the relay's public URL; no thumbnail without the media module.
+    expect(listed.items[0]).toMatchObject({ url: `${BASE}/${sha}.png` });
+    expect(listed.items[0]).not.toHaveProperty('thumbUrl');
 
     const del = s.kernel.actions.get('media.delete-blob')!;
     const input = del.input.parse({ sha256: sha });

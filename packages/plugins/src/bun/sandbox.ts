@@ -22,7 +22,24 @@ import type { PluginApi, PluginManifest } from '../sdk/index.ts';
 import { toCtxView } from '../sdk/index.ts';
 import type { HostToWorker, RpcMethod, WorkerToHost } from './protocol.ts';
 
-const WORKER_URL = new URL('./worker-entry.ts', import.meta.url).href;
+/** Worker script: next to this file when run from source. */
+export const DEFAULT_WORKER_URL = new URL('./worker-entry.ts', import.meta.url).href;
+let workerUrl = DEFAULT_WORKER_URL;
+
+/**
+ * Where the sandbox worker script is. A single-file binary (`bun build --compile`)
+ * embeds `worker-entry.ts` as an extra entrypoint; the generated binary entry calls
+ * this with its path inside the embedded file system (relative to the build root,
+ * e.g. `./plugins/src/bun/worker-entry.ts`), because `import.meta.url` of the
+ * bundled code no longer points next to this file.
+ */
+export function setSandboxWorkerUrl(url: string): void {
+  workerUrl = url;
+}
+
+export function sandboxWorkerUrl(): string {
+  return workerUrl;
+}
 
 export interface SandboxOptions {
   id: string;
@@ -80,7 +97,7 @@ export class WorkerSandbox implements LoadedPlugin {
 
   private spawn(): Promise<void> {
     const o = this.opts;
-    const worker = new Worker(WORKER_URL, { smol: true, env: {} } as WorkerOptions);
+    const worker = new Worker(workerUrl, { smol: true, env: {} } as WorkerOptions);
     this.worker = worker;
     return new Promise<void>((resolve, reject) => {
       let settled = false;

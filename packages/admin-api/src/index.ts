@@ -80,6 +80,7 @@ export const adminApiModule = defineModule({
     const dir = new Directory(ports);
     const sessions = new SessionService(ports, () => ({
       ttlSeconds: settings().sessionTtlSeconds,
+      maxAgeSeconds: settings().sessionMaxAgeSeconds,
       rotationDays: settings().keyRotationDays,
       issuer: `beamhop:${kernel.config().node.id}`,
     }));

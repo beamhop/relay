@@ -135,6 +135,12 @@ export interface Kernel {
   /** Module section from `config.modules[id]`, validated by that module's schema. */
   moduleConfig<T>(id: string): T | undefined;
   /**
+   * `configSchema` of every registered module that declares one, keyed by module id
+   * (validation of `config.modules.<id>` on config proposals, settings forms).
+   * Optional for non-core kernel implementations.
+   */
+  moduleSchemas?(): Record<string, z.ZodType>;
+  /**
    * Shared Hono app (runs on Bun and Cloudflare). The runtime sets `route` before dispatch;
    * admin-api auth middleware sets `principal`. Modules add routes directly.
    */
@@ -207,6 +213,7 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
   const listeners = new Set<(n: BeamhopConfig, p: BeamhopConfig) => void>();
   const services = new Map<string, unknown>();
   const enabled = new Set<string>();
+  const schemas: Record<string, z.ZodType> = {};
   let limitsResolver: ((relay: RelayConfig, tier?: string) => EffectiveLimits) | null = null;
   let notifier: (n: Notification) => Promise<void> = async () => {};
 
@@ -237,6 +244,9 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     },
     moduleConfig<T>(id: string) {
       return current.modules[id] as T | undefined;
+    },
+    moduleSchemas() {
+      return { ...schemas };
     },
     http: createKernelHttp(),
     authProviders: [],
@@ -270,6 +280,7 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     }
     await m.register(kernel);
     enabled.add(m.id);
+    if (m.configSchema) schemas[m.id] = m.configSchema;
   }
   for (const m of ordered) await m.start?.(kernel);
   return kernel;

@@ -39,6 +39,33 @@ export const GROUPS_SERVICE = 'relay.groups';
 export const GROUPS_COLLECTION = 'relay.groups';
 export const GROUPS_KEY_COLLECTION = 'relay.groups.key';
 
+/** `relay.groups.key/<relayId>`: plain, or wrapped by `ports.keyWrapper` (enterprise key vault). */
+export interface StoredGroupKey {
+  pubkey: string;
+  createdAt: number;
+  secretKey?: string;
+  /** base64 of the key-wrapper ciphertext of the 32-byte secret key. */
+  wrapped?: string;
+  provider?: string;
+}
+
+const toB64 = (u: Uint8Array) => {
+  let s = '';
+  for (const b of u) s += String.fromCharCode(b);
+  return btoa(s);
+};
+const fromB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const hexToBytes = (hex: string) => {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+};
+const bytesToHexStr = (b: Uint8Array) => {
+  let s = '';
+  for (const x of b) s += x.toString(16).padStart(2, '0');
+  return s;
+};
+
 export const GROUP_METADATA_KIND = 39000;
 export const GROUP_ADMINS_KIND = 39001;
 export const GROUP_MEMBERS_KIND = 39002;
@@ -172,23 +199,51 @@ export class GroupsService {
     return (await this.relayKey(relayId)).pubkey;
   }
 
+  /**
+   * Stored shapes: plain `{ secretKey, pubkey, createdAt }`, or — once an enterprise
+   * key vault wrapped it (same shape as the alerts DM key) —
+   * `{ pubkey, createdAt, wrapped, provider }` unwrapped through `ports.keyWrapper`.
+   * New keys are stored wrapped when a key wrapper is configured.
+   */
   private async loadKey(relayId: RelayId): Promise<{ pubkey: string; secretKey: string }> {
     const docs = this.kernel.ports.docs;
-    type Stored = { secretKey: string; pubkey: string; createdAt: number };
-    const existing = await docs.get<Stored>(GROUPS_KEY_COLLECTION, relayId);
-    if (existing) return { pubkey: existing.pubkey, secretKey: existing.secretKey };
+    const existing = await docs.get<StoredGroupKey>(GROUPS_KEY_COLLECTION, relayId);
+    if (existing) return this.openKey(existing);
     const secretKey = generateSecretKey();
-    const next: Stored = {
-      secretKey,
-      pubkey: getPublicKey(secretKey),
-      createdAt: this.kernel.ports.clock.now(),
-    };
-    if (await docs.cas<Stored>(GROUPS_KEY_COLLECTION, relayId, null, next)) {
-      return { pubkey: next.pubkey, secretKey };
+    const pubkey = getPublicKey(secretKey);
+    const createdAt = this.kernel.ports.clock.now();
+    const wrapper = this.kernel.ports.keyWrapper;
+    const next: StoredGroupKey = wrapper
+      ? {
+          pubkey,
+          createdAt,
+          wrapped: toB64(await wrapper.wrap(hexToBytes(secretKey))),
+          provider: wrapper.provider,
+        }
+      : { secretKey, pubkey, createdAt };
+    if (await docs.cas<StoredGroupKey>(GROUPS_KEY_COLLECTION, relayId, null, next)) {
+      return { pubkey, secretKey };
     }
-    const won = await docs.get<Stored>(GROUPS_KEY_COLLECTION, relayId);
+    const won = await docs.get<StoredGroupKey>(GROUPS_KEY_COLLECTION, relayId);
     if (!won) throw new Error('could not create the group signing key');
-    return { pubkey: won.pubkey, secretKey: won.secretKey };
+    return this.openKey(won);
+  }
+
+  private async openKey(rec: StoredGroupKey): Promise<{ pubkey: string; secretKey: string }> {
+    if (rec.secretKey) return { pubkey: rec.pubkey, secretKey: rec.secretKey };
+    if (!rec.wrapped) throw new Error('the group signing key record is empty');
+    const wrapper = this.kernel.ports.keyWrapper;
+    if (!wrapper)
+      throw new Error('the group signing key is wrapped but no key wrapper is configured');
+    const raw = await wrapper.unwrap(fromB64(rec.wrapped));
+    try {
+      const secretKey = bytesToHexStr(raw);
+      if (getPublicKey(secretKey) !== rec.pubkey)
+        throw new Error('the unwrapped group signing key does not match its public key');
+      return { pubkey: rec.pubkey, secretKey };
+    } finally {
+      raw.fill(0);
+    }
   }
 
   // ───────────────────────── reads ─────────────────────────

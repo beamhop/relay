@@ -15,6 +15,10 @@
  * replaceable/addressable events, and deletion requests (kinds 5, 62), are
  * kept unless a rule names their kind explicitly.
  *
+ * Retention providers (`lifecycle.retentionProviders`, e.g. compliance retention by
+ * IdP group) can only lengthen this: the author's period is the longest of the value
+ * above and every provider answer (see retention-providers.ts).
+ *
  * Every deletion first asks the legal-hold registry (`lifecycle.holds`).
  */
 import {
@@ -25,6 +29,7 @@ import {
   type RelayId,
   kindClass,
 } from '@beamhop/core';
+import { longest } from './retention-providers.ts';
 import type { LifecycleRuntime } from './runtime.ts';
 import { COL, type StorageCap } from './settings.ts';
 
@@ -215,24 +220,48 @@ export class RetentionEngine {
       return r.complete;
     };
 
+    // Retention providers (longest wins), memoized per author for this pass.
+    const providers = this.rt.retentionProviders;
+    const providerDays = new Map<string, number | undefined>();
+    const daysOf = async (pubkey: string): Promise<number | undefined> => {
+      if (!providers.active()) return undefined;
+      if (providerDays.has(pubkey)) return providerDays.get(pubkey);
+      const d = await providers.daysFor(relay.id, pubkey);
+      providerDays.set(pubkey, d);
+      return d;
+    };
+    const older = (e: NostrEvent, days: number | undefined) =>
+      days !== undefined && e.created_at <= now - days * DAY;
+
     for (const g of plan.kindRules) {
-      if (!(await sweepKey(`k:${g.kinds.join(',')}`, { kinds: g.kinds }, now - g.days * DAY)))
+      const decide = providers.active()
+        ? async (e: NostrEvent) => older(e, longest(g.days, await daysOf(e.pubkey)))
+        : undefined;
+      if (
+        !(await sweepKey(`k:${g.kinds.join(',')}`, { kinds: g.kinds }, now - g.days * DAY, decide))
+      )
         break;
     }
 
-    if (complete && plan.minGeneralDays !== undefined) {
+    const providerMin = providers.active() ? await providers.minDays(relay.id) : undefined;
+    const generalFrom =
+      plan.minGeneralDays === undefined
+        ? providerMin
+        : providerMin === undefined
+          ? plan.minGeneralDays
+          : Math.min(plan.minGeneralDays, providerMin);
+    if (complete && generalFrom !== undefined) {
       const ruled = new Set(plan.kindRules.flatMap((g) => g.kinds));
       const tiers = new Map<string, string>();
       const fallback = plan.genericDays ?? plan.goalDays;
-      await sweepKey('general', {}, now - plan.minGeneralDays * DAY, async (e) => {
+      await sweepKey('general', {}, now - generalFrom * DAY, async (e) => {
         if (ruled.has(e.kind) || isProtectedKind(e.kind)) return false;
         let tier = tiers.get(e.pubkey);
         if (tier === undefined) {
           tier = await this.rt.tierOf(relay, e.pubkey);
           tiers.set(e.pubkey, tier);
         }
-        const days = plan.tierDays[tier] ?? fallback;
-        return days !== undefined && e.created_at <= now - days * DAY;
+        return older(e, longest(plan.tierDays[tier] ?? fallback, await daysOf(e.pubkey)));
       });
     }
 
@@ -276,8 +305,13 @@ export class RetentionEngine {
     const relay = this.rt.kernel.relay(p.relayId);
     if (!relay) return;
     const tier = await this.rt.tierOf(relay, p.pubkey);
-    const days = relay.tiers.find((t) => t.id === tier)?.retentionDays;
-    if (!days) return;
+    const tierDays = relay.tiers.find((t) => t.id === tier)?.retentionDays || undefined;
+    const providers = this.rt.retentionProviders;
+    const days = longest(
+      tierDays,
+      providers.active() ? await providers.daysFor(p.relayId, p.pubkey) : undefined,
+    );
+    if (!days || !Number.isFinite(days)) return;
     const own = (await this.ports.blobIndex.owners(p.relayId, p.sha256)).find(
       (o) => o.pubkey === p.pubkey,
     );

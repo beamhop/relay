@@ -12,6 +12,7 @@ import {
 } from '@beamhop/core';
 import { z } from 'zod';
 import { processorNames } from './composite.ts';
+import { relayPublicUrl, variantsView } from './routes.ts';
 import { MATCHES, type MatchRecord, type MediaService, mediaKind, scanGated } from './service.ts';
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/, 'must be 64 lowercase hex characters');
@@ -245,8 +246,17 @@ export function registerActions(kernel: Kernel, svc: MediaService): void {
         const type = await blobType(kernel, relay.id, input.sha256);
         const rec = await svc.generateVariants(relay.id, input.sha256, type, { force: true });
         const n = rec?.variants.length ?? 0;
+        const base = relayPublicUrl(kernel, relay.id);
         return {
-          output: rec,
+          output: rec
+            ? {
+                ...rec,
+                // Absolute URLs (relay public URL) so an admin app on another host can load them.
+                ...(base
+                  ? { view: variantsView(base, input.sha256, type, rec, n ? 'ready' : 'none') }
+                  : {}),
+              }
+            : rec,
           summary: n ? `Made ${n} cop${n === 1 ? 'y' : 'ies'}` : 'No copies were made',
         };
       },

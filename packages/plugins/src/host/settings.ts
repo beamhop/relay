@@ -34,7 +34,10 @@ export const PluginsModuleSchema = z
   .object({
     /** Install directory. Default `<dataDir>/plugins`. */
     dir: z.string().optional(),
-    /** Signed remote catalog (empty = built-in catalog only). */
+    /**
+     * Extra catalog (empty = built-in catalog only): `https://…` (signed, needs
+     * `catalogPubkeys`) or `file:///path/catalog.json` for offline installs.
+     */
     catalogUrl: z.string().default(''),
     /** Hex pubkeys trusted to sign the remote catalog. */
     catalogPubkeys: z.array(z.string().regex(/^[0-9a-f]{64}$/)).default([]),

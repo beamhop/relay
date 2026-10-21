@@ -75,6 +75,7 @@ export function registerRoutes(kernel: Kernel, svc: BlossomService): void {
       /\/+$/,
       '',
     );
+    if (route?.publicUrl) svc.notePublicUrl(relay.id, publicUrl);
     return { relay, publicUrl, host };
   };
 

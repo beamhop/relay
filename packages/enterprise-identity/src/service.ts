@@ -15,7 +15,7 @@ import {
 import type { EnterpriseIdentityConfig, IdpConfig, KeyModel } from './config.ts';
 import { entitlementsOf, groupIdentifiers } from './mapping.ts';
 import type { IdClaims } from './oidc.ts';
-import type { Services } from './services.ts';
+import type { Services, SiemRecordInput } from './services.ts';
 import type { TeamSessions } from './sessions.ts';
 import { type Binding, COL, type IdentityStore, bindingKey } from './store.ts';
 import { HEX64, sha256Hex, slug } from './util.ts';
@@ -286,6 +286,14 @@ export class EnterpriseIdentityService {
     if (pubkey) report.pubkey = pubkey;
     const wasActive = b.status !== 'suspended' && b.status !== 'deleted';
 
+    // Live WebSocket sessions on this node (other nodes drop theirs when the revocation
+    // below is published on `enterprise.revoked`; the revocation list covers the rest).
+    if (pubkey) {
+      const eng = this.svc.engine();
+      if (eng?.disconnectPubkey)
+        report.connectionsClosed = await eng.disconnectPubkey(pubkey, reason);
+    }
+
     // 1. Revoke immediately: unbind + revocation list (checked on every read/write).
     const next: Binding = { ...b, status, offboardedAt: b.offboardedAt ?? this.now() };
     if (pubkey) {
@@ -301,13 +309,6 @@ export class EnterpriseIdentityService {
       .keyvault()
       ?.revokeSessions?.(key)
       ?.catch((err) => this.warn('bunker session revoke failed', err));
-
-    // Live WebSocket sessions (relay hook if available; revocation list covers the rest).
-    if (pubkey) {
-      const eng = this.svc.engine();
-      if (eng?.disconnectPubkey)
-        report.connectionsClosed = await eng.disconnectPubkey(pubkey, reason);
-    }
 
     // Admin sessions/tokens: dropping the admin record invalidates both.
     report.adminRevoked = await this.revokeAdmin(b, pubkey);
@@ -376,6 +377,24 @@ export class EnterpriseIdentityService {
     }
 
     if (wasActive) await this.afterChange();
+    this.siem({
+      stream: 'auth',
+      type: 'identity.offboarded',
+      summary: `${b.name ?? b.email ?? key} was ${status === 'deleted' ? 'removed' : 'suspended'}: access revoked`,
+      data: {
+        binding: key,
+        idp: b.idp,
+        status,
+        reason,
+        ...(pubkey ? { pubkey } : {}),
+        adminRevoked: report.adminRevoked,
+        sessionsClosed: report.sessionsClosed,
+        connectionsClosed: report.connectionsClosed,
+        groupsLeft: report.groupsLeft,
+        blobsTransferred: report.blobsTransferred,
+        ...(report.keyDestructionAt ? { keyDestructionAt: report.keyDestructionAt } : {}),
+      },
+    });
     this.log('person offboarded', {
       binding: key,
       reason,
@@ -404,6 +423,15 @@ export class EnterpriseIdentityService {
     return revoked;
   }
 
+  /** Push a record to the compliance SIEM export when that module is loaded. */
+  siem(r: SiemRecordInput): void {
+    try {
+      this.svc.siem()?.record(r);
+    } catch (err) {
+      this.warn('SIEM record failed', err);
+    }
+  }
+
   private warn(msg: string, err: unknown) {
     this.kernel.ports.logger.log('warn', msg, {
       module: 'enterprise-identity',
@@ -425,6 +453,24 @@ export class EnterpriseIdentityService {
     return next;
   }
 
+  /**
+   * Legal hold check for a person's key: `lifecycle.holds.isHeld(relayId, { pubkey })`
+   * on every relay (holds are relay-scoped). A failing check counts as held (fail safe).
+   */
+  async isHeldAnywhere(pubkey: string | undefined): Promise<boolean> {
+    const holds = this.svc.holds();
+    if (!holds || !pubkey) return false;
+    for (const r of this.kernel.config().relays) {
+      try {
+        if (await holds.isHeld(r.id, { pubkey })) return true;
+      } catch (err) {
+        this.warn('legal hold check failed', err);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Scheduled: destroy managed keys whose grace period is over, unless on legal hold. */
   async processKeyDestruction(): Promise<number> {
     const docs = this.kernel.ports.docs;
@@ -432,13 +478,7 @@ export class EnterpriseIdentityService {
     let destroyed = 0;
     for (const { key, value } of page.items) {
       if (value.status === 'destroyed' || value.dueAt > this.now()) continue;
-      const holds = this.svc.holds();
-      const held = holds
-        ? await holds.isHeld({
-            subjectId: value.subjectId,
-            ...(value.pubkey ? { pubkey: value.pubkey } : {}),
-          })
-        : false;
+      const held = await this.isHeldAnywhere(value.pubkey);
       let status: KeyDestructionRecord['status'];
       const kv = this.svc.keyvault();
       if (held) status = 'held';
@@ -455,6 +495,87 @@ export class EnterpriseIdentityService {
       });
     }
     return destroyed;
+  }
+
+  // ───────────── directory views (compliance, key vault) ─────────────
+
+  /** Binding for a pubkey: the current key, or the key a person had before offboarding. */
+  private async bindingOfPubkey(pubkey: string): Promise<Binding | null> {
+    const b = await this.store.byAlias(`pk:${pubkey}`);
+    if (b && (b.npub === pubkey || b.previousNpub === pubkey)) return b;
+    for (const x of await this.store.list())
+      if (x.npub === pubkey || x.previousNpub === pubkey) return x;
+    return null;
+  }
+
+  private async groupNames(b: Binding): Promise<string[]> {
+    const out = new Set<string>();
+    for (const ref of b.groups) {
+      out.add(ref);
+      const g = await this.store.getGroup(b.idp, ref);
+      if (!g) continue;
+      for (const v of [g.id, g.displayName, g.externalId, g.email]) if (v) out.add(v);
+    }
+    for (const v of [...out]) out.add(v.toLowerCase());
+    return [...out];
+  }
+
+  /**
+   * IdP groups of the person bound to `pubkey` (refs, ids, display names, external
+   * ids and emails, as given and lowercased) — retention by group, legal holds.
+   */
+  async groupsOf(pubkey: string): Promise<string[]> {
+    const b = await this.bindingOfPubkey(pubkey);
+    return b ? this.groupNames(b) : [];
+  }
+
+  /**
+   * Pubkey bound to a directory subject (IdP subject id, binding key `<idp>:<subject>`,
+   * email or SCIM id). Offboarded people resolve to their last key (holds, eDiscovery).
+   */
+  async pubkeyOf(subject: string, idp?: string): Promise<string | null> {
+    const pk = (b: Binding | null) => b?.npub ?? b?.previousNpub ?? null;
+    if (idp) {
+      const b =
+        (await this.store.get(bindingKey(idp, subject))) ??
+        (await this.store.byAlias(`sub:${idp}:${subject}`));
+      if (b) return pk(b);
+    }
+    const direct = await this.store.get(subject);
+    if (direct && (!idp || direct.idp === idp)) return pk(direct);
+    if (subject.includes('@')) {
+      const byMail = await this.store.byEmail(subject);
+      if (byMail && (!idp || byMail.idp === idp)) return pk(byMail);
+    }
+    const byScim = await this.store.byScimId(subject);
+    if (byScim && (!idp || byScim.idp === idp)) return pk(byScim);
+    for (const b of await this.store.list())
+      if (b.subject === subject && (!idp || b.idp === idp)) return pk(b);
+    return null;
+  }
+
+  /** Everyone with a (current or last) key, with their groups — usage reports, eDiscovery. */
+  async members(): Promise<Array<{ pubkey: string; groups: string[] }>> {
+    const out: Array<{ pubkey: string; groups: string[] }> = [];
+    for (const b of await this.store.list()) {
+      const pubkey = b.npub ?? b.previousNpub;
+      if (pubkey) out.push({ pubkey, groups: await this.groupNames(b) });
+    }
+    return out;
+  }
+
+  /**
+   * Is the team (SSO) session `sessionId` still valid: recorded, not expired, and its
+   * person still active? `subjectId` (binding key) narrows the lookup. Used by the
+   * key vault's bunker to end managed-key signing when the SSO session ends.
+   */
+  async isSessionActive(sessionId: string, subjectId?: string): Promise<boolean> {
+    const rec = subjectId
+      ? await this.sessions.get(subjectId, sessionId)
+      : await this.sessions.find(sessionId);
+    if (!rec || rec.expiresAt <= this.now()) return false;
+    const b = await this.store.get(rec.bindingKey);
+    return !!b && b.status !== 'suspended' && b.status !== 'deleted';
   }
 
   // ───────────────────────── company identity ─────────────────────────

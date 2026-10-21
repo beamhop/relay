@@ -17,7 +17,17 @@ export const COLLECTIONS = {
   recycle: 'policy.recycle',
   wot: 'policy.wot',
   seen: 'policy.seen',
+  active: 'policy.active',
 } as const;
+
+/** Last-activity timestamps are persisted at most this often per pubkey (seconds). */
+export const ACTIVE_RESOLUTION_SECONDS = 900;
+
+export interface ActivityEntry {
+  pubkey: string;
+  /** Unix seconds of the latest accepted post / sign-in / upload (±ACTIVE_RESOLUTION_SECONDS). */
+  lastSeen: number;
+}
 
 export const INVALIDATE_CHANNEL = 'policy.invalidate';
 
@@ -91,6 +101,7 @@ export type InviteResult =
 export class PolicyState {
   private caches = new Map<RelayId, Promise<RelayCache>>();
   private seen = new Map<string, number>();
+  private activeWritten = new Map<string, number>();
   readonly origin: string;
 
   constructor(private readonly ports: Ports) {
@@ -313,6 +324,39 @@ export class PolicyState {
       this.remember(k, v);
     }
   }
+  /** Every pubkey first seen on this relay, with the time (unix seconds). */
+  async listSeen(relayId: RelayId): Promise<Array<{ pubkey: string; at: number }>> {
+    const prefix = `${relayId}:`;
+    return (await listAll<number>(this.ports.docs, COLLECTIONS.seen, prefix)).map((x) => ({
+      pubkey: x.key.slice(prefix.length),
+      at: x.value,
+    }));
+  }
+
+  // ── last activity (throttled; for the people list) ──
+  async markActive(relayId: RelayId, pubkey: string, at: number): Promise<void> {
+    const k = rkey(relayId, pubkey);
+    const prev = this.activeWritten.get(k);
+    if (prev !== undefined && at - prev < ACTIVE_RESOLUTION_SECONDS) return;
+    if (this.activeWritten.size >= 200_000) {
+      const first = this.activeWritten.keys().next().value;
+      if (first !== undefined) this.activeWritten.delete(first);
+    }
+    this.activeWritten.set(k, at);
+    await this.ports.docs.put<ActivityEntry>(COLLECTIONS.active, k, { pubkey, lastSeen: at });
+  }
+  async listActive(relayId: RelayId): Promise<ActivityEntry[]> {
+    return (await listAll<ActivityEntry>(this.ports.docs, COLLECTIONS.active, `${relayId}:`)).map(
+      (x) => x.value,
+    );
+  }
+  async listMutes(relayId: RelayId): Promise<MuteEntry[]> {
+    return [...(await this.load(relayId)).mutes.values()];
+  }
+  async listTiers(relayId: RelayId): Promise<TierEntry[]> {
+    return [...(await this.load(relayId)).tiers.values()];
+  }
+
   private remember(k: string, v: number): void {
     if (this.seen.size >= 200_000) {
       const first = this.seen.keys().next().value;

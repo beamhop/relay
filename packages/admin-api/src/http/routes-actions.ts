@@ -124,6 +124,41 @@ function context(
   return ctx;
 }
 
+/**
+ * Two-person rule errors (`ApprovalError` from enterprise-compliance, matched by
+ * shape so admin-api never imports that package) → 403/409/410 instead of 500.
+ */
+const APPROVAL_STATUS: Record<string, 403 | 409 | 410> = {
+  self_approval: 403,
+  forbidden: 403,
+  interactive_only: 403,
+  not_pending: 409,
+  not_approved: 409,
+  mismatch: 409,
+  expired: 410,
+  used: 410,
+  not_found: 410,
+};
+
+export function approvalHttpError(err: unknown): HttpError | null {
+  if (!(err instanceof Error) || err.name !== 'ApprovalError') return null;
+  const code = (err as Error & { code?: unknown }).code;
+  const status = typeof code === 'string' ? APPROVAL_STATUS[code] : undefined;
+  if (!status) return null;
+  return new HttpError(status, `approval_${code}`, err.message, `two-person rule: ${code}`);
+}
+
+/**
+ * Put a top-level `_approvalId` (run/preview body) into the action input, where the
+ * approval gate looks for it. An id inside `input` wins.
+ */
+export function withApprovalId(input: unknown, approvalId: string | undefined): unknown {
+  if (!approvalId) return input;
+  if (input === undefined || input === null) return { _approvalId: approvalId };
+  if (typeof input !== 'object' || Array.isArray(input)) return input;
+  return { _approvalId: approvalId, ...(input as Record<string, unknown>) };
+}
+
 export interface RunOutcome {
   output: unknown;
   summary: string;
@@ -156,6 +191,8 @@ export async function runAction(
     });
     await deps.audit.flush();
     if (err instanceof HttpError) throw err;
+    const approval = approvalHttpError(err);
+    if (approval) throw approval;
     throw new HttpError(500, 'action_failed', `“${def.title}” did not work`, String(err));
   }
   const out: RunOutcome = { output: result.output, summary: result.summary };
@@ -253,6 +290,11 @@ async function undoToken(deps: Deps, token: string, principal: Principal): Promi
 const RunBody = z.object({
   input: z.unknown().optional().describe('Action input (see the catalog’s inputSchema)'),
   reason: z.string().max(500).optional().describe('Why (kept in the audit log)'),
+  _approvalId: z
+    .string()
+    .max(64)
+    .optional()
+    .describe('Approved request id, for actions that need a second admin (two-person rule)'),
 });
 
 export function actionRoutes(api: Api, deps: Deps): void {
@@ -296,7 +338,13 @@ export function actionRoutes(api: Api, deps: Deps): void {
       const def = findAction(deps, c.req.param('id') ?? '', relayId);
       return c.json({
         action: def.id,
-        diff: await previewAction(deps, def, body.input, requirePrincipal(c), relayId),
+        diff: await previewAction(
+          deps,
+          def,
+          withApprovalId(body.input, body._approvalId),
+          requirePrincipal(c),
+          relayId,
+        ),
       });
     },
   );
@@ -316,7 +364,14 @@ export function actionRoutes(api: Api, deps: Deps): void {
     async (c, { body, relayId }) => {
       const def = findAction(deps, c.req.param('id') ?? '', relayId);
       return c.json(
-        await runAction(deps, def, body.input, requirePrincipal(c), relayId, body.reason),
+        await runAction(
+          deps,
+          def,
+          withApprovalId(body.input, body._approvalId),
+          requirePrincipal(c),
+          relayId,
+          body.reason,
+        ),
       );
     },
   );

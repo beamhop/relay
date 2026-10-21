@@ -69,6 +69,18 @@ describe('PaaS templates run Beamhop in proxy mode on a volume', () => {
   });
 });
 
+describe('one-click buttons read templates from the repo root', () => {
+  test('render.yaml at the root is the same blueprint as deploy/render/render.yaml', () => {
+    expect(yaml('render.yaml')).toEqual(yaml('deploy/render/render.yaml'));
+  });
+
+  test('.do/deploy.template.yaml wraps deploy/digitalocean/app.yaml in `spec:`', () => {
+    const t = yaml('.do/deploy.template.yaml');
+    expect(Object.keys(t)).toEqual(['spec']);
+    expect(t.spec).toEqual(yaml('deploy/digitalocean/app.yaml'));
+  });
+});
+
 describe('VM templates', () => {
   for (const f of ['deploy/digitalocean/cloud-init.yaml', 'deploy/hetzner/cloud-init.yaml'])
     test(f, () => {

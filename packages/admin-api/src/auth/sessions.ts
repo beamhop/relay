@@ -21,6 +21,8 @@ export interface SessionClaims {
   jti: string;
   exp: number;
   iat: number;
+  /** When the person originally signed in (sliding refresh keeps it; bounds the absolute max age). */
+  authTime: number;
 }
 
 export interface IssuedSession {
@@ -31,7 +33,13 @@ export interface IssuedSession {
 export class SessionService {
   constructor(
     private readonly ports: Ports,
-    private readonly opts: () => { ttlSeconds: number; rotationDays: number; issuer: string },
+    private readonly opts: () => {
+      ttlSeconds: number;
+      rotationDays: number;
+      issuer: string;
+      /** Absolute max age of a sign-in across refreshes (defaults to unbounded). */
+      maxAgeSeconds?: number;
+    },
   ) {}
 
   private async keys(): Promise<SigningKey[]> {
@@ -68,12 +76,22 @@ export class SessionService {
     return key;
   }
 
-  async issue(sub: string, via: Principal['via']): Promise<IssuedSession> {
+  /**
+   * Issue a session. `authTime` (refresh) keeps the original sign-in time so the
+   * session can never outlive `maxAgeSeconds` after it, however often it is refreshed.
+   */
+  async issue(
+    sub: string,
+    via: Principal['via'],
+    opts: { authTime?: number } = {},
+  ): Promise<IssuedSession> {
     const key = await this.currentKey();
     const now = this.ports.clock.now();
-    const { ttlSeconds, issuer } = this.opts();
-    const exp = now + ttlSeconds;
-    const token = await new SignJWT({ via })
+    const { ttlSeconds, issuer, maxAgeSeconds } = this.opts();
+    const authTime = opts.authTime ?? now;
+    let exp = now + ttlSeconds;
+    if (maxAgeSeconds) exp = Math.min(exp, authTime + maxAgeSeconds);
+    const token = await new SignJWT({ via, auth_time: authTime })
       .setProtectedHeader({ alg: 'HS256', kid: key.kid, typ: 'JWT' })
       .setSubject(sub)
       .setIssuer(issuer)
@@ -108,10 +126,23 @@ export class SessionService {
         jti: payload.jti,
         exp: payload.exp,
         iat: payload.iat,
+        authTime: typeof payload.auth_time === 'number' ? payload.auth_time : payload.iat,
       };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Sliding refresh: a fresh token for a still-valid session, bounded by the
+   * absolute max age. Null when the session can no longer be extended.
+   */
+  async refresh(claims: SessionClaims): Promise<IssuedSession | null> {
+    const now = this.ports.clock.now();
+    const { maxAgeSeconds } = this.opts();
+    if (claims.exp <= now) return null;
+    if (maxAgeSeconds && claims.authTime + maxAgeSeconds <= now) return null;
+    return this.issue(claims.sub, claims.via, { authTime: claims.authTime });
   }
 
   async revoke(claims: Pick<SessionClaims, 'jti' | 'exp'>): Promise<void> {

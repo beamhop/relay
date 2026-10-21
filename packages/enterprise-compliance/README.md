@@ -9,7 +9,7 @@ in the config (isolation rule §12.0).
 | `enterprise-network` | `modules.enterprise-network` | IP/CIDR allowlists, mTLS device certificates, zero-trust proxies (Google IAP, Cloudflare Access, Entra App Proxy), private-only mode |
 
 ## Approvals (two-person rule, §12.9)
-- These actions are gated by default: `keyvault.escrow-decrypt`, `keyvault.destroy-key`,
+- These actions are gated by default: `escrow.decrypt-dm`, `keyvault.destroy-key`,
   `keyvault.rotate-kek`, `compliance.release-hold`, `moderation.bulk-delete`,
   `enterprise.disconnect-idp`, `backups.restore`. Every action marked `sensitive: true`
   is gated too (`approvals.gateAllSensitive`). Ids that are not registered on the node are ignored.

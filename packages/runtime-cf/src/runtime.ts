@@ -66,6 +66,9 @@ export const cfRuntimeModule: BeamhopModule = defineModule({
   },
 });
 
+/** Module id of the plugin host (`createBundledPluginHost` from `@beamhop/plugins`). */
+export const PLUGIN_HOST_ID = 'plugins';
+
 export interface CloudflareRuntimeOptions extends BundledModules {
   /** Config bundled at build time (raw; validated with `parseConfig`). `BEAMHOP_CONFIG` wins. */
   config?: unknown;
@@ -156,10 +159,17 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
       logger,
     });
     const media = env.IMAGES ? new CfImagesMediaProcessor(env.IMAGES) : undefined;
+    // With the bundled plugin host (`@beamhop/plugins`) in `modules`, it loads the
+    // enabled plugins itself; resolving them here too would register them twice.
+    const hostLoaded = (opts.modules ?? []).some((m) => m.id === PLUGIN_HOST_ID);
     const modules = [
       cfRuntimeModule,
       ...(opts.modules ?? []),
-      ...resolveModules(opts, baseConfig, (msg, fields) => logger.log('warn', msg, fields)),
+      ...resolveModules(
+        hostLoaded ? { builtins: opts.builtins ?? {} } : opts,
+        hostLoaded ? { ...baseConfig, plugins: [] } : baseConfig,
+        (msg, fields) => logger.log('warn', msg, fields),
+      ),
     ];
     const services: SharedServices = {
       env,

@@ -2,6 +2,7 @@
 /** Shared per-kernel state for the lifecycle module. */
 import type { BlobStore, Kernel, RelayConfig, RelayId } from '@beamhop/core';
 import { type LegalHolds, createHolds } from './holds.ts';
+import { type RetentionProviders, createRetentionProviders } from './retention-providers.ts';
 import { type LifecycleConfig, LifecycleConfigSchema, MODULE_ID } from './settings.ts';
 import type { SqlExecLike } from './sql.ts';
 
@@ -37,6 +38,7 @@ export interface LifecycleOptions {
 
 export class LifecycleRuntime {
   readonly holds: LegalHolds;
+  readonly retentionProviders: RetentionProviders;
   /** Restore in progress: writes are refused. */
   restoring = false;
   readonly bootAt: number;
@@ -48,6 +50,12 @@ export class LifecycleRuntime {
   ) {
     this.holds = createHolds((provider, err) =>
       kernel.ports.logger.log('warn', 'legal hold provider failed; treating as held', {
+        provider,
+        err: String(err),
+      }),
+    );
+    this.retentionProviders = createRetentionProviders((provider, err) =>
+      kernel.ports.logger.log('warn', 'retention provider failed; keeping the data', {
         provider,
         err: String(err),
       }),

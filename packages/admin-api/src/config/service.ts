@@ -308,6 +308,7 @@ export class ConfigService implements AdminConfigService {
         zodIssues(parsed.error),
       );
     const next = parsed.data;
+    this.validateModules(prev, next);
     if (scope) {
       // A relay-scoped change may only touch that relay, and may not rename it.
       const strip = (c: BeamhopConfig) => ({
@@ -335,6 +336,37 @@ export class ConfigService implements AdminConfigService {
     };
     await this.docs.put(PROPOSALS, proposal.id, proposal);
     return proposal;
+  }
+
+  /**
+   * Validate changed `modules.<id>` sections with each loaded module's own
+   * `configSchema` (core config leaves them opaque). Sections of modules that are
+   * not loaded on this node, and unchanged sections, are left alone.
+   */
+  private validateModules(prev: BeamhopConfig, next: BeamhopConfig): void {
+    const schemas = this.deps.kernel.moduleSchemas?.() ?? {};
+    const issues: Array<{ path: string; message: string }> = [];
+    const messages: string[] = [];
+    for (const [id, schema] of Object.entries(schemas)) {
+      const section = next.modules[id];
+      if (section === undefined || deepEqual(section, prev.modules[id])) continue;
+      const r = schema.safeParse(section);
+      if (r.success) continue;
+      messages.push(`modules.${id}: ${r.error.message}`);
+      for (const i of r.error.issues)
+        issues.push({
+          path: ['modules', id, ...i.path.map(String)].join('.'),
+          message: i.message,
+        });
+    }
+    if (issues.length)
+      throw new HttpError(
+        422,
+        'invalid_config',
+        'Some settings are not valid',
+        messages.join('\n'),
+        issues,
+      );
   }
 
   async commit(proposalId: string, principal: Principal, opts: { summary?: string } = {}) {
@@ -506,6 +538,7 @@ export class ConfigService implements AdminConfigService {
       );
     if (deepEqual(head.config, parsed.data))
       throw new HttpError(400, 'no_changes', 'There is nothing to change');
+    this.validateModules(head.config, parsed.data);
     const rec = opts.principalId.startsWith('token:')
       ? null
       : await this.deps.nameOf(opts.principalId);
