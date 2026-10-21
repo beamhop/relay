@@ -25,7 +25,7 @@
     <ItemLens
       lines={[
         `blossom.gc: erased ${s.erased}, expired ${s.expired}, scanned ${s.scanned}`,
-        `orphans kept (legal hold) ${s.orphans}, total freed ${s.totalFreedBytes} B`,
+        `orphans kept (on hold) ${s.orphans}, total freed ${s.totalFreedBytes} B`,
       ]}
     />
   </div>

@@ -44,6 +44,6 @@
       {#if (w.minutesSaved ?? 0) > 0}<li class="text-success">{m.mystats_saved({ minutes: w.minutesSaved ?? 0 })}</li>{/if}
     </ul>
     <p class="mt-2 text-xs text-muted-foreground">{m.mystats_goal({ minutes: stats.goalMinutes })} · {stats.privacy}</p>
-    <ItemLens lines={[`experience.my-stats: sessions=${w.sessions} actions=${w.actions} approvals=${w.suggestionsApproved ?? 0}`, 'local DocStore experience.admin-time; no telemetry']} />
+    <ItemLens lines={[`experience.my-stats: sessions=${w.sessions} actions=${w.actions} suggestionsApproved=${w.suggestionsApproved ?? 0}`, 'local DocStore experience.admin-time; no telemetry']} />
   </section>
 {/if}

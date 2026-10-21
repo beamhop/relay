@@ -65,33 +65,6 @@ const ALLOWLIST = VANILLA_ALLOWLIST;
 export const KNOWN_LEAKS: AllowEntry[] = [
   {
     term: 'SCIM',
-    context: /User sync \(SCIM\)|data-testid="scim-(url|token)"|\.scim\?\?/,
-    reason:
-      'Onboarding.svelte statically imports company/CompanySignIn.svelte, so its strings ship in a chunk every wizard user downloads. Fix: load it with a dynamic import.',
-  },
-  {
-    term: 'Entra',
-    context: /Entra ID \/ Office 365|Microsoft Entra or another|microsoft\|entra\|azure|"entra"/,
-    reason: 'Same static CompanySignIn import from Onboarding.svelte.',
-  },
-  {
-    term: 'Okta',
-    context: /Okta, Keycloak/,
-    reason: 'Same static CompanySignIn import from Onboarding.svelte.',
-  },
-  {
-    term: 'Company sign-in',
-    context: /enable company sign-in|Turn on company sign-in/,
-    reason: 'Same static CompanySignIn import from Onboarding.svelte.',
-  },
-  {
-    term: 'Company sign-in',
-    context: /"Company sign-in"\)/,
-    reason:
-      'Message company_title, used by the Settings link and the command palette (rendered only when the module is on, but the string ships to everyone).',
-  },
-  {
-    term: 'SCIM',
     context: /\["sso","company","scim"\]/,
     reason: 'CommandPalette.svelte search keywords for /settings/company.',
   },

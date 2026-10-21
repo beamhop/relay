@@ -66,6 +66,12 @@ export const VANILLA_ALLOWLIST: AllowEntry[] = [
     reason:
       'Wizard text wizard_org_later, shown only after picking the Company / Organization persona (the entry point, §12.0.1).',
   },
+  {
+    term: 'Company sign-in',
+    context: /"Company sign-in"\)/,
+    reason:
+      'Message company_title: the Settings entry and page title, shown only for the Organization persona or once company sign-in is on (the entry point, §12.0.1).',
+  },
 ];
 
 /** Hits not covered by `allow`. */

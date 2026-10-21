@@ -562,7 +562,7 @@
   "media_cleanup_line": "Cleanup ran {when} and freed {size}",
   "media_cleanup_never": "Cleanup has not run yet",
   "media_cleanup_next": "next {when}",
-  "media_cleanup_waiting": "{count} kept by a legal hold",
+  "media_cleanup_waiting": "{count} kept on hold",
   "media_in": "in {when}",
   "media_soon": "soon",
   "media_q_abuse": "Matched a known-abuse list",

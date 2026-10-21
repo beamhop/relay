@@ -22,7 +22,6 @@
   import { markRecoverySaved } from '$lib/checklist';
   import type { Persona, SelfCheck } from '$lib/api/types';
   import SignInMethods from './SignInMethods.svelte';
-  import CompanySignIn from '../company/CompanySignIn.svelte';
   import QrCode from '../QrCode.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
@@ -236,7 +235,12 @@
       <Building2 class="size-8 text-muted-foreground" />
       <h1 class="mt-4 text-2xl font-semibold tracking-tight">{m.wizard_org_title()}</h1>
       <p class="mt-2 text-sm text-muted-foreground" data-testid="org-intro">{m.wizard_org_body()}</p>
-      <div class="mt-4"><CompanySignIn compact /></div>
+      <div class="mt-4">
+        <!-- Lazy: company sign-in text only downloads after picking the Organization persona (§12.0). -->
+        {#await import('../company/CompanySignIn.svelte') then { default: CompanySignIn }}
+          <CompanySignIn compact />
+        {/await}
+      </div>
       <p class="mt-3 text-xs text-muted-foreground">{m.wizard_org_later()}</p>
       <div class="mt-auto flex gap-2 pt-8">
         <Button variant="secondary" class="flex-1" onclick={() => go('persona')}>{m.common_back()}</Button>
