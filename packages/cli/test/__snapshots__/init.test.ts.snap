@@ -1,0 +1,27 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`init YAML output (snapshot) is valid config 1`] = `
+"# Beamhop settings — created by \`beamhop init\` on 2026-10-21.
+# The admin app keeps this file and its own settings in sync; edit either.
+# Every option: https://beamhop.dev/docs/config (or \`beamhop config export\`).
+version: 1
+node:
+  listen: 0.0.0.0:3334
+  dataDir: ./data
+  tls:
+    # auto: get a free certificate when reachable on :443, otherwise expect a proxy
+    mode: auto
+    email: me@example.com
+storage:
+  driver: sqlite
+blobStorage:
+  driver: fs
+relays:
+  - id: main
+    hosts:
+      - relay.example.com
+    persona: private-team
+    info:
+      name: relay.example.com
+"
+`;
