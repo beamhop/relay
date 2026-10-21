@@ -21,10 +21,14 @@ export interface GeneratePluginOutput {
   enabled: false;
   problems: string[];
   note: string;
-  /** Not sent yet (backend gap): plain name / summary / declared permissions. */
+  /** Plain name / one-sentence summary / declared permissions (older servers omit them). */
   name?: string;
   summary?: string;
   permissions?: string[];
+  /** Test cases parsed by the server from the sandbox run (`tests` is the test file). */
+  testCases?: Array<{ name: string; ok: boolean; error?: string }>;
+  /** Phases that completed: writing → checking → testing → installing. */
+  steps?: string[];
 }
 
 export type WriterState =
@@ -167,6 +171,16 @@ export function declaredPermissions(o: GeneratePluginOutput): PluginPermission[]
   return PERMISSIONS.filter((p) => raw.includes(p));
 }
 
+/** Completed phases for the technical lens ("" when the server does not report them). */
+export function stepsLine(o: GeneratePluginOutput): string {
+  return o.steps?.length ? `steps: ${o.steps.join(' → ')}` : '';
+}
+
+/** Can the declared access be offered for approval (installed and asks for something)? */
+export function needsApproval(o: GeneratePluginOutput): boolean {
+  return o.installed && declaredPermissions(o).length > 0;
+}
+
 /** Hooks the plugin implements, for the technical lens. */
 export function pluginHooks(code: string): string[] {
   const hooks = ['onConnect', 'onAuth', 'onEvent', 'onReq', 'onUpload', 'onBlobServe'];
@@ -195,6 +209,12 @@ const RESULT_LINE = /^\s*(\(pass\)|\(fail\)|✓|✔|✗|✘|×)\s+(.+?)(?:\s+\[[
  * it names the tests (`(pass) suite > name`), else the names in the test file.
  */
 export function testCases(o: GeneratePluginOutput): TestCase[] {
+  if (o.testCases?.length)
+    return o.testCases.map((t) => ({
+      name: t.name,
+      ok: t.ok,
+      ...(!t.ok && t.error ? { detail: t.error } : {}),
+    }));
   const output = o.testResult?.output ?? '';
   const cases: TestCase[] = [];
   let pending: string[] = [];

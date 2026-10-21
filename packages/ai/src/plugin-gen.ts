@@ -215,6 +215,83 @@ export interface GeneratePluginOutput {
   enabled: false;
   problems: string[];
   note: string;
+  /** Plain name declared in `definePlugin({ name })`. */
+  name?: string;
+  /** One plain sentence: what the plugin does (its `description`, else the admin's words). */
+  summary?: string;
+  /** Permissions the code declares. They stay OFF until an admin approves them. */
+  permissions?: PluginPermissionName[];
+  /** Test cases from the sandbox run (`tests` is the test file itself). */
+  testCases?: PluginTestCase[];
+  /** Phases that completed, in order. */
+  steps?: PluginGenStep[];
+}
+
+export const PLUGIN_PERMISSIONS = ['read-events', 'write-events', 'network', 'docs'] as const;
+export type PluginPermissionName = (typeof PLUGIN_PERMISSIONS)[number];
+export type PluginGenStep = 'writing' | 'checking' | 'testing' | 'installing';
+export interface PluginTestCase {
+  name: string;
+  ok: boolean;
+  error?: string;
+}
+
+const stringField = (src: string, key: string): string | undefined => {
+  const m = src.match(new RegExp(`\\b${key}\\s*:\\s*(['"\`])((?:\\\\.|(?!\\1).)*)\\1`));
+  return m?.[2]?.replace(/\\(['"`\\])/g, '$1');
+};
+
+/** Name, one-sentence summary and declared permissions read from the plugin code. */
+export function describePlugin(
+  code: string,
+  fallbackSummary = '',
+): { name?: string; summary?: string; permissions: PluginPermissionName[] } {
+  const out: { name?: string; summary?: string; permissions: PluginPermissionName[] } = {
+    permissions: [],
+  };
+  const name = stringField(code, 'name')?.trim();
+  if (name) out.name = truncate(name, 80);
+  const summary = (stringField(code, 'description') ?? fallbackSummary).trim();
+  if (summary) {
+    const first = summary.split(/(?<=[.!?])\s/)[0]?.trim() ?? summary;
+    out.summary = truncate(/[.!?]$/.test(first) ? first : `${first}.`, 200);
+  }
+  const list = code.match(/\bpermissions\s*:\s*\[([^\]]*)\]/)?.[1] ?? '';
+  const raw = new Set([...list.matchAll(/['"`]([a-z-]+)['"`]/g)].map((m) => m[1]));
+  out.permissions = PLUGIN_PERMISSIONS.filter((p) => raw.has(p));
+  return out;
+}
+
+const RESULT_LINE = /^\s*(\(pass\)|\(fail\)|✓|✔|✗|✘|×)\s+(.+?)(?:\s+\[[\d.]+\s*m?s\])?\s*$/;
+
+/**
+ * Test cases from the test runner output (`(pass) suite > name [1ms]`,
+ * `(fail) …` with the error printed just before it). Empty when the output
+ * names no tests.
+ */
+export function parseTestCases(output: string): PluginTestCase[] {
+  const cases: PluginTestCase[] = [];
+  let pending: string[] = [];
+  for (const line of output.split('\n')) {
+    const m = line.match(RESULT_LINE);
+    if (!m) {
+      if (line.trim()) pending.push(line.trimEnd());
+      continue;
+    }
+    const ok = m[1] === '(pass)' || m[1] === '✓' || m[1] === '✔';
+    const full = m[2] ?? '';
+    const c: PluginTestCase = { name: full.split(' > ').pop() ?? full, ok };
+    if (!ok) {
+      const err = pending
+        .filter((l) => !/^\s*\d+\s*\|/.test(l))
+        .join('\n')
+        .trim();
+      if (err) c.error = truncate(err, 1000);
+    }
+    cases.push(c);
+    pending = [];
+  }
+  return cases.slice(0, 100);
 }
 
 export function generatePluginAction(deps: GeneratePluginDeps): ActionDef {
@@ -310,12 +387,22 @@ export function generatePluginAction(deps: GeneratePluginDeps): ActionDef {
         extra = `\n\nThe tests failed. Output:\n${untrusted('test-output', truncate(scrubText(testResult.output ?? ''), 3000))}\nFix the plugin or the tests.`;
       }
 
+      const info = plugin ? describePlugin(plugin.code, input.description) : null;
+      const testCases = testResult?.output ? parseTestCases(testResult.output) : [];
+      const steps: PluginGenStep[] = plugin ? ['writing'] : [];
+      if (plugin && !problems.length) steps.push('checking');
+      if (testResult?.ok) steps.push('testing');
       const base = {
         id,
         code: plugin?.code ?? '',
         tests: plugin?.tests ?? '',
         enabled: false as const,
         problems,
+        ...(info?.name ? { name: info.name } : {}),
+        ...(info?.summary ? { summary: info.summary } : {}),
+        ...(info ? { permissions: info.permissions } : {}),
+        ...(testCases.length ? { testCases } : {}),
+        steps,
       };
       if (!plugin || problems.length) {
         return {
@@ -368,13 +455,16 @@ export function generatePluginAction(deps: GeneratePluginDeps): ActionDef {
           enabled: false,
         });
       }
+      if (installed) steps.push('installing');
       const out: GeneratePluginOutput = {
         ...base,
         tested: true,
         testResult,
         installed,
         note: installed
-          ? 'Installed turned OFF. Review the code, then turn it on in Settings → Plugins.'
+          ? info?.permissions.length
+            ? 'Installed turned OFF, with the access it asks for switched off. Review it, allow its access if you agree, then turn it on.'
+            : 'Installed turned OFF. Review the code, then turn it on in Settings → Plugins.'
           : 'Tests passed, but this plugin system cannot install plugins; add it by hand.',
       };
       const result: {

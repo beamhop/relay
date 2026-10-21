@@ -46,7 +46,7 @@ const ROUTE_BUDGET_KB = Number(process.env.ROUTE_BUDGET_KB ?? 255);
 
 /** Source files whose chunks are enterprise-only (never downloaded by a vanilla admin). */
 export const ENTERPRISE_SOURCES: RegExp[] = [
-  /^src\/lib\/modules\//,
+  /^src\/lib\/modules\/(enterprise-|shared\/)/,
   /^src\/lib\/components\/company\//,
   /^src\/routes\/settings\/company\//,
 ];

@@ -1436,6 +1436,19 @@ Start using a plugin you have added.
 |---|---|---|---|
 | `id` | string |  | Plugin id, e.g. keyword-filter |
 
+### Allow a plugin more access
+
+Let a plugin read your data, save its own data or go online. It asks for this in its code and gets nothing until you allow it.
+
+- **id:** `plugins.grant-permissions` · **CLI:** `beamhop plugins grant-permissions` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · undoable · needs a second approver when approvals are on
+- *Technical:* Adds to modules.plugins.entries[id].approvedPermissions; a plugin asking for more than approved is not loaded.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Plugin id |
+| `permissions` | list of `read-events` \| `write-events` \| `network` \| `docs` |  | Access to allow |
+
 ### Add a plugin
 
 Add a plugin from the catalog. You will see what it is allowed to do first.
@@ -1595,6 +1608,26 @@ Make the settings change a resource suggestion recommends.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `id` | `verify-workers-off` \| `verify-workers-on` |  | Advice to apply |
+
+### Turn on cold storage
+
+Move media files nobody opened for a while to cheaper storage. They keep working.
+
+- **id:** `system.cold-storage` · **CLI:** `beamhop system cold-storage` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · undoable
+- *Technical:* Sets modules.blossom.tiers.cold { store, afterDays } via admin.config (revisioned, undoable). The blossom.tiering job then moves blobs whose last GET is older than afterDays; quarantined and legally held files never move.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `afterDays` | number | `90` | Move a file after this many days without anyone opening it |
+| `store` | section |  | Where older files go. Usually a cheaper cloud bucket (for example Cloudflare R2 or S3). |
+| `store.driver` | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` | Which storage service to use. Pick cloud storage when this server's disk is too small or you want copies kept elsewhere. |
+| `store.path` | string |  | Folder on this server where the files go. Empty = a folder inside the data folder. |
+| `store.bucket` | string |  | Name of the storage bucket you created with your provider. |
+| `store.endpoint` | string |  | Your provider's storage address. Leave empty for Amazon S3 and Google Cloud; needed for R2, MinIO and others. *Technical:* S3 API endpoint (path-style). Defaults: https://s3.<region>.amazonaws.com, https://storage.googleapis.com. |
+| `store.region` | string |  | Data-center region of the bucket. Empty = us-east-1 for S3, auto otherwise. *Technical:* SigV4 signing region. |
+| `store.accessKeyId` | string |  | The access key ID from your storage provider. |
+| `store.secretAccessKey` | string |  | The secret that goes with the access key. Stored privately, never shown again. |
 
 ### Check this setup
 

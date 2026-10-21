@@ -12,7 +12,11 @@ import {
 import { z } from 'zod';
 import type { BackupService } from './backup.ts';
 import { exportUserData } from './export.ts';
-import { generateLitestreamConfig } from './litestream.ts';
+import {
+  type LitestreamMonitor,
+  generateLitestreamConfig,
+  litestreamHealth,
+} from './litestream.ts';
 import type { RetentionEngine } from './retention.ts';
 import type { LifecycleRuntime } from './runtime.ts';
 import { readAll } from './tar.ts';
@@ -78,6 +82,7 @@ export function createActions(
   rt: LifecycleRuntime,
   backups: BackupService,
   retention: RetentionEngine,
+  litestreamMonitor?: LitestreamMonitor,
 ): ActionDef[] {
   const now = () => rt.ports.clock.now();
 
@@ -123,8 +128,25 @@ export function createActions(
     input: z.object({}),
     async run() {
       const [l, last] = await Promise.all([backups.list(), backups.last()]);
+      const ls = rt.settings().litestream;
+      const health =
+        ls.enabled && litestreamMonitor ? litestreamHealth(litestreamMonitor.status, ls) : null;
       return {
-        output: { ...l, last, target: backups.targetUri() },
+        output: {
+          ...l,
+          last,
+          target: backups.targetUri(),
+          schedule: (({ enabled, schedule, keep }) => ({ enabled, schedule, keep }))(
+            rt.kernel.config().backups,
+          ),
+          running: backups.inProgress(),
+          standby: {
+            enabled: ls.enabled,
+            ...(health
+              ? { status: health.status, message: health.message, technical: health.technical }
+              : {}),
+          },
+        },
         summary: `${l.backups.length} backups`,
       };
     },

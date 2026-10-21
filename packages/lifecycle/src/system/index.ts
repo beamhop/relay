@@ -36,8 +36,12 @@ export {
   type DoctorTone,
 } from './doctor.ts';
 export {
+  COLD_MIN_BYTES,
+  COLD_STALE_DAYS,
+  COLD_STORAGE_ACTION,
   CONFIG_ADVICE,
   advise,
+  coldStorageConfigured,
   daysLeft,
   gatherFacts,
   recommendSize,

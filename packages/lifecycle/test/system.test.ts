@@ -6,10 +6,12 @@ import {
   type HealthCheck,
   type Kernel,
   createKernel,
+  defineAction,
   defineModule,
   parseConfig,
 } from '@beamhop/core';
 import { MemoryBlobStore, memoryPorts } from '@beamhop/testkit';
+import { z } from 'zod';
 import {
   type AdvisorFacts,
   DOCTOR_SERVICE,
@@ -112,6 +114,8 @@ interface BootOptions {
   configApply?: boolean;
   /** Backup storage (shared across "restarts"). */
   target?: MemoryBlobStore;
+  /** Pretend the media module with storage tiers is on (its status action exists). */
+  mediaTiers?: boolean;
 }
 
 const kernels: Kernel[] = [];
@@ -140,6 +144,20 @@ async function boot(o: BootOptions) {
           },
         });
       for (const h of o.health ?? []) k.health.push(h);
+      if (o.mediaTiers)
+        k.actions.register(
+          defineAction({
+            id: 'media.storage-tiers',
+            title: 'Storage tiers',
+            description: 'test stand-in',
+            technical: 'test',
+            scope: 'node',
+            permission: 'relay.read',
+            readOnly: true,
+            input: z.object({}),
+            run: async () => ({ output: {}, summary: '' }),
+          }),
+        );
     },
   });
   const kernel = await createKernel({
@@ -538,6 +556,105 @@ describe('system.advisor', () => {
     expect(a.kernel.config().node.verifyWorkers).toBeUndefined();
     expect(await a.preview('system.apply-advice', { id: 'verify-workers-on' })).toEqual([
       { kind: 'info', text: 'This suggestion no longer applies' },
+    ]);
+  });
+
+  test('cold storage: suggested for unopened media instead of moving everything', () => {
+    const GB = 1024 ** 3;
+    const cold = { enabled: false, days: 90, staleBytes: 12.4 * GB, staleFiles: 300 };
+    const r = advise({ ...base, blobBytes: 40 * GB, coldStorage: cold });
+    const a = r.advice.find((x) => x.id === 'cold-storage-on');
+    expect(a?.title).toBe("Turn on cold storage — 12 GB of files haven't been opened in 90 days");
+    expect(a?.severity).toBe('suggestion');
+    expect(a?.apply).toEqual({
+      label: 'Turn on cold storage',
+      actionId: 'system.cold-storage',
+      input: { afterDays: 90 },
+    });
+    expect(a?.lens.join(' ')).toContain('blossom.tiers');
+    expect(r.advice.map((x) => x.id)).not.toContain('media-to-bucket');
+    // Too little unopened media, already on, or on Workers: no suggestion.
+    const ids = (f: Partial<AdvisorFacts>) => advise({ ...base, ...f }).advice.map((x) => x.id);
+    expect(ids({ coldStorage: { ...cold, staleBytes: GB / 2 } })).not.toContain('cold-storage-on');
+    expect(ids({ coldStorage: { ...cold, enabled: true } })).not.toContain('cold-storage-on');
+    expect(ids({ runtime: 'cloudflare', coldStorage: cold })).not.toContain('cold-storage-on');
+    // Without the media module the old advice stays.
+    expect(ids({ blobBytes: 40 * GB })).toContain('media-to-bucket');
+  });
+
+  test('system.advisor reads unopened media duck-typed; system.cold-storage preview → apply → undo', async () => {
+    const MB = 1024 * 1024;
+    const a = await boot({ version: '0.1.0', configApply: true, mediaTiers: true });
+    const now = a.ports.clock.now();
+    const put = async (sha: string, size: number) =>
+      a.ports.blobs.put({ sha256: sha, size, type: 'image/png' }, new Uint8Array(1));
+    const old = 'a'.repeat(64);
+    const fresh = 'b'.repeat(64);
+    const uploadedLongAgo = 'c'.repeat(64);
+    const alreadyCold = 'd'.repeat(64);
+    for (const sha of [old, fresh, uploadedLongAgo, alreadyCold]) await put(sha, 600 * MB);
+    await a.ports.docs.put('blossom.tiers', old, { lastAccess: now - 100 * 86_400 });
+    await a.ports.docs.put('blossom.tiers', fresh, { lastAccess: now - 86_400 });
+    await a.ports.docs.put('blossom.tiers', alreadyCold, {
+      lastAccess: now - 200 * 86_400,
+      tier: 'cold',
+    });
+    await a.ports.blobIndex.addOwner({
+      relayId: 'main',
+      sha256: uploadedLongAgo,
+      pubkey: 'e'.repeat(64),
+      size: 600 * MB,
+      type: 'image/png',
+      uploadedAt: now - 120 * 86_400,
+    });
+    const r = (
+      await a.run<{ facts: AdvisorFacts; advice: Array<{ id: string; title: string }> }>(
+        'system.advisor',
+      )
+    ).output;
+    expect(r.facts.coldStorage).toMatchObject({
+      enabled: false,
+      days: 90,
+      staleFiles: 2,
+      staleBytes: 1200 * MB,
+    });
+    expect(r.advice.find((x) => x.id === 'cold-storage-on')?.title).toBe(
+      "Turn on cold storage — 1 GB of files haven't been opened in 90 days",
+    );
+
+    // The store still has to be chosen: preview asks for it (the app shows the form).
+    await expect(a.preview('system.cold-storage', { afterDays: 90 })).rejects.toThrow(
+      'Choose where older files go',
+    );
+    const store = { driver: 'r2', bucket: 'cold-media', endpoint: 'https://r2.example' };
+    const pv = await a.preview('system.cold-storage', { afterDays: 90, store });
+    expect(pv[0]?.text).toBe(
+      'Move media files nobody opened for 90 days to R2 bucket cold-media. They keep working.',
+    );
+    expect(pv[0]?.technical).toContain('modules.blossom.tiers.cold');
+    const res = await a.run('system.cold-storage', { afterDays: 90, store });
+    const blossom = a.kernel.config().modules.blossom as { tiers: { cold: unknown } };
+    expect(blossom.tiers.cold).toMatchObject({ afterDays: 90, store: { bucket: 'cold-media' } });
+    const after = (await a.run<{ advice: Array<{ id: string }> }>('system.advisor')).output;
+    expect(after.advice.map((x) => x.id)).not.toContain('cold-storage-on');
+    expect(await a.preview('system.cold-storage', { store })).toEqual([
+      { kind: 'info', text: 'Cold storage is already on' },
+    ]);
+    const def = a.kernel.actions.get('system.cold-storage');
+    await def?.undo?.((res.undo as { payload: unknown }).payload, {
+      principal: OWNER,
+      relayId: null,
+      ports: a.ports,
+    });
+    expect(a.kernel.config().modules.blossom).toBeUndefined();
+  });
+
+  test('no cold-storage facts without the media module', async () => {
+    const a = await boot({ version: '0.1.0' });
+    const r = (await a.run<{ facts: AdvisorFacts }>('system.advisor')).output;
+    expect(r.facts.coldStorage).toBeUndefined();
+    expect(await a.preview('system.cold-storage', {})).toEqual([
+      { kind: 'info', text: 'Media storage is not turned on' },
     ]);
   });
 });

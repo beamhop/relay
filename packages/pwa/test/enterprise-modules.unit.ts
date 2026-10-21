@@ -58,10 +58,10 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** `chunk: '…'` of every `kernel.ui` route declared by the enterprise backend packages. */
+/** `chunk: '…'` of every `kernel.ui` route declared by any backend package (vanilla or enterprise). */
 function declaredChunks(): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  for (const pkg of readdirSync(packages).filter((p) => p.startsWith('enterprise-'))) {
+  for (const pkg of readdirSync(packages).filter((p) => p !== 'pwa')) {
     const src = join(packages, pkg, 'src');
     if (!existsSync(src)) continue;
     for (const f of walk(src).filter((x) => x.endsWith('.ts'))) {
@@ -92,14 +92,15 @@ const ROW: ApprovalRow = {
   mine: false,
 };
 
-describe('enterprise module chunks (§12.0)', () => {
-  it('has a lazy chunk for every screen the enterprise backend declares', () => {
+describe('module chunks (§12.0)', () => {
+  it('has a lazy chunk for every screen any backend package declares', () => {
     const chunks = declaredChunks();
     expect([...chunks.keys()].sort()).toEqual([
       'enterprise-compliance',
       'enterprise-identity',
       'enterprise-keyvault',
       'enterprise-network',
+      'lifecycle-backups',
     ]);
     const missing = [...chunks.keys()].filter(
       (c) => !existsSync(join(pwa, 'src/lib/modules', `${c}.svelte`)),
@@ -148,6 +149,16 @@ describe('enterprise module chunks (§12.0)', () => {
     // The app draws Company sign-in itself.
     expect(resolveScreen('/settings/company', mods).href).toBe('/settings/company');
     expect(resolveScreen('/approvals', []).fallback).toBe(true);
+  });
+
+  it('opens the backups list from its module path; the schedule stays a settings screen', () => {
+    const mods = ['/settings/backups'];
+    expect(resolveScreen('/m/settings/backups', mods)).toMatchObject({
+      href: '/m/settings/backups',
+      fallback: false,
+      tab: '/settings',
+    });
+    expect(resolveScreen('/settings/backups', mods).href).toBe('/settings/backups');
   });
 });
 

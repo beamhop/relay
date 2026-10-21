@@ -6,7 +6,9 @@ import {
   type GeneratedPlugin,
   type PluginHostLike,
   checkGenerated,
+  describePlugin,
   extractCode,
+  parseTestCases,
 } from '../src/index.ts';
 import { P, boot } from './helpers.ts';
 
@@ -169,5 +171,79 @@ describe('ai.generate-plugin', () => {
     expect(checkGenerated({ id: 'x', code: 'export default 1', tests: '' }).length).toBeGreaterThan(
       1,
     );
+  });
+});
+
+describe('ai.generate-plugin: review fields', () => {
+  const BUN_OUTPUT = [
+    'bun test v1.2.0',
+    '',
+    'plugin.test.ts:',
+    '(pass) ai-block-casino > blocks casino ads [0.21ms]',
+    'error: expect(received).toBe(expected)',
+    'Expected: "accept"',
+    'Received: "reject"',
+    '      at <anonymous> (./plugin.test.ts:12:5)',
+    '(fail) ai-block-casino > lets normal posts through [0.10ms]',
+    '',
+    ' 1 pass',
+    ' 1 fail',
+  ].join('\n');
+
+  test('name, summary, permissions, test cases and steps after an install', async () => {
+    const withPerms = PLUGIN.replace(
+      'priority: 300,',
+      "priority: 300,\n  permissions: ['read-events', 'network', 'bogus'],",
+    );
+    const host: PluginHostLike = {
+      test: async () => ({
+        ok: true,
+        passed: 2,
+        failed: 0,
+        output: '(pass) s > blocks casino ads [1ms]\n(pass) s > lets normal posts through [1ms]',
+      }),
+      install: async (p) => ({ id: p.id }),
+    };
+    const { out } = await run(new FakeLLM([reply(withPerms)]), host);
+    expect(out.name).toBe('Block casino spam');
+    expect(out.summary).toBe('Rejects posts that advertise casinos.');
+    expect(out.permissions).toEqual(['read-events', 'network']);
+    expect(out.testCases).toEqual([
+      { name: 'blocks casino ads', ok: true },
+      { name: 'lets normal posts through', ok: true },
+    ]);
+    expect(out.steps).toEqual(['writing', 'checking', 'testing', 'installing']);
+    expect(out.note).toContain('allow its access');
+  });
+
+  test('failed tests: failing case carries the error; steps stop before testing', async () => {
+    const host: PluginHostLike = {
+      test: async () => ({ ok: false, passed: 1, failed: 1, output: BUN_OUTPUT }),
+      install: async (p) => ({ id: p.id }),
+    };
+    const { out } = await run(new FakeLLM([reply(), reply()]), host);
+    expect(out.installed).toBe(false);
+    expect(out.permissions).toEqual([]);
+    expect(out.steps).toEqual(['writing', 'checking']);
+    expect(out.testCases?.[0]).toEqual({ name: 'blocks casino ads', ok: true });
+    expect(out.testCases?.[1]?.ok).toBe(false);
+    expect(out.testCases?.[1]?.error).toContain('Expected: "accept"');
+  });
+
+  test('helpers: describePlugin and parseTestCases', () => {
+    expect(describePlugin("definePlugin({ id: 'x' })", 'Hold nsfw posts for review')).toEqual({
+      summary: 'Hold nsfw posts for review.',
+      permissions: [],
+    });
+    expect(
+      describePlugin(
+        `definePlugin({ name: "Night mode", description: 'Slows posters. Second sentence.', permissions: ["docs"] })`,
+      ),
+    ).toEqual({ name: 'Night mode', summary: 'Slows posters.', permissions: ['docs'] });
+    expect(parseTestCases('no test names here')).toEqual([]);
+    expect(parseTestCases('✓ works\n✗ breaks')).toEqual([
+      { name: 'works', ok: true },
+      { name: 'breaks', ok: false },
+    ]);
   });
 });
