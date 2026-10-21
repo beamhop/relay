@@ -21,6 +21,7 @@
   import { prefs } from '$lib/stores/prefs.svelte';
   import { screenName } from '$lib/assistant';
   import { local, to } from '$lib/nav';
+  import { createMarkdown } from '$lib/markdown';
   import Sheet from '../Sheet.svelte';
   import Button from '../ui/button.svelte';
   import ProposalCard from './ProposalCard.svelte';
@@ -78,6 +79,15 @@
   $effect(() => {
     if (open && input && !off) void tick().then(() => input?.focus({ preventScroll: true }));
   });
+
+  /** Answers are Markdown from the model: escaped HTML, safe links, no images (see markdown.ts). */
+  const markdown = createMarkdown({ appHref: to });
+
+  /** A link to an app screen closes the panel so the screen is visible. */
+  function onanswerclick(e: MouseEvent) {
+    const a = (e.target as HTMLElement | null)?.closest('a');
+    if (a && !a.target) open = false;
+  }
 
   function palette() {
     open = false;
@@ -138,7 +148,10 @@
               </ul>
             {/if}
             {#if turn.text}
-              <p class="whitespace-pre-wrap text-sm leading-relaxed" data-testid="assistant-text">{turn.text}</p>
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <div class="md text-sm leading-relaxed" data-testid="assistant-text" onclick={onanswerclick}>
+                {@html markdown(turn.text)}
+              </div>
             {:else if turn.pending}
               <p class="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle class="size-4 animate-spin" />{m.assistant_thinking()}</p>
             {/if}
@@ -197,3 +210,84 @@
     {/if}
   {/snippet}
 </Sheet>
+
+<style>
+  .md :global(> * + *) {
+    margin-top: 0.6em;
+  }
+  .md :global(h1),
+  .md :global(h2),
+  .md :global(h3),
+  .md :global(h4) {
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .md :global(h1) {
+    font-size: 1.15em;
+  }
+  .md :global(h2) {
+    font-size: 1.08em;
+  }
+  .md :global(ul) {
+    list-style: disc;
+    padding-left: 1.25em;
+  }
+  .md :global(ol) {
+    list-style: decimal;
+    padding-left: 1.25em;
+  }
+  .md :global(li + li) {
+    margin-top: 0.2em;
+  }
+  .md :global(a) {
+    color: var(--color-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .md :global(strong) {
+    font-weight: 600;
+  }
+  .md :global(code) {
+    border-radius: 0.3em;
+    background: var(--color-muted);
+    padding: 0.1em 0.35em;
+    font-family: ui-monospace, monospace;
+    font-size: 0.88em;
+  }
+  .md :global(pre) {
+    overflow-x: auto;
+    border-radius: 0.6em;
+    background: var(--color-muted);
+    padding: 0.6em 0.75em;
+  }
+  .md :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+  .md :global(blockquote) {
+    border-left: 3px solid var(--color-border);
+    padding-left: 0.75em;
+    color: var(--color-muted-foreground);
+  }
+  .md :global(table) {
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.92em;
+  }
+  .md :global(th),
+  .md :global(td) {
+    border: 1px solid var(--color-border);
+    padding: 0.3em 0.55em;
+    text-align: left;
+  }
+  .md :global(th) {
+    font-weight: 600;
+  }
+  .md :global(hr) {
+    border-color: var(--color-border);
+  }
+  .md :global(.md-img) {
+    color: var(--color-muted-foreground);
+  }
+</style>

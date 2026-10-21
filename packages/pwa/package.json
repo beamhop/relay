@@ -25,6 +25,7 @@
     "clsx": "^2.1.1",
     "formsnap": "^2.0.1",
     "layerchart": "^2.0.0-next.40",
+    "marked": "^18.0.9",
     "nostr-tools": "^2.25.2",
     "sveltekit-superforms": "^2.27.1",
     "tailwind-merge": "^3.3.1",
