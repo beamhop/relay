@@ -13,3 +13,4 @@ coverage/
 # lockfile is regenerated at integration time during the swarm build
 bun.lock
 bun.lockb
+.claude/worktrees/
