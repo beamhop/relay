@@ -101,6 +101,8 @@ export interface BootArgs {
   /** Probe the local /healthz and exit 0/1 (Docker HEALTHCHECK; no shell needed). */
   healthcheck: boolean;
   listen?: string;
+  /** `--verify-workers <n>`: signature checking threads (0 = main thread). */
+  verifyWorkers?: number;
   /** Write admin-app changes back to the settings file (default on; `--no-config-writeback`). */
   configWriteBack: boolean;
 }
@@ -133,6 +135,11 @@ export function parseArgs(argv: string[], env: Env = {}): BootArgs {
       case '--listen':
         args.listen = value();
         break;
+      case '--verify-workers': {
+        const n = Number(value());
+        if (Number.isInteger(n) && n >= 0) args.verifyWorkers = n;
+        break;
+      }
       case '--help':
       case '-h':
         args.help = true;
@@ -276,6 +283,8 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   if (args.listen) merged = deepMerge(merged, { node: { listen: args.listen } }) as typeof merged;
   if (args.dataDir)
     merged = deepMerge(merged, { node: { dataDir: args.dataDir } }) as typeof merged;
+  if (args.verifyWorkers !== undefined)
+    merged = deepMerge(merged, { node: { verifyWorkers: args.verifyWorkers } }) as typeof merged;
 
   let defaultRelay = false;
   if (!Array.isArray(merged.relays) || merged.relays.length === 0) {
@@ -286,6 +295,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   const overridePaths = leafPaths(fromEnv).filter((p) => !hasPath(fileConfig, p));
   if (args.listen) overridePaths.push(['node', 'listen']);
   if (args.dataDir) overridePaths.push(['node', 'dataDir']);
+  if (args.verifyWorkers !== undefined) overridePaths.push(['node', 'verifyWorkers']);
 
   const config = parseConfig(merged);
   const dataDir = isAbsolute(config.node.dataDir)

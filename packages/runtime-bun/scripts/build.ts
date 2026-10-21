@@ -55,6 +55,14 @@ const CLI_ENTRY = resolve(PKG, '../cli/src/binary.ts');
  */
 export const PLUGIN_WORKER = resolve(PKG, '../plugins/src/bun/worker-entry.ts');
 const PLUGIN_SANDBOX = resolve(PKG, '../plugins/src/bun/sandbox.ts');
+/** Signature verification worker (verify-pool.ts), also an extra entrypoint. */
+export const VERIFY_WORKER = resolve(PKG, 'src/verify-worker.ts');
+const VERIFY_POOL = resolve(PKG, 'src/verify-pool.ts');
+
+/** Worker scripts compiled as extra entrypoints (those that exist). */
+export function workerEntries(): string[] {
+  return [PLUGIN_WORKER, VERIFY_WORKER].filter((w) => existsSync(w));
+}
 
 /** Deepest directory containing every path (the `bun build --root`). */
 export function commonRoot(paths: string[]): string {
@@ -66,8 +74,12 @@ export function commonRoot(paths: string[]): string {
 }
 
 /** Path of the worker inside the binary's embedded file system (relative to the build root). */
-export function embeddedWorkerPath(entry: string, worker = PLUGIN_WORKER): string {
-  const root = commonRoot([dirname(entry), dirname(worker)]);
+export function embeddedWorkerPath(
+  entry: string,
+  worker = PLUGIN_WORKER,
+  workers: string[] = workerEntries(),
+): string {
+  const root = commonRoot([entry, worker, ...workers].map((p) => dirname(p)));
   return `./${relative(root, worker).split(sep).join('/')}`;
 }
 
@@ -100,10 +112,17 @@ export function generateEntry(
   outDir: string,
   pwaDir = PWA_BUILD,
   teamDir = TEAM_BUILD,
-): { entry: string; assets: number; teamAssets: number; worker: string | null } {
+): {
+  entry: string;
+  assets: number;
+  teamAssets: number;
+  worker: string | null;
+  workers: string[];
+} {
   const genDir = join(outDir, '.gen');
   const entry = join(genDir, 'entry.ts');
   const worker = existsSync(PLUGIN_WORKER) ? PLUGIN_WORKER : null;
+  const workers = workerEntries();
   rmSync(genDir, { recursive: true, force: true });
   mkdirSync(genDir, { recursive: true });
   const files = filesIn(pwaDir);
@@ -120,7 +139,13 @@ export function generateEntry(
   if (worker) {
     lines.push(
       `import { setSandboxWorkerUrl } from ${JSON.stringify(PLUGIN_SANDBOX)};`,
-      `setSandboxWorkerUrl(${JSON.stringify(embeddedWorkerPath(entry, worker))});`,
+      `setSandboxWorkerUrl(${JSON.stringify(embeddedWorkerPath(entry, worker, workers))});`,
+    );
+  }
+  if (workers.includes(VERIFY_WORKER)) {
+    lines.push(
+      `import { setVerifyWorkerUrl } from ${JSON.stringify(VERIFY_POOL)};`,
+      `setVerifyWorkerUrl(${JSON.stringify(embeddedWorkerPath(entry, VERIFY_WORKER, workers))});`,
     );
   }
   const manifest: string[] = [];
@@ -139,7 +164,7 @@ export function generateEntry(
   if (teamFiles.length > 0) lines.push(`registerAssets({\n${teamManifest.join('\n')}\n}, 'team');`);
   lines.push('await main();', '');
   writeFileSync(entry, lines.join('\n'));
-  return { entry, assets: files.length, teamAssets: teamFiles.length, worker };
+  return { entry, assets: files.length, teamAssets: teamFiles.length, worker, workers };
 }
 
 /** Release version baked into the binary: BEAMHOP_VERSION env, else the root package.json. */
@@ -152,14 +177,14 @@ export function releaseVersion(): string {
   return pkg.version ?? '0.0.0';
 }
 
-/** `bun build` arguments: the entry, plus the plugin worker as an extra entrypoint. */
+/** `bun build` arguments: the entry, plus the worker scripts as extra entrypoints. */
 export function compileArgs(
   entry: string,
   target: string,
   outfile: string,
-  worker: string | null,
+  worker: string | string[] | null,
 ): string[] {
-  const entries = worker ? [entry, worker] : [entry];
+  const entries = [entry, ...(worker === null ? [] : Array.isArray(worker) ? worker : [worker])];
   return [
     'build',
     '--compile',
@@ -181,7 +206,7 @@ async function compile(
   entry: string,
   target: string,
   outfile: string,
-  worker: string | null,
+  worker: string[],
 ): Promise<void> {
   const proc = Bun.spawn([process.execPath, ...compileArgs(entry, target, outfile, worker)], {
     cwd: PKG,
@@ -296,7 +321,7 @@ export function binaryPath(outDir: string, target: string, withSharp: boolean): 
 async function run(argv: string[]): Promise<void> {
   const { outDir, targets, pwaDir, teamDir, withSharp } = parseBuildArgs(argv);
   mkdirSync(outDir, { recursive: true });
-  const { entry, assets, teamAssets, worker } = generateEntry(outDir, pwaDir, teamDir);
+  const { entry, assets, teamAssets, worker, workers } = generateEntry(outDir, pwaDir, teamDir);
   if (!worker) console.warn('plugin sandbox worker not found; sandboxed plugins will not load');
   console.log(
     assets ? `embedding ${assets} admin app files` : 'admin app build not found; skipping PWA',
@@ -311,7 +336,7 @@ async function run(argv: string[]): Promise<void> {
     const outfile = binaryPath(outDir, t, withSharp);
     mkdirSync(dirname(outfile), { recursive: true });
     console.log(`compiling ${outfile}`);
-    await compile(entry, t, outfile, worker);
+    await compile(entry, t, outfile, workers);
     if (withSharp) {
       const missing = copySharp(t, join(outDir, t));
       if (missing.length) {
