@@ -73,6 +73,10 @@ describe('config + routing + kernel', () => {
     expect(cfg.relays[0]?.goals.openness).toBe(70);
     expect(resolveRelay(cfg, new URL('https://relay.example.com/'))?.id).toBe('main');
     expect(resolveRelay(cfg, new URL('https://relay.example.com/team/x'))?.id).toBe('team');
+    expect(resolveRelay(cfg, new URL('https://relay.example.com/team'))?.id).toBe('team');
+    // Segment boundary: `/team` must not capture `/teams` or `/teammates`.
+    expect(resolveRelay(cfg, new URL('https://relay.example.com/teams'))?.id).toBe('main');
+    expect(resolveRelay(cfg, new URL('https://relay.example.com/teammates/x'))?.id).toBe('main');
     const order: string[] = [];
     const k = await createKernel({
       runtime: 'test',

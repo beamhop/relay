@@ -16,7 +16,7 @@ export function resolveRelay(
   let bestScore = -1;
   for (const r of candidates) {
     const prefix = r.pathPrefix ?? '';
-    if (prefix && !url.pathname.startsWith(prefix)) continue;
+    if (prefix && !pathHasPrefix(url.pathname, prefix)) continue;
     const score = prefix.length * 2 + (r.hosts.includes('*') ? 0 : 1);
     if (score > bestScore) {
       best = r;
@@ -24,4 +24,14 @@ export function resolveRelay(
     }
   }
   return best ?? (config.relays.length === 1 ? config.relays[0] : undefined);
+}
+
+/**
+ * Segment-aware prefix match: `/team` matches `/team` and `/team/x` but not
+ * `/teams`. A prefix ending in `/` matches anything under it.
+ */
+export function pathHasPrefix(pathname: string, prefix: string): boolean {
+  if (!prefix || prefix === '/') return true;
+  if (prefix.endsWith('/')) return pathname.startsWith(prefix) || pathname === prefix.slice(0, -1);
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
