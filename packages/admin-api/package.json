@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "description": "Admin API module: auth, RBAC, config revisions, actions→routes, OpenAPI, NIP-86, audit, live SSE",
+  "description": "Admin API module: auth, RBAC, config revisions, actions\u2192routes, OpenAPI, NIP-86, audit, live SSE",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -16,7 +16,8 @@
     "jose": "^6.2.13",
     "nostr-tools": "^2.25.2",
     "yaml": "^2.9.1",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
     "@beamhop/testkit": "workspace:*"

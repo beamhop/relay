@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// tsyringe (via @simplewebauthn/server → @peculiar/x509) needs the Reflect metadata polyfill,
+// which bundlers (bun --compile, Workers) do not load implicitly.
+import 'reflect-metadata';
 // Admin API module: auth, RBAC, config revisions, actions→routes, OpenAPI, NIP-86, audit, live SSE
 import { type Kernel, defineModule } from '@beamhop/core';
 import { AuditLog } from './audit.ts';

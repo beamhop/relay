@@ -5,8 +5,12 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "description": "Bun runtime: server, WebSocket, adapters wiring, TLS/ACME, single binary",
-  "exports": { ".": "./src/index.ts" },
-  "bin": { "beamhop-server": "./src/main.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "beamhop-server": "./src/main.ts"
+  },
   "scripts": {
     "start": "bun src/main.ts",
     "build": "bun scripts/build.ts",
@@ -33,6 +37,7 @@
     "@beamhop/enterprise-keyvault": "workspace:*",
     "@beamhop/enterprise-compliance": "workspace:*",
     "acme-client": "^5.4.0",
-    "hono": "^4.13.13"
+    "hono": "^4.13.13",
+    "reflect-metadata": "^0.2.2"
   }
 }
