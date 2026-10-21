@@ -121,3 +121,48 @@ describe('version', () => {
     expect(BEAMHOP_VERSION).toBe(root.version);
   });
 });
+
+describe('applyConfig module sections', () => {
+  const schema = z.object({ a: z.number().default(1), list: z.array(z.string()).default([]) });
+  const mod = (id: string, optional = false) => ({
+    id,
+    configSchema: schema,
+    ...(optional ? { optional: true } : {}),
+    register() {},
+  });
+  const base = () => parseConfig({ relays: [{ id: 'main', hosts: ['r.test'] }] });
+
+  test('partial and missing sections are parsed with defaults; invalid ones keep the previous', async () => {
+    const config = base();
+    const k = await createKernel({
+      runtime: 'test',
+      ports: memoryPorts(),
+      config,
+      modules: [mod('m')],
+    });
+    expect(k.moduleConfig('m')).toEqual({ a: 1, list: [] });
+    const seen: unknown[] = [];
+    k.onConfigChange((next) => {
+      seen.push(next.modules.m);
+    });
+    await k.applyConfig({ ...config, modules: { m: { a: 5 } } });
+    expect(k.moduleConfig('m')).toEqual({ a: 5, list: [] });
+    expect(seen.at(-1)).toEqual({ a: 5, list: [] });
+    await k.applyConfig({ ...config, modules: {} });
+    expect(k.moduleConfig('m')).toEqual({ a: 1, list: [] });
+    await k.applyConfig({ ...config, modules: { m: { a: 7 } } });
+    await k.applyConfig({ ...config, modules: { m: { a: 'nope' } } });
+    expect(k.moduleConfig('m')).toEqual({ a: 7, list: [] });
+  });
+
+  test('a hot-enabled module whose section is removed is not given defaults', async () => {
+    const config = base();
+    const k = await createKernel({ runtime: 'test', ports: memoryPorts(), config, modules: [] });
+    await k.applyConfig({ ...config, modules: { h: {} } });
+    await k.enableModule?.(mod('h', true));
+    await k.applyConfig({ ...config, modules: { h: { a: 2 } } });
+    expect(k.moduleConfig('h')).toEqual({ a: 2, list: [] });
+    await k.applyConfig({ ...config, modules: {} });
+    expect(k.moduleConfig('h')).toBeUndefined();
+  });
+});
