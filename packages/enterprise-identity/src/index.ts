@@ -88,6 +88,8 @@ export function createEnterpriseIdentityModule(opts: EnterpriseIdentityOptions =
   return defineModule({
     id: MODULE_ID,
     configSchema: EnterpriseIdentityConfigSchema,
+    // Hot-swappable: `modules.enable { id: 'enterprise-identity' }` loads it without a restart.
+    optional: true,
     register(kernel) {
       if (!isConfigured(kernel)) return;
       const fetchImpl: FetchLike = opts.fetch ?? ((i, init) => fetch(i, init));
@@ -130,7 +132,7 @@ export function createEnterpriseIdentityModule(opts: EnterpriseIdentityOptions =
       kernel.ui.push(
         {
           path: '/settings/company',
-          title: 'Company directory',
+          title: 'Company sign-in',
           placement: 'settings-section',
           chunk: 'enterprise-identity',
         },
@@ -173,6 +175,7 @@ export function createEnterpriseIdentityModule(opts: EnterpriseIdentityOptions =
     stop(kernel) {
       kernel.ports.scheduler.cancel(MAINTENANCE_JOB);
       kernel.ports.scheduler.cancel(GOOGLE_SYNC_JOB);
+      runtimes.delete(kernel);
     },
   });
 }

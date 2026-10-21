@@ -7,7 +7,23 @@
  * Isolation (§12.0): opt-in packages only contribute modules whose id appears
  * under `config.modules`.
  */
-import type { BeamhopConfig, BeamhopModule, Logger } from '@beamhop/core';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { BeamhopConfig, BeamhopModule, Logger, OptionalModuleSource } from '@beamhop/core';
+
+/** What a runtime knows when it builds the default config section of an optional module. */
+export interface OptionalModuleContext {
+  /** `<dataDir>/secrets` (mode 0700). */
+  secretsDir: string;
+  env: Record<string, string | undefined>;
+}
+
+export interface OptionalModuleDef {
+  /** Module id (= `config.modules` key). */
+  id: string;
+  /** Minimal valid section written by `modules.enable` (default `{}`). */
+  defaultSection?(ctx: OptionalModuleContext): Promise<Record<string, unknown>>;
+}
 
 export interface ModulePackage {
   name: string;
@@ -17,6 +33,35 @@ export interface ModulePackage {
   when?: (config: BeamhopConfig) => boolean;
   /** Only register modules whose id is a key of `config.modules`. */
   optIn?: boolean;
+  /** Opt-in modules of this package that can be turned on/off while running (§12.0). */
+  optional?: OptionalModuleDef[];
+}
+
+/** Env var holding the key vault's local master key; without it a key file is generated. */
+export const MASTER_KEY_ENV = 'BEAMHOP_MASTER_KEY';
+/** Generated master key file name inside `<dataDir>/secrets`. */
+export const MASTER_KEY_FILE = 'master.key';
+
+/**
+ * Key vault default: the local master key from `BEAMHOP_MASTER_KEY` when set; otherwise a
+ * 32-byte random key generated once into `<dataDir>/secrets/master.key` (mode 0600) and
+ * referenced as `kek.keyFile`. Back that file up: without it company-held keys are lost.
+ */
+export async function keyvaultDefaultSection(
+  ctx: OptionalModuleContext,
+): Promise<Record<string, unknown>> {
+  if (ctx.env[MASTER_KEY_ENV]) return { kek: { provider: 'local', keyEnv: MASTER_KEY_ENV } };
+  const path = ensureMasterKeyFile(ctx.secretsDir);
+  return { kek: { provider: 'local', keyFile: path } };
+}
+
+/** Create `<secretsDir>/master.key` (base64, 32 random bytes, 0600) unless it exists. */
+export function ensureMasterKeyFile(secretsDir: string): string {
+  const path = join(secretsDir, MASTER_KEY_FILE);
+  if (existsSync(path) && readFileSync(path, 'utf8').trim()) return path;
+  const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64');
+  writeFileSync(path, `${key}\n`, { mode: 0o600 });
+  return path;
 }
 
 export const DEFAULT_MODULE_PACKAGES: ModulePackage[] = [
@@ -43,18 +88,56 @@ export const DEFAULT_MODULE_PACKAGES: ModulePackage[] = [
     name: '@beamhop/enterprise-identity',
     load: () => import('@beamhop/enterprise-identity'),
     optIn: true,
+    // `{ enabled: true }`: a non-empty section marks it configured (isolation guard).
+    optional: [{ id: 'enterprise-identity', defaultSection: async () => ({ enabled: true }) }],
   },
   {
     name: '@beamhop/enterprise-keyvault',
     load: () => import('@beamhop/enterprise-keyvault'),
     optIn: true,
+    optional: [{ id: 'enterprise-keyvault', defaultSection: keyvaultDefaultSection }],
   },
   {
     name: '@beamhop/enterprise-compliance',
     load: () => import('@beamhop/enterprise-compliance'),
     optIn: true,
+    optional: [{ id: 'enterprise-compliance' }, { id: 'enterprise-network' }],
   },
 ];
+
+/**
+ * Hot-loadable optional modules (`manageOptionalModules` sources) from the package
+ * list: loading imports the package and picks the export with that module id.
+ */
+export function optionalModuleSources(
+  ctx: OptionalModuleContext,
+  logger: Logger,
+  packages: ModulePackage[] = DEFAULT_MODULE_PACKAGES,
+): OptionalModuleSource[] {
+  const out: OptionalModuleSource[] = [];
+  for (const pkg of packages) {
+    for (const def of pkg.optional ?? []) {
+      const src: OptionalModuleSource = {
+        id: def.id,
+        async load() {
+          let mod: Record<string, unknown>;
+          try {
+            mod = await pkg.load();
+          } catch (err) {
+            logger.log('warn', 'feature package not available', { package: pkg.name, err });
+            return undefined;
+          }
+          const values = ['default' in mod ? mod.default : undefined, ...Object.values(mod)];
+          return values.find((v): v is BeamhopModule => isModule(v) && v.id === def.id);
+        },
+      };
+      const make = def.defaultSection;
+      if (make) src.defaultSection = () => make(ctx);
+      out.push(src);
+    }
+  }
+  return out;
+}
 
 export function isModule(v: unknown): v is BeamhopModule {
   return (

@@ -67,6 +67,7 @@ export function createComplianceModule(opts: ExporterOptions = {}): BeamhopModul
   return defineModule({
     id: MODULE_ID,
     configSchema: ComplianceConfigSchema,
+    optional: true,
     register(kernel) {
       const rt = createRt(kernel);
       const approvals = new Approvals(rt);

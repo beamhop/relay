@@ -10,5 +10,6 @@ export * from './auth.ts';
 export * from './actions.ts';
 export * from './bus.ts';
 export * from './modules.ts';
+export * from './optional.ts';
 export * from './router.ts';
 export * from './version.ts';

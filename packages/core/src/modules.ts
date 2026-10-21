@@ -12,12 +12,12 @@ import type { z } from 'zod';
 import { ActionRegistry } from './actions.ts';
 import type { ActionDef } from './actions.ts';
 import type { AuthProvider, Principal } from './auth.ts';
-import { EventBus } from './bus.ts';
+import { type AppEventName, type AppEvents, EventBus } from './bus.ts';
 import type { BeamhopConfig, EffectiveLimits, RelayConfig } from './config.ts';
 import type { Connection, RequestGate, RequestGateContext, RouteContext } from './connection.ts';
 import { PolicyPipeline } from './policy.ts';
 import type { PolicyHooks } from './policy.ts';
-import type { Notification, Ports, RelayId, RuntimeName } from './ports.ts';
+import type { Notification, Ports, RelayId, RuntimeName, Scheduler } from './ports.ts';
 
 export type Subsystem =
   | 'relay'
@@ -164,6 +164,21 @@ export interface Kernel {
   /** Typed service registry so modules can expose APIs to dependents (e.g. `admin.config`). */
   provide<T>(name: string, service: T): void;
   use<T>(name: string): T | undefined;
+  /**
+   * Hot-enable a module while running: parse its config section, `register()` and
+   * `start()` it. Everything it registers (hooks, routes, actions, access resolvers,
+   * auth providers, health checks, cards, UI routes, playbooks, gates, services,
+   * bus/config listeners, scheduled jobs) is tracked so {@link Kernel.disableModule}
+   * can remove exactly that. No-op when already enabled. Optional for non-core kernels.
+   */
+  enableModule?(m: BeamhopModule): Promise<void>;
+  /**
+   * Hot-disable a module: `stop()` it and remove everything it registered.
+   * Returns false when it was not enabled. Throws when an enabled module depends on it.
+   */
+  disableModule?(id: string): Promise<boolean>;
+  /** Enabled modules in registration order (runtimes stop them in reverse on shutdown). */
+  modules?(): BeamhopModule[];
 }
 
 export type KernelEnv = {
@@ -176,6 +191,13 @@ export interface BeamhopModule {
   dependsOn?: string[];
   /** Schema for `config.modules[id]` (feature modules outside core config). */
   configSchema?: z.ZodType;
+  /**
+   * Optional feature (enterprise…) that can be switched on and off while running.
+   * Its HTTP routes live on a detachable per-module sub-app (dispatched after all
+   * built-in routes) even when it is registered at boot. Modules enabled with
+   * `kernel.enableModule()` always get one.
+   */
+  optional?: boolean;
   /** Registration must be cheap and side-effect free besides using the kernel. */
   register(kernel: Kernel): void | Promise<void>;
   /** Start background work (schedulers) after all modules registered. */
@@ -208,6 +230,65 @@ export interface KernelOptions {
   modules: BeamhopModule[];
 }
 
+/** Response header a detachable module sub-app sets when none of its routes matched. */
+const UNMATCHED_HEADER = 'x-beamhop-unmatched';
+/** `env` key carrying the root app's `route`/`principal` variables into module sub-apps. */
+const PARENT_VARS = '__beamhopParentVars';
+/** Kernel arrays modules push into; tracked per module so they can be removed again. */
+const TRACKED_LISTS = [
+  'authProviders',
+  'access',
+  'health',
+  'cards',
+  'ui',
+  'playbooks',
+  'gates',
+] as const;
+type TrackedList = (typeof TRACKED_LISTS)[number];
+/** Hono registration methods redirected to a module's sub-app while it registers. */
+const ROUTE_METHODS = [
+  'get',
+  'post',
+  'put',
+  'delete',
+  'patch',
+  'options',
+  'all',
+  'on',
+  'use',
+  'route',
+] as const;
+
+/** Everything one module registered (its registration scope). */
+interface ModuleScope {
+  module: BeamhopModule;
+  /** Detachable sub-app (optional / hot-enabled modules), else null (routes on the root app). */
+  app: Hono<KernelEnv> | null;
+  actions: string[];
+  hooks: string[];
+  services: Array<{ name: string; had: boolean; prev: unknown }>;
+  offs: Array<() => void>;
+  jobs: Set<string>;
+  added: Map<TrackedList, unknown[]>;
+  ws: { prev: ConnectionHandler | undefined; next: ConnectionHandler | undefined } | null;
+  ports: Array<{ key: string; prev: unknown; next: unknown }>;
+}
+
+function newScope(module: BeamhopModule, detachable: boolean): ModuleScope {
+  return {
+    module,
+    app: detachable ? createModuleApp() : null,
+    actions: [],
+    hooks: [],
+    services: [],
+    offs: [],
+    jobs: new Set(),
+    added: new Map(),
+    ws: null,
+    ports: [],
+  };
+}
+
 export async function createKernel(opts: KernelOptions): Promise<Kernel> {
   let current = opts.config;
   const listeners = new Set<(n: BeamhopConfig, p: BeamhopConfig) => void>();
@@ -217,12 +298,66 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
   let limitsResolver: ((relay: RelayConfig, tier?: string) => EffectiveLimits) | null = null;
   let notifier: (n: Notification) => Promise<void> = async () => {};
 
+  // ── Registration scopes (hot enable/disable) ──
+  const scopes = new Map<string, ModuleScope>();
+  const order: BeamhopModule[] = [];
+  /** Scopes with a detachable sub-app, in registration order (= dispatch order). */
+  const detachable: ModuleScope[] = [];
+  let active: ModuleScope | null = null;
+
+  const http = createKernelHttp(() => detachable.map((s) => s.app as Hono<KernelEnv>));
+  redirectRoutes(http, () => active?.app ?? null);
+
+  const actions = new ActionRegistry();
+  const registerAction = actions.register.bind(actions);
+  actions.register = ((def: ActionDef) => {
+    registerAction(def);
+    active?.actions.push(def.id);
+  }) as ActionRegistry['register'];
+
+  const policy = new PolicyPipeline();
+  const addHook = policy.add.bind(policy);
+  policy.add = (h) => {
+    const off = addHook(h);
+    active?.hooks.push(h.id);
+    return off;
+  };
+
+  const bus = new EventBus();
+  const on = bus.on.bind(bus);
+  bus.on = ((name: AppEventName, handler: (p: AppEvents[AppEventName]) => void) => {
+    const off = on(name, handler);
+    active?.offs.push(off);
+    return off;
+  }) as EventBus['on'];
+
+  const baseScheduler = opts.ports.scheduler as Scheduler | undefined;
+  const scheduler = baseScheduler
+    ? new Proxy(baseScheduler, {
+        get(t, k, r) {
+          if (k === 'every')
+            return (name: string, seconds: number, fn: () => Promise<void>) => {
+              active?.jobs.add(name);
+              return t.every(name, seconds, fn);
+            };
+          return Reflect.get(t, k, r);
+        },
+      })
+    : undefined;
+  const ports: Ports = scheduler
+    ? new Proxy(opts.ports, {
+        get(t, k, r) {
+          return k === 'scheduler' ? scheduler : Reflect.get(t, k, r);
+        },
+      })
+    : opts.ports;
+
   const kernel: Kernel = {
     runtime: opts.runtime,
-    ports: opts.ports,
-    bus: new EventBus(),
-    policy: new PolicyPipeline(),
-    actions: new ActionRegistry(),
+    ports,
+    bus,
+    policy,
+    actions,
     config: () => current,
     relay: (id) => current.relays.find((r) => r.id === id),
     limits(relayId, tier) {
@@ -236,11 +371,24 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     async applyConfig(next) {
       const prev = current;
       current = next;
-      for (const l of listeners) l(next, prev);
+      // Listeners may return a promise (e.g. hot-enabling a module); wait for all of them.
+      const pending: Promise<unknown>[] = [];
+      for (const l of [...listeners]) {
+        const r = l(next, prev) as unknown;
+        if (r && typeof (r as Promise<unknown>).then === 'function')
+          pending.push(r as Promise<unknown>);
+      }
+      if (pending.length === 0) return;
+      const failed = (await Promise.allSettled(pending)).find((r) => r.status === 'rejected');
+      if (failed) throw (failed as PromiseRejectedResult).reason;
     },
     onConfigChange(fn) {
       listeners.add(fn);
-      return () => listeners.delete(fn);
+      const off = () => {
+        listeners.delete(fn);
+      };
+      active?.offs.push(off);
+      return off;
     },
     moduleConfig<T>(id: string) {
       return current.modules[id] as T | undefined;
@@ -248,7 +396,7 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     moduleSchemas() {
       return { ...schemas };
     },
-    http: createKernelHttp(),
+    http,
     authProviders: [],
     access: [],
     health: [],
@@ -262,40 +410,248 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     },
     isEnabled: (id) => enabled.has(id),
     provide(name, service) {
+      active?.services.push({ name, had: services.has(name), prev: services.get(name) });
       services.set(name, service);
     },
     use<T>(name: string) {
       return services.get(name) as T | undefined;
     },
+    enableModule: (m) => serial(() => enable(m)),
+    disableModule: (id) => serial(() => disable(id)),
+    modules: () => [...order],
   };
+
+  const parseSection = (m: BeamhopModule) => {
+    if (!m.configSchema) return;
+    const raw = current.modules[m.id];
+    current = {
+      ...current,
+      modules: { ...current.modules, [m.id]: m.configSchema.parse(raw ?? {}) },
+    };
+  };
+
+  /** Run `fn` with `scope` active and record what it added to kernel lists, `ws` and ports. */
+  const inScope = async (scope: ModuleScope, fn: () => unknown): Promise<void> => {
+    const outer = active;
+    const lists = new Map(
+      TRACKED_LISTS.map((k) => [k, new Set<unknown>((kernel[k] as unknown[] | undefined) ?? [])]),
+    );
+    const ws = kernel.ws;
+    const portsBefore = new Map(Object.entries(opts.ports));
+    active = scope;
+    try {
+      await fn();
+    } finally {
+      active = outer;
+      for (const k of TRACKED_LISTS) {
+        const before = lists.get(k) as Set<unknown>;
+        const added = ((kernel[k] as unknown[] | undefined) ?? []).filter((x) => !before.has(x));
+        if (added.length) scope.added.set(k, [...(scope.added.get(k) ?? []), ...added]);
+      }
+      if (kernel.ws !== ws) scope.ws = { prev: scope.ws ? scope.ws.prev : ws, next: kernel.ws };
+      for (const [key, next] of Object.entries(opts.ports)) {
+        const prev = portsBefore.get(key);
+        if (next !== prev) scope.ports.push({ key, prev, next });
+      }
+    }
+  };
+
+  /** Remove everything `scope` registered (after the module's own `stop()`). */
+  const teardown = (scope: ModuleScope) => {
+    for (const id of scope.actions) actions.unregister(id);
+    for (const id of scope.hooks) policy.remove(id);
+    for (const off of [...scope.offs].reverse()) {
+      try {
+        off();
+      } catch {}
+    }
+    for (const name of scope.jobs) {
+      try {
+        baseScheduler?.cancel(name);
+      } catch {}
+    }
+    for (const [k, items] of scope.added) {
+      const list = kernel[k] as unknown[] | undefined;
+      if (!list) continue;
+      for (const item of items) {
+        const i = list.indexOf(item);
+        if (i >= 0) list.splice(i, 1);
+      }
+    }
+    for (const s of [...scope.services].reverse()) {
+      if (s.had) services.set(s.name, s.prev);
+      else services.delete(s.name);
+    }
+    if (scope.ws && kernel.ws === scope.ws.next) kernel.ws = scope.ws.prev;
+    const p = opts.ports as unknown as Record<string, unknown>;
+    for (const c of [...scope.ports].reverse()) {
+      if (p[c.key] !== c.next) continue;
+      if (c.prev === undefined) delete p[c.key];
+      else p[c.key] = c.prev;
+    }
+    const i = detachable.indexOf(scope);
+    if (i >= 0) detachable.splice(i, 1);
+  };
+
+  const track = (scope: ModuleScope) => {
+    scopes.set(scope.module.id, scope);
+    if (scope.app) detachable.push(scope);
+  };
+
+  const forget = (m: BeamhopModule) => {
+    enabled.delete(m.id);
+    scopes.delete(m.id);
+    delete schemas[m.id];
+    const i = order.indexOf(m);
+    if (i >= 0) order.splice(i, 1);
+  };
+
+  let queue: Promise<unknown> = Promise.resolve();
+  function serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = queue.then(fn, fn);
+    queue = run.catch(() => {});
+    return run;
+  }
+
+  async function enable(m: BeamhopModule): Promise<void> {
+    if (enabled.has(m.id)) return;
+    const missing = (m.dependsOn ?? []).filter((d) => !enabled.has(d));
+    if (missing.length)
+      throw new Error(`module ${m.id} needs ${missing.join(', ')} to be enabled first`);
+    const section = current.modules[m.id];
+    parseSection(m);
+    const scope = newScope(m, true);
+    track(scope);
+    try {
+      await inScope(scope, () => m.register(kernel));
+      enabled.add(m.id);
+      order.push(m);
+      if (m.configSchema) schemas[m.id] = m.configSchema;
+      await inScope(scope, () => m.start?.(kernel));
+    } catch (err) {
+      try {
+        await m.stop?.(kernel);
+      } catch {}
+      teardown(scope);
+      forget(m);
+      if (current.modules[m.id] !== section) {
+        const modules = { ...current.modules };
+        if (section === undefined) delete modules[m.id];
+        else modules[m.id] = section;
+        current = { ...current, modules };
+      }
+      throw err;
+    }
+  }
+
+  async function disable(id: string): Promise<boolean> {
+    const scope = scopes.get(id);
+    if (!scope || !enabled.has(id)) return false;
+    const dependents = order.filter((m) => m.id !== id && (m.dependsOn ?? []).includes(id));
+    if (dependents.length)
+      throw new Error(
+        `module ${id} is needed by ${dependents.map((m) => m.id).join(', ')}; turn those off first`,
+      );
+    try {
+      await scope.module.stop?.(kernel);
+    } catch (err) {
+      ports.logger?.log('error', 'module stop failed', { module: id, err: String(err) });
+    }
+    teardown(scope);
+    forget(scope.module);
+    return true;
+  }
 
   const ordered = topoSort(opts.modules);
   for (const m of ordered) {
-    if (m.configSchema) {
-      const raw = current.modules[m.id];
-      current = {
-        ...current,
-        modules: { ...current.modules, [m.id]: m.configSchema.parse(raw ?? {}) },
-      };
-    }
-    await m.register(kernel);
+    parseSection(m);
+    const scope = newScope(m, !!m.optional);
+    track(scope);
+    await inScope(scope, () => m.register(kernel));
     enabled.add(m.id);
+    order.push(m);
     if (m.configSchema) schemas[m.id] = m.configSchema;
   }
-  for (const m of ordered) await m.start?.(kernel);
+  for (const m of ordered) {
+    const scope = scopes.get(m.id) as ModuleScope;
+    await inScope(scope, () => m.start?.(kernel));
+  }
   return kernel;
+}
+
+/**
+ * While a module with a detachable sub-app registers, route registrations made on
+ * the root app (`kernel.http.get(…)` etc.) go to that sub-app instead. Request
+ * handling (`fetch`/`request`) always uses the root app.
+ */
+function redirectRoutes(app: Hono<KernelEnv>, target: () => Hono<KernelEnv> | null): void {
+  const root = app as unknown as Record<string, (...a: unknown[]) => unknown>;
+  for (const name of ROUTE_METHODS) {
+    const original = (root[name] as (...a: unknown[]) => unknown).bind(app);
+    root[name] = (...args: unknown[]) => {
+      const sub = target();
+      if (!sub) return original(...args);
+      (sub as unknown as Record<string, (...a: unknown[]) => unknown>)[name]?.(...args);
+      return app;
+    };
+  }
+}
+
+/** Per-module sub-app: inherits `route`/`principal` from the root app, marks misses. */
+function createModuleApp(): Hono<KernelEnv> {
+  const app = new Hono<KernelEnv>();
+  app.use('*', async (c, next) => {
+    const env = c.env as Record<string, unknown> | undefined;
+    const vars = env?.[PARENT_VARS] as { route?: RouteContext; principal?: Principal } | undefined;
+    const route = vars?.route ?? (env?.route as RouteContext | undefined);
+    if (route) c.set('route', route);
+    if (vars?.principal) c.set('principal', vars.principal);
+    await next();
+  });
+  app.notFound(
+    () => new Response('404 Not Found', { status: 404, headers: { [UNMATCHED_HEADER]: '1' } }),
+  );
+  return app;
 }
 
 /**
  * Kernel Hono app with a first middleware that copies `env.route` (passed by the
  * runtime via {@link dispatchHttp}) into the `route` variable, before any module route runs.
+ * Requests no built-in route answers fall through to the detachable sub-apps of
+ * optional modules (in registration order), then to a plain 404.
  */
-function createKernelHttp(): Hono<KernelEnv> {
+function createKernelHttp(subApps: () => Hono<KernelEnv>[]): Hono<KernelEnv> {
   const app = new Hono<KernelEnv>();
   app.use('*', async (c, next) => {
     const env = c.env as { route?: RouteContext } | undefined;
     if (env && typeof env === 'object' && env.route) c.set('route', env.route);
     await next();
+  });
+  app.notFound(async (c) => {
+    const apps = subApps();
+    if (apps.length) {
+      const env = {
+        ...((c.env as Record<string, unknown> | undefined) ?? {}),
+        [PARENT_VARS]: { route: c.get('route'), principal: c.get('principal') },
+      };
+      let exec: Parameters<Hono<KernelEnv>['fetch']>[2];
+      try {
+        exec = c.executionCtx;
+      } catch {}
+      const method = c.req.method;
+      let body: ArrayBuffer | undefined;
+      if (method !== 'GET' && method !== 'HEAD') {
+        try {
+          body = await c.req.arrayBuffer();
+        } catch {}
+      }
+      for (const sub of apps) {
+        const req = new Request(c.req.url, { method, headers: c.req.raw.headers, body });
+        const res = await sub.fetch(req, env, exec);
+        if (res.headers.get(UNMATCHED_HEADER) !== '1') return res;
+      }
+    }
+    return c.text('404 Not Found', 404);
   });
   return app;
 }

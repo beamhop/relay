@@ -28,6 +28,28 @@ it on.
 4. Turn on more only when you need it: Settings shows compliance, approvals and network
    controls as suggestions, one at a time.
 
+Choosing **Company / Organization** turns on company sign-in right away — no restart. You can
+also switch each company feature on or off later, without a restart (each change is a settings
+revision you can undo):
+
+```sh
+beamhop modules list
+beamhop modules enable --id enterprise-identity     # company sign-in
+beamhop modules enable --id enterprise-keyvault     # company-held keys
+beamhop modules enable --id enterprise-compliance   # approvals, legal hold, reports
+beamhop modules enable --id enterprise-network      # IP allowlists, device certificates
+beamhop modules disable --id enterprise-network
+```
+
+**Master key for company-held keys.** When you turn on company-held keys, Beamhop uses the
+master key in the `BEAMHOP_MASTER_KEY` environment variable (32 random bytes, base64 or hex). If
+that variable is not set, it generates one once into `<data dir>/secrets/master.key` (readable
+only by the Beamhop user) and points `modules.enterprise-keyvault.kek.keyFile` at it. **Back
+this file up** with your data — without it, company-held keys cannot be recovered. You can move
+to KMS or Vault later. On Cloudflare Workers set the key as a secret
+(`wrangler secret put BEAMHOP_MASTER_KEY`); company features must be included in the Worker
+bundle to be turned on there.
+
 ## Running it seriously
 
 - **Backups and a standby server:** [operations](operations.md) and the

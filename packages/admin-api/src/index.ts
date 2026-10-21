@@ -20,6 +20,7 @@ import { actionRoutes } from './http/routes-actions.ts';
 import { authRoutes } from './http/routes-auth.ts';
 import { configRoutes } from './http/routes-config.ts';
 import { liveRoutes } from './http/routes-live.ts';
+import { moduleActions } from './modules-actions.ts';
 import { type AdminApiConfig, AdminApiConfigSchema, MODULE_ID } from './settings.ts';
 import { UndoStore } from './undo.ts';
 
@@ -44,6 +45,7 @@ export { describeChanges } from './config/describe.ts';
 export { applyPatch, diffPatch, mergePatch, type JsonPatchOp } from './config/patch.ts';
 export { NIP86_METHODS, NIP86_CONTENT_TYPE, supportedMethods } from './http/nip86.ts';
 export { EVENT_PERMISSIONS } from './http/routes-live.ts';
+export { OPTIONAL_MODULE_TEXT, type OptionalModuleText } from './modules-actions.ts';
 
 /** `kernel.use<AdminClaimService>('admin.claim')` — first-run claim (the runtime prints the code). */
 export interface AdminClaimService {
@@ -98,6 +100,7 @@ export const adminApiModule = defineModule({
 
     kernel.authProviders.push(...builtinProviders(kernel, dir, sessions, tokens));
     for (const a of builtinActions(kernel, dir, tokens)) kernel.actions.register(a);
+    for (const a of moduleActions(kernel, config)) kernel.actions.register(a);
     audit.attach();
 
     const claim: AdminClaimService = {

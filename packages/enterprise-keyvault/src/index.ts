@@ -26,6 +26,15 @@ export * from './migrate.ts';
 export { KeyvaultRuntime } from './runtime.ts';
 export type { KeyvaultDeps, KeyvaultService } from './runtime.ts';
 
+/**
+ * Runtime service (`kernel.use(SECRET_FILES_SERVICE)`) that reads secret files such as
+ * a generated master key (`kek.keyFile`). Provided by runtimes with a filesystem (Bun).
+ */
+export const SECRET_FILES_SERVICE = 'runtime.secret-files';
+export interface SecretFilesService {
+  read(path: string): Promise<string>;
+}
+
 const SHRED_JOB = 'keyvault.shred';
 const PRUNE_JOB = 'keyvault.audit-prune';
 
@@ -39,9 +48,15 @@ export function keyvaultRuntime(kernel: Kernel): KeyvaultRuntime | undefined {
 export function createKeyvaultModule(deps: KeyvaultDeps = {}): BeamhopModule {
   return defineModule({
     id: MODULE_ID,
+    optional: true,
     async register(kernel) {
       if (kernel.config().modules[MODULE_ID] === undefined) return;
-      const rt = new KeyvaultRuntime(kernel, deps);
+      // `kek.keyFile` needs a file reader: injected, or the runtime's secret-file service.
+      const files = kernel.use<SecretFilesService>(SECRET_FILES_SERVICE);
+      const rt = new KeyvaultRuntime(
+        kernel,
+        deps.readFile || !files ? deps : { ...deps, readFile: (p) => files.read(p) },
+      );
       rt.cfg(); // validate early: a broken config section fails the boot loudly
       await rt.init();
       if (rt.current) {
@@ -96,6 +111,10 @@ export function createKeyvaultModule(deps: KeyvaultDeps = {}): BeamhopModule {
       kernel.ports.scheduler.cancel(SHRED_JOB);
       kernel.ports.scheduler.cancel(PRUNE_JOB);
       await h.rt.bunker.idle();
+      // Turned off while running: hand key wrapping back to what was there before.
+      if (h.rt.portWrapper && kernel.ports.keyWrapper === h.rt.portWrapper)
+        kernel.ports.keyWrapper = h.rt.priorWrapper;
+      runtimes.delete(kernel);
     },
   });
 }
