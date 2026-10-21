@@ -194,7 +194,11 @@ async function loadKernel(modules: BeamhopModule[]) {
     relays: [{ id: 'main', hosts: ['relay.example.com'] }],
     ai: { enabled: true, baseUrl: 'http://127.0.0.1:11434/v1', model: 'llama3' },
     plugins: [],
-    modules: Object.fromEntries(modules.map((m) => [m.id, {}])),
+    modules: {
+      ...Object.fromEntries(modules.map((m) => [m.id, {}])),
+      // Modules whose sections have required fields get a minimal, inert sample.
+      'enterprise-keyvault': { kek: { provider: 'local', keyEnv: 'BEAMHOP_DOCS_UNUSED_KEK' } },
+    },
   });
   // Register only: no background jobs, no network.
   const registerOnly = modules.map((m) => ({ ...m, start: undefined, stop: undefined }));

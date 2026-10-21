@@ -4,7 +4,7 @@
 
 Every admin operation is an action. The admin app, the CLI (`beamhop <group> <name>`), the admin API (`POST /api/v1/nodes/self[/relays/<relay>]/actions/<id>`, see `/api/v1/openapi.json`), the command palette and NIP-86 all run these same actions. Changes show a preview first and can be undone where marked.
 
-[access](#access) · [admins](#admins) · [alerts](#alerts) · [backups](#backups) · [config](#config) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [notes](#notes) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users)
+[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [backups](#backups) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
 
 ## access
 
@@ -104,6 +104,33 @@ Change what a team member may do, for all relays or for one relay.
 | `id` | string |  | The team member |
 | `role` | `owner` \| `admin` \| `moderator` \| `viewer` \| `none` |  | New role ("none" removes access for that scope) |
 | `relayId` | string |  | Only for this relay (empty = all relays) |
+
+## ai
+
+### Write a plugin with AI
+
+Describe a rule in your own words. The assistant writes a plugin and tests, checks them, and installs it turned off so you can review it first.
+
+- **id:** `ai.generate-plugin` · **CLI:** `beamhop ai generate-plugin` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable · needs a second approver when approvals are on
+- *Technical:* LLM → plugin.ts (definePlugin, @beamhop/plugins/sdk) + plugin.test.ts (testbed); static import allow-list; tests run in the plugin host sandbox; installed with enabled=false.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `description` | string |  | What the plugin should do, in your own words |
+| `id` | string |  | Short id (letters, digits, dashes); made up from the description when empty |
+
+### AI hints for items waiting for review
+
+The label (spam, abusive, fine) and one-line reason the assistant suggested for each item. Hints only.
+
+- **id:** `ai.moderation-labels` · **CLI:** `beamhop ai moderation-labels` · **scope:** relay · **permission:** `relay.read`
+- read-only
+- *Technical:* DocStore ai.labels keyed `${relayId}:${queueItemId}`; produced by the ai.label-queue job.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `ids` | list of string |  |  |
 
 ## alerts
 
@@ -320,6 +347,22 @@ Apply a ready-made setup (goals, who can post, media options).
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `persona` | `public-social` \| `private-team` \| `wot-community` \| `media-host` \| `organization` |  | What kind of relay this is. Sets sensible goals and defaults. |
+
+## escrow
+
+### Open a private message for compliance
+
+Reads one private message of a person with a company-managed key, for a legal or compliance request. Needs a reason and a second admin’s approval, and is logged.
+
+- **id:** `escrow.decrypt-dm` · **CLI:** `beamhop escrow decrypt-dm` · **scope:** relay · **permission:** `compliance.write`
+- changes settings/data · needs a second approver when approvals are on
+- *Technical:* NIP-17 escrow: unwrap gift wrap 1059 → seal 13 → rumor 14/15 with the recipient’s managed key. Never possible for self-custody keys.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `eventId` | string |  |  |
+| `reason` | string |  |  |
+| `approvalId` | string |  |  |
 
 ## experience
 
@@ -587,6 +630,91 @@ A chart of one number over time, like posts or connections.
 | `agg` | `sum` \| `avg` \| `max` \| `min` \| `last` |  |  |
 | `labels` | map |  |  |
 
+## keyvault
+
+### Show signing history
+
+Every signature, decryption and key change made with company-managed keys.
+
+- **id:** `keyvault.audit` · **CLI:** `beamhop keyvault audit` · **scope:** node · **permission:** `compliance.read`
+- read-only
+- *Technical:* keyvault.audit records (who, kind, client, session).
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `subjectId` | string |  |  |
+| `op` | string |  |  |
+| `limit` | number | `100` |  |
+
+### Keep a company-managed key
+
+Cancels a scheduled key destruction.
+
+- **id:** `keyvault.cancel-destroy` · **CLI:** `beamhop keyvault cancel-destroy` · **scope:** node · **permission:** `compliance.write`
+- changes settings/data
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `subjectId` | string |  |  |
+
+### Destroy a company-managed key
+
+Permanently erases the person’s private key after a waiting period. Their old posts stay, but nobody can sign as them again. Blocked by legal holds.
+
+- **id:** `keyvault.destroy-key` · **CLI:** `beamhop keyvault destroy-key` · **scope:** node · **permission:** `compliance.write`
+- changes settings/data · needs a second approver when approvals are on
+- *Technical:* Crypto-shred: deletes wrappedSk from keyvault.keys after the grace period.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `subjectId` | string |  |  |
+| `afterDays` | number |  |  |
+| `reason` | string |  |  |
+
+### Sign a person out of all apps
+
+Disconnects every app that signs through the company bunker for this person.
+
+- **id:** `keyvault.revoke-sessions` · **CLI:** `beamhop keyvault revoke-sessions` · **scope:** node · **permission:** `users.write`
+- changes settings/data
+- *Technical:* Revokes NIP-46 bunker sessions and unbinds client pubkeys.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `subjectId` | string |  |  |
+
+### Switch to the new master key
+
+Re-wraps every data key with the master key currently configured. Keep the old one under "previous keys" until this finishes.
+
+- **id:** `keyvault.rotate-kek` · **CLI:** `beamhop keyvault rotate-kek` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · needs a second approver when approvals are on
+- *Technical:* Envelope KEK rotation: unwrap each DEK (keyvault.deks) with its recorded KEK, wrap with the current KEK. `force` re-wraps DEKs already under the current KEK id (cloud KMS key-version rotation).
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `force` | boolean | `false` |  |
+
+### Show key vault status
+
+Where the master key lives, how many company-managed keys exist, and pending work.
+
+- **id:** `keyvault.status` · **CLI:** `beamhop keyvault status` · **scope:** node · **permission:** `compliance.read`
+- read-only
+- *Technical:* KEK provider/id, DEK count and rotation state, managed key counts (keyvault.keys).
+
+### Protect older server keys with the master key
+
+Encrypts keys the server stored before the key vault was turned on.
+
+- **id:** `keyvault.wrap-legacy-keys` · **CLI:** `beamhop keyvault wrap-legacy-keys` · **scope:** node · **permission:** `node.manage`
+- changes settings/data
+- *Technical:* Re-wraps alerts.keys/nostr ({sk}) and, when asked, relay.groups.key/<relay> ({secretKey}) through ports.keyWrapper.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `relayGroupKeys` | boolean |  |  |
+
 ## lifecycle
 
 ### Download a person’s data
@@ -830,6 +958,100 @@ Notes the admin team left about a user, post or file.
 | `subject.id` | string |  | Pubkey, event id or file hash |
 | `limit` | number | `100` |  |
 
+## plugins
+
+### Browse plugins
+
+See plugins you can add to your relay, and which ones you already have.
+
+- **id:** `plugins.catalog` · **CLI:** `beamhop plugins catalog` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* Built-in catalog merged with the signed remote catalog (kind 30078, NIP-78).
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `refresh` | boolean | `false` |  |
+
+### Change plugin settings
+
+Adjust how a plugin behaves.
+
+- **id:** `plugins.configure` · **CLI:** `beamhop plugins configure` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable
+- *Technical:* Merges into config.plugins[id].config; `run` settings go to modules.plugins.entries[id] (sandbox, fail mode, budget).
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  |  |
+| `config` | map |  | Settings to change |
+| `replace` | boolean | `false` | Replace all settings instead of merging |
+| `run` | section |  | How Beamhop runs the plugin |
+| `run.source` | string |  |  |
+| `run.trusted` | boolean |  |  |
+| `run.failMode` | `open` \| `closed` | `"open"` |  |
+| `run.timeBudgetMs` | number |  |  |
+| `run.maxMemoryMb` | number |  |  |
+| `run.priority` | number |  |  |
+| `run.approvedPermissions` | list of `read-events` \| `write-events` \| `network` \| `docs` |  |  |
+
+### Turn a plugin off
+
+Stop using a plugin without removing it.
+
+- **id:** `plugins.disable` · **CLI:** `beamhop plugins disable` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable
+- *Technical:* config.plugins[id].enabled = false
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Plugin id, e.g. keyword-filter |
+
+### Turn a plugin on
+
+Start using a plugin you have added.
+
+- **id:** `plugins.enable` · **CLI:** `beamhop plugins enable` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable
+- *Technical:* config.plugins[id].enabled = true; clears the circuit breaker
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Plugin id, e.g. keyword-filter |
+
+### Add a plugin
+
+Add a plugin from the catalog. You will see what it is allowed to do first.
+
+- **id:** `plugins.install` · **CLI:** `beamhop plugins install` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable
+- *Technical:* Downloads the pinned version, verifies its integrity hash, installs into <dataDir>/plugins and adds it to config.plugins.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Plugin id from the catalog |
+| `enable` | boolean | `true` | Turn it on right away |
+| `config` | map |  | Plugin settings |
+
+### Plugin health
+
+See how each plugin is doing: how often it runs, what it blocks, and how fast it is.
+
+- **id:** `plugins.status` · **CLI:** `beamhop plugins status` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* Per plugin: calls, rejections, errors, timeouts, p95/avg hook latency (ms), mode.
+
+### Remove a plugin
+
+Turn a plugin off and delete it from this server.
+
+- **id:** `plugins.uninstall` · **CLI:** `beamhop plugins uninstall` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data
+- *Technical:* Removes config.plugins[id] and modules.plugins.entries[id], deletes installed files and the install record.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  | Plugin id, e.g. keyword-filter |
+
 ## policy
 
 ### Why these limits?
@@ -975,3 +1197,56 @@ Move a person to another tier (limits bundle).
 |---|---|---|---|
 | `pubkey` | string |  |  |
 | `tier` | string |  |  |
+
+## webhooks
+
+### Add a webhook
+
+Send a signed notification to another service when something happens.
+
+- **id:** `webhooks.add` · **CLI:** `beamhop webhooks add` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable
+- *Technical:* POST JSON, HMAC-SHA256 in X-Beamhop-Signature over "<timestamp>.<body>", retries with backoff.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `url` | string |  | Where to send notifications |
+| `events` | list of `conn.open` \| `conn.close` \| `event.accepted` \| `event.rejected` \| `event.held` \| `event.deleted` \| `req.served` \| `auth.success` \| `report.received` \| `blob.uploaded` \| `blob.deleted` \| `blob.quarantined` \| `admin.action` \| `config.changed` \| `error` | `[]` | What to send |
+| `filter` | section |  | Also send new posts matching this filter |
+| `filter.kinds` | list of number |  |  |
+| `filter.authors` | list of string |  |  |
+| `filter.relays` | list of string |  |  |
+| `secret` | string |  | Shared secret (created for you if empty) |
+| `description` | string |  |  |
+
+### Webhooks
+
+See where Beamhop sends notifications and how deliveries are going.
+
+- **id:** `webhooks.list` · **CLI:** `beamhop webhooks list` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* modules.webhooks.hooks with per-hook delivery stats; secrets are hidden.
+
+### Remove a webhook
+
+Stop sending notifications to a service.
+
+- **id:** `webhooks.remove` · **CLI:** `beamhop webhooks remove` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data · undoable
+- *Technical:* Removes modules.webhooks.hooks[id]; queued retries are dropped.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  |  |
+
+### Send a test notification
+
+Send a test message now to check that the other service receives it.
+
+- **id:** `webhooks.test` · **CLI:** `beamhop webhooks test` · **scope:** node · **permission:** `plugins.write`
+- changes settings/data
+- *Technical:* Single signed POST of type "ping"; no retries.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | string |  |  |

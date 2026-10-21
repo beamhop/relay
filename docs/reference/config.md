@@ -148,6 +148,23 @@ Each section exists only when that feature is turned on; enterprise features are
 | `tokens.maxDays` | number | `365` | Longest allowed lifetime for API tokens |
 | `live.heartbeatSeconds` | number | `25` |  |
 
+### `modules.ai`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `maxRounds` | number | `6` | How many steps the assistant may take to answer one question *Technical:* Max LLM round trips (tool call → result → next call) per question. |
+| `maxToolCalls` | number | `12` | How many lookups the assistant may do for one question |
+| `maxTokensPerRequest` | number | `24000` | Upper limit on how much text one question may use (keeps costs predictable) *Technical:* Budget across all rounds: provider-reported usage when available, else ~4 chars per token. |
+| `maxOutputTokens` | number | `1200` | Longest answer the assistant may write |
+| `timeoutSeconds` | number | `90` | Give up on a question after this long |
+| `maxToolResultChars` | number | `8000` |  |
+| `maxProposals` | number | `5` | How many suggested changes one answer may contain |
+| `labeling.enabled` | boolean | `true` | Suggest a label (spam / abusive / fine) for new items waiting for review |
+| `labeling.intervalSeconds` | number | `60` |  |
+| `labeling.perRun` | number | `10` | *Technical:* Max queue items labeled per scheduler tick (rate limit). |
+| `labeling.perHour` | number | `200` | Most items labeled per hour (rate limit) |
+| `labeling.maxAttempts` | number | `2` |  |
+
 ### `modules.alerts`
 
 | Setting | Type | Default | Description |
@@ -180,6 +197,12 @@ Each section exists only when that feature is turned on; enterprise features are
 | `rules.cert.criticalDays` | number | `3` |  |
 | `rules.backup.enabled` | boolean | `true` |  |
 | `rules.moderationBacklog.enabled` | boolean | `true` |  |
+
+### `modules.enterprise-identity`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `` | transform |  |  |
 
 ### `modules.insights`
 
@@ -249,6 +272,18 @@ Each section exists only when that feature is turned on; enterprise features are
 | `listRefreshMinutes` | number | `60` | How often blocked-image lists are reloaded |
 | `maxProcessBytes` | number | `209715200` | Larger files are stored as-is without copies or checks |
 
+### `modules.plugins`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `dir` | string |  |  |
+| `catalogUrl` | string | `""` |  |
+| `catalogPubkeys` | list of string | `[]` |  |
+| `timeBudgetMs` | number | `20` |  |
+| `hotReload` | boolean | `false` |  |
+| `breaker.threshold` | number | `5` |  |
+| `entries` | map |  |  |
+
 ### `modules.policy`
 
 | Setting | Type | Default | Description |
@@ -302,3 +337,23 @@ Each section exists only when that feature is turned on; enterprise features are
 | `vanishIdCap` | number | `1000` | *Technical:* NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total. |
 | `software` | string | `"https://github.com/beamhop/beamhop"` |  |
 | `version` | string | `"0.0.0"` |  |
+
+### `modules.webhooks`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `hooks` | list | `[]` |  |
+| `hooks[].id` | string |  |  |
+| `hooks[].url` | string |  |  |
+| `hooks[].events` | list of `conn.open` \| `conn.close` \| `event.accepted` \| `event.rejected` \| `event.held` \| `event.deleted` \| `req.served` \| `auth.success` \| `report.received` \| `blob.uploaded` \| `blob.deleted` \| `blob.quarantined` \| `admin.action` \| `config.changed` \| `error` | `[]` |  |
+| `hooks[].filter.kinds` | list of number |  |  |
+| `hooks[].filter.authors` | list of string |  |  |
+| `hooks[].filter.relays` | list of string |  |  |
+| `hooks[].secret` | string |  |  |
+| `hooks[].enabled` | boolean | `true` |  |
+| `hooks[].description` | string |  |  |
+| `allowPrivate` | boolean | `false` |  |
+| `maxAttempts` | number | `6` |  |
+| `baseDelaySeconds` | number | `10` |  |
+| `maxDelaySeconds` | number | `3600` |  |
+| `timeoutMs` | number | `10000` |  |
