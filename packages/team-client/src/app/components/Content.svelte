@@ -10,8 +10,8 @@
     isTopic,
     isCode,
     isCommand,
-    isCashu,
-    isInvoice,
+    isCashu, // beamhop: no-payments (rendered as plain text)
+    isInvoice, // beamhop: no-payments (rendered as plain text)
     isLink,
     isProfile,
     isRoom,
@@ -23,7 +23,6 @@
   import Danger from "@assets/icons/danger-triangle.svg?dataurl"
   import Icon from "@lib/components/Icon.svelte"
   import Button from "@lib/components/Button.svelte"
-  import ContentToken from "@app/components/ContentToken.svelte"
   import ContentEmoji from "@app/components/ContentEmoji.svelte"
   import ContentEmail from "@app/components/ContentEmail.svelte"
   import ContentCode from "@app/components/ContentCode.svelte"
@@ -169,8 +168,8 @@
           <ContentCode
             value={parsed.value}
             isBlock={isStartAndEnd(i) || parsed.value.includes("\n")} />
-        {:else if isCashu(parsed) || isInvoice(parsed)}
-          <ContentToken value={parsed.value} />
+        {:else if isCashu(parsed) || isInvoice(parsed)}<!-- beamhop: no-payments -->
+          {parsed.raw}<!-- beamhop: no-payments (plain text, never a pay link) -->
         {:else if isLink(parsed)}
           {#if isBlock(i)}
             <ContentLinkBlock url={parsed.value.url.toString()} {event} />

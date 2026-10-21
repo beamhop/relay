@@ -24,8 +24,7 @@ export const currencyOptions: CurrencyOption[] = [
   {name: "Belize Dollar", symbol: "$", code: "BZD"},
   {name: "Bermudian Dollar", symbol: "$", code: "BMD"},
   {name: "Bhutanese Ngultrum", symbol: "Nu", code: "BTN"},
-  {name: "Satoshi", symbol: "!", code: "SAT"},
-  {name: "Bitcoin", symbol: "₿", code: "BTC"},
+  // beamhop: no-payments (no cryptocurrency options)
   {name: "Bolivian Boliviano", symbol: "Bs", code: "BOB"},
   {name: "Bosnia And Herzegovina Convertible Mark", symbol: "KM", code: "BAM"},
   {name: "Botswana Pula", symbol: "P", code: "BWP"},
@@ -165,10 +164,10 @@ export const currencyOptions: CurrencyOption[] = [
   {name: "Zambian Kwacha", symbol: "K", code: "ZMW"},
 ]
 
-export const defaultCurrencyOption = currencyOptions.find(spec({code: "SAT"}))
+export const defaultCurrencyOption = currencyOptions.find(spec({code: "USD"})) // beamhop: no-payments
 
 export const getCurrencyOption = (code: string): CurrencyOption =>
-  currencyOptions.find(spec({code})) || {name: code, symbol: "$", code}
+  currencyOptions.find(spec({code})) || {name: code, symbol: `${code} `, code} // beamhop: no-payments
 
 export const displayCurrency = ({code, name}: CurrencyOption) => `${code} (${name})`
 

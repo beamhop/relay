@@ -7,17 +7,16 @@
   type Props = {
     url: string
     noun: string
-    event: TrustedEvent
-    hideZap?: boolean
+    event: TrustedEvent // beamhop: no-payments (hideZap prop removed)
     customActions?: Snippet
   }
 
-  const {url, noun, event, hideZap, customActions}: Props = $props()
+  const {url, noun, event, customActions}: Props = $props()
 </script>
 
 <!-- The compact segmented control a card footer gets. EventActionBar is the full-width
      version a detail page gets. -->
 <div class="items-center join">
-  <EventReactButtons {url} {event} {hideZap} class="button button-neutral button-xs join-item" />
+  <EventReactButtons {url} {event} class="button button-neutral button-xs join-item" />
   <EventMenuButton {url} {noun} {event} {customActions} class="flex join-item" />
 </div>

@@ -36,8 +36,7 @@ export type SettingsValues = {
   relay_auth: RelayAuthMode
   send_delay: number
   font_size: number
-  alerts: SpaceNotificationSettings[]
-  zap_amounts: number[]
+  alerts: SpaceNotificationSettings[] // beamhop: no-payments (no zap amounts)
   openrouter_key: string
   min_dm_pow: number
   min_dm_wot: number
@@ -51,8 +50,7 @@ export const defaultSettings: SettingsValues = {
   relay_auth: RelayAuthMode.Conservative,
   send_delay: 0,
   font_size: 1.1,
-  alerts: [],
-  zap_amounts: [21, 210, 2100, 21000],
+  alerts: [], // beamhop: no-payments
   openrouter_key: "",
   min_dm_pow: 16,
   min_dm_wot: 3,
@@ -130,8 +128,6 @@ export const loadSendDelay = async () => {
 
   return userSettingsValues.get().send_delay
 }
-
-export const zapAmounts = derived(userSettingsValues, $settings => $settings.zap_amounts)
 
 export const getSetting = <K extends keyof SettingsValues>(key: K) => userSettingsValues.get()[key]
 

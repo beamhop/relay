@@ -1,6 +1,5 @@
-import {Capacitor} from "@capacitor/core"
-import {derived, readable, writable} from "svelte/store"
-import {append, dissoc, fromPairs, last, poll, randomId, remove, tryCatch} from "@welshman/lib"
+import {derived, readable} from "svelte/store"
+import {dissoc, fromPairs, last, poll, randomId, tryCatch} from "@welshman/lib"
 import {AuthStatus, RelayReasonPrefix, SocketStatus, matchReason} from "@welshman/net"
 import type {Socket} from "@welshman/net"
 import {
@@ -14,16 +13,15 @@ import {
   RELAYS,
 } from "@welshman/util"
 import {RelayJoin, RelayLeave, RoomCreateInvite, RoomJoin, RoomLeave} from "@welshman/domain"
-import {RelayMemberLists, Relays, Sync, User, publish} from "@welshman/app"
+import {RelayMemberLists, Sync, User, publish} from "@welshman/app"
 import {stripPrefix} from "@lib/util"
 import {app, fromApp} from "@app/core/app"
-import {relayMemberLists, relays, roomLists} from "@app/core/plugins"
+import {roomLists} from "@app/core/plugins"
 import {command, writer} from "@app/core/domain"
 import {PLATFORM_URL} from "@app/core/env"
 import {relaysMostlyRestricted} from "@app/core/policies"
 import {optInSpaceNotifications} from "@app/features/push"
 import {deriveSocket} from "@app/core/relays"
-import {makeSpacePath} from "@app/ui/routes"
 import {publishRoomList} from "@app/features/rooms"
 import {removeTrustedRelay} from "@app/core/settings"
 import {syncApplicationData} from "@app/core/sync"
@@ -254,7 +252,7 @@ export const completeSpaceJoin = async (url: string, notifications: boolean) => 
     })
 }
 
-// Paid spaces
+// Space membership (beamhop: no-payments, was "Paid spaces")
 
 export const derivePubkeyIsSpaceMember = (url: string, pubkey: string) =>
   derived(
@@ -265,62 +263,7 @@ export const derivePubkeyIsSpaceMember = (url: string, pubkey: string) =>
 export const deriveUserIsSpaceMember = (url: string) =>
   fromApp($app => ($app.user ? derivePubkeyIsSpaceMember(url, $app.user.pubkey) : readable(false)))
 
-// Gated out by price rather than by invitation: it charges, and they have not paid.
-export const derivePaidGated = (url: string) =>
-  derived(
-    [fromApp($app => $app.use(Relays).one(url)), deriveUserIsSpaceMember(url), app],
-    ([$relay, $isMember, $app]) => Boolean($relay?.isPaid() && $app.user && !$isMember),
-  )
-
-// Urls a checkout was opened for this session. A forgotten one is covered by membership sync.
-export const pendingCheckouts = writable<string[]>([])
-
-/**
- * Open a relay's payment page, naming the pubkey being paid for and where to
- * come back to. `payments_url` may carry a query of its own, so the parameters
- * are appended rather than written.
- */
-export const openCheckout = (url: string) => {
-  const paymentsUrl = relays.get().get(url)?.payments_url
-
-  if (!paymentsUrl) {
-    return "This space has not said where to pay."
-  }
-
-  // A payment page comes back to the app by universal link on native.
-  const origin = Capacitor.isNativePlatform() ? PLATFORM_URL : location.origin
-  const checkoutUrl = new URL(paymentsUrl)
-
-  checkoutUrl.searchParams.set("pubkey", User.require(app.get()).pubkey)
-  checkoutUrl.searchParams.set("return_url", origin + makeSpacePath(url))
-
-  pendingCheckouts.update($urls => append(url, $urls))
-
-  location.href = checkoutUrl.toString()
-}
-
-/**
- * Ask the relay again whether the user is a member, and finish the join if they
- * are. Membership is the source of truth: the return redirect is best effort,
- * and a payment made in another browser lands here too.
- */
-export const reconcileSpaceMembership = async (url: string) => {
-  // Auth that ended Forbidden before the payment never retries on its own.
-  app.get().pool.get(url).close()
-  relaysMostlyRestricted.update(dissoc(url))
-
-  const members = await relayMemberLists.get().forceLoad(url)
-
-  if (!members?.isMember(User.require(app.get()).pubkey)) {
-    return false
-  }
-
-  await completeSpaceJoin(url, true)
-
-  pendingCheckouts.update($urls => remove(url, $urls))
-
-  return true
-}
+// beamhop: no-payments (paid-space gate, checkout and payment reconciliation removed)
 
 export const acceptInvite = async (data: InviteData, notifications: boolean) => {
   const spaceUrls = roomLists.get().urls(User.require(app.get()).pubkey).get()

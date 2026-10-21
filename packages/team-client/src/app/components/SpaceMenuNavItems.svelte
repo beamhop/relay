@@ -1,14 +1,13 @@
 <script lang="ts">
   import {page} from "$app/stores"
   import {getJson, setJson} from "@welshman/lib"
-  import {EVENT_TIME, ZAP_GOAL, THREAD, CLASSIFIED, PINBOARD, POLL, LONG_FORM} from "@welshman/util"
+  import {EVENT_TIME, THREAD, CLASSIFIED, PINBOARD, POLL, LONG_FORM} from "@welshman/util"
   import {deriveDeduplicatedByValue} from "@welshman/store"
   import Magnifier from "@assets/icons/magnifier.svg?dataurl"
   import UsersGroup from "@assets/icons/users-group-rounded.svg?dataurl"
   import Home from "@assets/icons/home.svg?dataurl"
   import GalleryWide from "@assets/icons/gallery-wide.svg?dataurl"
   import ChatRound from "@assets/icons/chat-round.svg?dataurl"
-  import StarFallMinimalistic from "@assets/icons/star-fall-minimalistic-2.svg?dataurl"
   import NotesMinimalistic from "@assets/icons/notes-minimalistic.svg?dataurl"
   import CalendarMinimalistic from "@assets/icons/calendar-minimalistic.svg?dataurl"
   import CaseMinimalistic from "@assets/icons/case-minimalistic.svg?dataurl"
@@ -18,7 +17,6 @@
   import SecondaryNavItem from "@lib/components/SecondaryNavItem.svelte"
   import SpaceSearch from "@app/components/SpaceSearch.svelte"
   import {events} from "@app/core/plugins"
-  import {ENABLE_ZAPS} from "@app/core/env"
   import {CONTENT_KINDS} from "@app/features/content"
   import {deriveSpaceSupportsRooms} from "@app/core/relays"
   import {makeSpaceChatPath, makeSpacePath} from "@app/ui/routes"
@@ -33,7 +31,6 @@
 
   const supportsRooms = deriveSpaceSupportsRooms(url)
   const chatPath = makeSpaceChatPath(url)
-  const goalsPath = makeSpacePath(url, "goals")
   const threadsPath = makeSpacePath(url, "threads")
   const classifiedsPath = makeSpacePath(url, "classifieds")
   const articlesPath = makeSpacePath(url, "articles")
@@ -75,11 +72,7 @@
     <Icon icon={GalleryWide} /> Library
   </SecondaryNavItem>
 {/if}
-{#if ENABLE_ZAPS && showSection(ZAP_GOAL, goalsPath)}
-  <SecondaryNavItem href={goalsPath} notification={$notifications.has(goalsPath)}>
-    <Icon icon={StarFallMinimalistic} /> Goals
-  </SecondaryNavItem>
-{/if}
+<!-- beamhop: no-payments (no goals section) -->
 {#if showSection(THREAD, threadsPath)}
   <SecondaryNavItem href={threadsPath} notification={$notifications.has(threadsPath)}>
     <Icon icon={NotesMinimalistic} /> Threads

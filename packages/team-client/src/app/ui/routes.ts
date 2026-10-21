@@ -14,7 +14,6 @@ import {
   PINBOARD,
   POLL,
   THREAD,
-  ZAP_GOAL,
   hexTags,
   tagSpec,
   tagValue,
@@ -138,7 +137,7 @@ export const makeMessagePath = (url: string, event: TrustedEvent) => {
   return path + "?" + qp.toString()
 }
 
-export const makeGoalPath = (url: string, id?: string) => makeSpacePath(url, "goals", id)
+// beamhop: no-payments (zap goal route removed)
 
 export const makeThreadPath = (url: string, id?: string) => makeSpacePath(url, "threads", id)
 
@@ -178,8 +177,6 @@ export const makeLibraryPath = (url: string, address?: string) =>
 
 export const makeContentPath = (url: string, kind: number, idOrAddress?: string) => {
   switch (kind) {
-    case ZAP_GOAL:
-      return makeGoalPath(url, idOrAddress)
     case THREAD:
       return makeThreadPath(url, idOrAddress)
     case CLASSIFIED:

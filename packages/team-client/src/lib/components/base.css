@@ -185,15 +185,7 @@ body.keyboard-open .hide-on-keyboard {
    Fonts shared/default across all themes
    ---------------------------------------------------------------------------- */
 
-@font-face {
-  font-family: "Satoshis";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src:
-    local(""),
-    url("/fonts/Satoshi Symbol.ttf") format("truetype");
-}
+/* beamhop: no-payments (sats symbol font removed) */
 
 @font-face {
   font-family: "Lato";

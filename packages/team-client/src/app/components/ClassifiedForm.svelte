@@ -130,7 +130,7 @@
   let title = $state(initialValues?.title ?? "")
   let status = $state(initialValues?.status ?? "active")
   let price = $state(initialValues?.price ?? 0)
-  let currency = $state(initialValues?.currency ?? "SAT")
+  let currency = $state(initialValues?.currency ?? "USD") // beamhop: no-payments (was SAT)
   let images = $state(initialValues?.images ?? [])
   let topics = $state(uniq(removeUndefined(initialValues?.topics?.map(normalizeTopic) ?? [])))
   let content = $state(initialValues?.content ?? "")

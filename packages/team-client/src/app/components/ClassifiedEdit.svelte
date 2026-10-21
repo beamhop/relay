@@ -23,7 +23,7 @@
       status: classified.status() ?? "",
       content: classified.content(),
       price: classified.price()?.amount ?? 0,
-      currency: classified.price()?.currency ?? "SAT",
+      currency: classified.price()?.currency ?? "USD", // beamhop: no-payments (was SAT)
       images: classified.images(),
       topics: classified.topics(),
     },

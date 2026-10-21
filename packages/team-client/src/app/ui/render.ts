@@ -3,8 +3,17 @@ import type {Parsed, SummaryName} from "@welshman/content"
 import type {TrustedEvent} from "@welshman/util"
 import {profiles} from "@app/core/plugins"
 
-const summaryName: SummaryName = parsed =>
-  parsed.type === ParsedType.Profile ? profiles.get().display(parsed.value.pubkey).get() : undefined
+const summaryName: SummaryName = parsed => {
+  // beamhop: no-payments (a token or invoice summarizes as its own text, not as a payment)
+  // prettier-ignore
+  if (parsed.type === ParsedType.Cashu || parsed.type === ParsedType.Invoice) { // beamhop: no-payments
+    return parsed.raw
+  }
+
+  return parsed.type === ParsedType.Profile
+    ? profiles.get().display(parsed.value.pubkey).get()
+    : undefined
+}
 
 const renderSummary = (parsed: Parsed[]) =>
   renderAsText(summarize(parsed, summaryName)).toString().trim()

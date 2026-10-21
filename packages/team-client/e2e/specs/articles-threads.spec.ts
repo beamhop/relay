@@ -619,7 +619,7 @@ test("US-045 turn a chat message into a thread", async ({seed, as}) => {
   await expect(message).toBeVisible()
   await message.hover()
 
-  // RoomItem's hover actions are zap, emoji, reply and menu, all of them icons.
+  // RoomItem's hover actions are emoji, reply and menu, all of them icons. beamhop: no-payments (no zap)
   await message.locator(".room__item-actions").getByRole("button").last().click()
   await page.getByRole("button", {name: "Create a Thread"}).click()
 

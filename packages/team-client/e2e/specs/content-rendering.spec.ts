@@ -439,7 +439,8 @@ test("US-066 see distinctive inline tokens", async ({seed, as}) => {
   await expect(page.getByRole("button", {name: "View Full Profile"})).toBeVisible()
 })
 
-test("US-067 copy a shared invoice or token", async ({seed, as}) => {
+// beamhop: no-payments (was "copy a shared invoice or token": invoices are plain text, never pay links)
+test("US-067 a shared invoice or token is plain text", async ({seed, as}) => {
   let invoice!: SeededEvent
 
   const scenario = await seed(({relay, user, at}) => {
@@ -453,15 +454,10 @@ test("US-067 copy a shared invoice or token", async ({seed, as}) => {
   })
 
   const {url} = scenario.space("space")
-  const page = await as(users.alice, roomPath(url, "general"), {
-    context: {permissions: ["clipboard-read", "clipboard-write"]},
-  })
+  const page = await as(users.alice, roomPath(url, "general"))
+  const item = page.locator(`[data-event="${invoice.id}"]`)
 
-  await page
-    .locator(`[data-event="${invoice.id}"]`)
-    .getByRole("button", {name: INVOICE.slice(0, 16)})
-    .click()
-
-  await expect(page.getByRole("alert")).toBeVisible()
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(INVOICE)
+  await expect(item).toContainText(INVOICE)
+  await expect(item.getByRole("button", {name: INVOICE.slice(0, 16)})).toHaveCount(0)
+  await expect(item.locator('a[href^="lightning:"]')).toHaveCount(0)
 })

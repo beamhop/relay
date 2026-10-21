@@ -1,4 +1,5 @@
 import {MINUTE} from "@welshman/lib"
+// beamhop: no-payments (zap settings test US-091 removed)
 import type {Page} from "@playwright/test"
 import {
   dialog,
@@ -277,50 +278,4 @@ test("US-090 change the app's appearance", async ({seed, as}) => {
   await page.reload()
 
   await expect(page.locator("html")).toHaveAttribute("style", /font-size:\s*1\.25rem/)
-})
-
-test("US-091 set up how people zap you", async ({seed, as}) => {
-  await seed(({relay, user}) => {
-    const space = relay("space")
-
-    space.room("general", {name: "General"})
-    space.join(user.alice, "general")
-    space.profile(user.alice, {name: "Alice Anders"})
-
-    space.relayList(user.alice)
-  })
-
-  const page = await as(users.alice, "/settings/wallet")
-
-  await expect(page.getByText("Not set")).toBeVisible()
-
-  await page.getByRole("button", {name: "Update"}).click()
-
-  const address = page
-    .locator(".dialog")
-    .filter({has: page.getByRole("heading", {name: "Update Lightning Address"})})
-    .last()
-
-  await address.getByPlaceholder("user@domain.com").fill("alice@example.test")
-  await address.getByRole("button", {name: "Save Changes"}).click()
-
-  // The dialog closes itself once the profile has gone out, and the page behind it has its own Save.
-  await expect(address).toHaveCount(0)
-  await expect(page.getByText("alice@example.test")).toBeVisible()
-
-  // The same utility classes land on other rows, so this is pinned to the zap form's input rows.
-  const presets = page
-    .locator("form")
-    .filter({hasText: "Zap Amounts"})
-    .locator("div.items-center.gap-2:has(input)")
-
-  await presets.first().locator("input").fill("500")
-  await page.getByRole("button", {name: "Save Changes"}).click()
-
-  await expect(page.getByRole("alert")).toContainText("Your zap amounts have been saved!")
-
-  await waitForToastToClear(page)
-  await page.reload()
-
-  await expect(presets.first().locator("input")).toHaveValue("500")
 })

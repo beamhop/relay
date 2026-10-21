@@ -1,4 +1,3 @@
-import {Capacitor} from "@capacitor/core"
 import * as nip19 from "nostr-tools/nip19"
 import {identity} from "@welshman/lib"
 import {normalizeRelayUrl} from "@welshman/util"
@@ -15,9 +14,7 @@ export const PUSH_SERVER = env("VITE_PUSH_SERVER")
 
 export const PUSH_BRIDGE = normalizeRelayUrl(env("VITE_PUSH_BRIDGE"))
 
-export const ENABLE_ZAPS = Capacitor.getPlatform() !== "ios"
-
-export const ENABLE_PAID_SPACES = Capacitor.getPlatform() !== "ios"
+// beamhop: no-payments (zap and paid-space switches removed)
 
 export const SIGNER_RELAYS = fromCsv(env("VITE_SIGNER_RELAYS")).map(normalizeRelayUrl)
 
@@ -66,9 +63,7 @@ export const DEFAULT_SPACES = fromCsv(env("VITE_DEFAULT_SPACES")).map(normalizeR
 
 export const DEFAULT_PUBKEYS = env("VITE_DEFAULT_PUBKEYS")
 
-export const HOSTING_BACKEND_URL = env("VITE_HOSTING_BACKEND_URL")
-
-export const HOSTING_RELAY_DOMAIN = env("VITE_HOSTING_RELAY_DOMAIN")
+// beamhop: no-payments (paid hosting backend env vars removed)
 
 export const DUFFLEPUD_URL = env("VITE_DUFFLEPUD_URL") || "https://dufflepud.coracle.social" // beamhop: configurable
 

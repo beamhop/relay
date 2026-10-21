@@ -1,7 +1,6 @@
 import {neventEncode, npubEncode} from "nostr-tools/nip19"
-import {DAY, HOUR, MINUTE, WEEK, bech32ToHex, int, now} from "@welshman/lib"
-import {getLnUrl} from "@welshman/util"
-import {Profile} from "@welshman/domain"
+// beamhop: no-payments (wallet/zap test US-115 removed)
+import {DAY, HOUR, MINUTE, WEEK, int, now} from "@welshman/lib"
 import type {Locator, Page} from "@playwright/test"
 import {
   composer,
@@ -11,7 +10,6 @@ import {
   message,
   messageActions,
   messages,
-  mockDufflepud,
   mockOpenRouterSpeech,
   openMessageMenu,
   openRoomDetail,
@@ -839,66 +837,6 @@ test("US-119 have a message read out loud", async ({seed, as}) => {
   speech.release()
 
   await expect(alice.getByText("a message from Bob Barnacle")).toHaveCount(0)
-})
-
-test("US-115 connect a wallet without losing the zap you were composing", async ({seed, as}) => {
-  // Zapping only gets as far as a dialog once dufflepud answers with a zapper for that endpoint.
-  const lud16 = "bob@zap.test"
-  // A zapper's receipts are signed by the recipient's lightning provider, so it is an identity of its own.
-  const provider = makeTestUser("zapper")
-
-  const scenario = await seed(({relay, user}) => {
-    const space = relay("space")
-
-    space.room("general", {name: "General"})
-    space.join(user.alice, "general")
-    space.join(user.bob, "general")
-    space.profile(user.alice, {name: "Alice Anchor"})
-    space.event(user.bob, () =>
-      space.kind(Profile).writer().update({name: "Bob Barnacle", lud16}).renderTemplate(),
-    )
-    space.message(user.bob, "general", "the new sail came in")
-  })
-
-  const {url} = scenario.space("space")
-  const path = roomPath(url, "general")
-  const page = await as(users.alice, path, {webln: {node: {alias: "Test Node"}}})
-
-  // Registered after the page opened, so it answers ahead of the empty dufflepud `as()` installs.
-  await mockDufflepud(page.context(), {
-    zappers: [
-      {
-        lnurl: bech32ToHex(getLnUrl(lud16)!),
-        info: {pubkey: users.bob.pubkey, nostrPubkey: provider.pubkey, allowsNostr: true},
-      },
-    ],
-  })
-
-  await page.goto(path)
-
-  await expect(message(page, "the new sail came in")).toBeVisible()
-
-  await messageActions(page, "the new sail came in").first().click()
-
-  const zap = dialog(page, "Send a Zap")
-  const amount = zap.locator('input[type="number"]')
-
-  await expect(zap.getByRole("button", {name: "Create invoice"})).toBeVisible()
-
-  await amount.fill("210")
-  await zap.getByRole("button", {name: "Connect a lightning wallet"}).click()
-
-  const connect = dialog(page, "Connect a Wallet")
-
-  await connect.getByRole("button", {name: "Connect with WebLN"}).click()
-
-  await expect(page.getByRole("alert")).toContainText("Wallet successfully connected!")
-  await expect(connect).toHaveCount(0)
-
-  // The zap dialog was underneath rather than replaced, so the amount she had typed survived.
-  await expect(zap.getByRole("button", {name: "Connect a lightning wallet"})).toHaveCount(0)
-  await expect(zap.getByRole("button", {name: "Send Zap"})).toBeVisible()
-  await expect(amount).toHaveValue("210")
 })
 
 test("fills a room from a relay that never says it is done", async ({seed, as}) => {

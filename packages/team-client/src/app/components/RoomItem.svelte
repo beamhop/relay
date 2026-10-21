@@ -22,7 +22,6 @@
   import ProfileDetail from "@app/components/ProfileDetail.svelte"
   import ProfileCircle from "@app/components/ProfileCircle.svelte"
   import ReactionSummary from "@app/components/ReactionSummary.svelte"
-  import RoomItemZapButton from "@app/components/RoomItemZapButton.svelte"
   import RoomItemEmojiButton from "@app/components/RoomItemEmojiButton.svelte"
   import RoomItemMenu from "@app/components/RoomItemMenu.svelte"
   import RoomItemMenuMobile from "@app/components/RoomItemMenuMobile.svelte"
@@ -33,7 +32,6 @@
   import {noPublications, publicationsByEventId} from "@app/core/publications"
   import {CONTENT_KINDS} from "@app/features/content"
   import {colorFor} from "@app/ui/theme"
-  import {ENABLE_ZAPS} from "@app/core/env"
   import type {FeedContext} from "@app/features/feeds"
   import {highlightedEvent, makeContentPath, makeThreadPath} from "@app/ui/routes"
   import {pushModal} from "@app/ui/modal"
@@ -179,9 +177,7 @@
   {#if !isMobile}
     <div
       class="room__item-actions join absolute right-2 top-0.5 opacity-0 transition-all focus-within:opacity-100 group-hover:opacity-100">
-      {#if ENABLE_ZAPS}
-        <RoomItemZapButton {url} {event} />
-      {/if}
+      <!-- beamhop: no-payments (no zap button) -->
       <RoomItemEmojiButton {url} {event} />
       {#if replyTo}
         <Button

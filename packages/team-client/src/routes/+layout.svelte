@@ -31,7 +31,6 @@
   import * as coreSession from "@app/core/session"
   import {restoreSession} from "@app/core/session"
   import {syncSignerAlerts} from "@app/core/signer"
-  import {wallet} from "@app/features/lightning"
   import {storage} from "@app/core/storage"
   import {device} from "@app/core/device"
   import {forceHealthChecks} from "@app/features/healthChecks"
@@ -102,8 +101,7 @@
     // Boot code reads these, e.g. Push picks its adapter from pushState, so wait for stored values
     await Promise.all([
       device.ready,
-      shouldUnwrap.ready,
-      wallet.ready,
+      shouldUnwrap.ready, // beamhop: no-payments (no wallet store)
       notificationSettings.ready,
       pushState.ready,
       forceHealthChecks.ready,

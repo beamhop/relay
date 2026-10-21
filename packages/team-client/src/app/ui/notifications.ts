@@ -30,7 +30,6 @@ import {
   MESSAGE,
   NOTE,
   REACTION,
-  ZAP_RECEIPT,
   addMinimalFallbacks,
   getIdFilters,
   sortEventsDesc,
@@ -52,7 +51,7 @@ import {
 } from "@app/features/content"
 import {getIsMuted, userSettingsValues} from "@app/core/settings"
 import {Chats} from "@app/features/chats"
-import {dufflepud, DUFFLEPUD_URL, ENABLE_ZAPS} from "@app/core/env"
+import {dufflepud, DUFFLEPUD_URL} from "@app/core/env" // beamhop: no-payments
 import {spaceSupportsRooms} from "@app/core/relays"
 import {activeSpaceUrls} from "@app/features/rooms"
 import {getNotificationRef, isEventMuted, isNotificationTarget, Notes} from "@app/features/social"
@@ -431,8 +430,7 @@ const homeNotificationKinds = [
   NOTE,
   COMMENT,
   REACTION,
-  ...REPOST_KINDS,
-  ...(ENABLE_ZAPS ? [ZAP_RECEIPT] : []),
+  ...REPOST_KINDS, // beamhop: no-payments (zap receipts are not notifications)
 ]
 
 export const homeNotificationFilters = (pubkey: string) => [
@@ -443,7 +441,7 @@ export const homeNotificationFilters = (pubkey: string) => [
 export const homeNotificationTypes = [
   {value: "replies", label: "Replies"},
   {value: "reactions", label: "Reactions"},
-  {value: "zaps", label: "Zaps"},
+  // beamhop: no-payments (no zap filter)
 ] as const
 
 export type HomeNotificationType = (typeof homeNotificationTypes)[number]["value"]
@@ -456,9 +454,8 @@ export const includedHomeNotificationTypes = synced<HomeNotificationType[]>({
 
 // A mention is the note itself rather than something done to it, so no toggle hides one.
 const homeNotificationType = (event: TrustedEvent): Maybe<HomeNotificationType> => {
-  if (event.kind === ZAP_RECEIPT) {
-    return "zaps"
-  } else if (event.kind === REACTION || REPOST_KINDS.includes(event.kind)) {
+  // beamhop: no-payments (no zap type)
+  if (event.kind === REACTION || REPOST_KINDS.includes(event.kind)) {
     return "reactions"
   } else if (getNotificationRef(event)?.id !== event.id) {
     return "replies"
@@ -530,9 +527,9 @@ const homeNotificationTargets = derived(
 export const isHomeNotification = derived(
   [app, homeNotificationTargets, isEventMuted],
   ([$app, $targets, $isEventMuted]) => {
-    // A zap receipt is signed by an lnurl server rather than by the zapper, so neither test reads it.
+    // beamhop: no-payments (no receipt exception)
     const isFromSomeoneElse = (event: TrustedEvent) =>
-      event.kind === ZAP_RECEIPT || (event.pubkey !== $app.user?.pubkey && !$isEventMuted(event))
+      event.pubkey !== $app.user?.pubkey && !$isEventMuted(event)
 
     // An entry is drawn around its note, so a thread a muted person started is not one either.
     return (event: TrustedEvent) => {

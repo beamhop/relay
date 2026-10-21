@@ -9,7 +9,6 @@ import {
   ROOMS,
   THREAD,
   WRAP,
-  ZAP_REQUEST,
 } from "@welshman/util"
 import type {Nip46ResponseWithResult} from "@welshman/signer"
 import {Nip46Broker} from "@welshman/signer"
@@ -44,8 +43,7 @@ export const NIP46_PERMS =
     COMMENT,
     ROOMS,
     WRAP,
-    REACTION,
-    ZAP_REQUEST,
+    REACTION, // beamhop: no-payments (no zap request signing permission)
   ]
     .map(k => `sign_event:${k}`)
     .join(",")

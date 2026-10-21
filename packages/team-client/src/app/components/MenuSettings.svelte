@@ -1,11 +1,9 @@
 <script lang="ts">
   import Bookmark from "@assets/icons/bookmark.svg?dataurl"
   import UserCircle from "@assets/icons/user-circle.svg?dataurl"
-  import ServerPath from "@assets/icons/server-path.svg?dataurl"
   import GalleryMinimalistic from "@assets/icons/gallery-minimalistic.svg?dataurl"
   import Shield from "@assets/icons/shield-minimalistic.svg?dataurl"
   import Bell from "@assets/icons/bell.svg?dataurl"
-  import Wallet from "@assets/icons/wallet.svg?dataurl"
   import Icon from "@lib/components/Icon.svelte"
   import Link from "@lib/components/Link.svelte"
   import Button from "@lib/components/Button.svelte"
@@ -14,8 +12,6 @@
   import Profile from "@app/components/Profile.svelte"
   import LogOut from "@app/components/LogOut.svelte"
   import {user} from "@app/core/app"
-  import {ENABLE_ZAPS} from "@app/core/env"
-  import {HOSTING_ENABLED} from "@app/features/hosting"
   import {pushModal} from "@app/ui/modal"
   import {makeProfilePath} from "@app/ui/routes"
 
@@ -47,22 +43,7 @@
           <Icon icon={Bell} size={5} />
           Alerts
         </Link>
-        {#if ENABLE_ZAPS}
-          <Link
-            href="/settings/wallet"
-            class="aspect-square button button-neutral h-[unset] flex flex-col gap-2 text-center">
-            <Icon icon={Wallet} size={5} />
-            Wallet
-          </Link>
-        {/if}
-        {#if HOSTING_ENABLED}
-          <Link
-            href="/settings/hosting"
-            class="aspect-square button button-neutral h-[unset] flex flex-col gap-2 text-center">
-            <Icon icon={ServerPath} size={5} />
-            Hosting
-          </Link>
-        {/if}
+        <!-- beamhop: no-payments (wallet and hosting settings removed) -->
         <Link
           href="/settings/content"
           class="aspect-square button button-neutral h-[unset] flex flex-col gap-2 text-center">

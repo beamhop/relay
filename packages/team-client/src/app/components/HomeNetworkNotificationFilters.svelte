@@ -2,7 +2,6 @@
   import {remove} from "@welshman/lib"
   import type {Maybe} from "@welshman/lib"
   import SegmentedButton from "@lib/components/SegmentedButton.svelte"
-  import {ENABLE_ZAPS} from "@app/core/env"
   import {homeNotificationTypes, includedHomeNotificationTypes} from "@app/ui/notifications"
   import type {HomeNotificationType} from "@app/ui/notifications"
 
@@ -12,7 +11,7 @@
 
   const {counts}: Props = $props()
 
-  const options = homeNotificationTypes.filter(({value}) => ENABLE_ZAPS || value !== "zaps")
+  const options = homeNotificationTypes // beamhop: no-payments (zap filter removed upstream of here)
 
   const toggle = (type: HomeNotificationType) => () =>
     includedHomeNotificationTypes.update($types =>
