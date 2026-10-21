@@ -6,6 +6,18 @@
   "license": "AGPL-3.0-or-later",
   "description": "beamhop CLI generated from the action registry, plus init/doctor/backup/update",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "bin": { "beamhop": "./src/bin.ts" },
+  "dependencies": {
+    "@beamhop/admin-api": "workspace:*",
+    "@beamhop/blobs": "workspace:*",
+    "@beamhop/core": "workspace:*",
+    "@beamhop/runtime-bun": "workspace:*",
+    "@beamhop/storage-sql": "workspace:*",
+    "aws4fetch": "^1.0.20",
+    "nostr-tools": "^2.25.2"
+  },
+  "devDependencies": {
+    "@beamhop/testkit": "workspace:*",
+    "zod": "^4.6.7"
+  }
 }
