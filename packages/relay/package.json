@@ -6,6 +6,7 @@
   "license": "AGPL-3.0-or-later",
   "description": "Relay engine module: WebSocket protocol, subscriptions, NIP handlers",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
+  "scripts": { "bench": "bun run bench/fanout.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*", "zod": "^4.1.0" },
   "devDependencies": { "@beamhop/testkit": "workspace:*" }
 }
