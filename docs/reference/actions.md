@@ -4,7 +4,7 @@
 
 Every admin operation is an action. The admin app, the CLI (`beamhop <group> <name>`), the admin API (`POST /api/v1/nodes/self[/relays/<relay>]/actions/<id>`, see `/api/v1/openapi.json`), the command palette and NIP-86 all run these same actions. Changes show a preview first and can be undone where marked.
 
-[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
+[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [logs](#logs) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
 
 ## access
 
@@ -195,6 +195,14 @@ No more notifications or cards for this kind of alert until you turn it back on.
 | `relayId` | string |  | Relay (omit for the current one, null for server-wide alerts) |
 | `allRelays` | boolean | `false` | Apply to every relay |
 
+### Who's on call
+
+The on-call rotation and who is on duty right now.
+
+- **id:** `alerts.oncall` · **CLI:** `beamhop alerts oncall` · **scope:** node · **permission:** `insights.read`
+- read-only
+- *Technical:* alerts.oncall/schedule; current slot = floor((now-startAt)/(periodDays·86400)) mod rotation.length.
+
 ### Phone alerts key
 
 The public key this server uses to send phone/browser alerts.
@@ -271,6 +279,14 @@ Check that a notification channel works.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `channelId` | string |  |  |
+
+### Tips
+
+Short tips for running your relay that you have not hidden yet.
+
+- **id:** `alerts.tips` · **CLI:** `beamhop alerts tips` · **scope:** node · **permission:** `insights.read`
+- read-only
+- *Technical:* TIPS minus alerts.tips/dismissed.
 
 ### Turn alerts back on
 
@@ -957,6 +973,25 @@ Remove the oldest reactions and reposts until storage is back under its limit.
 - **id:** `lifecycle.prune-storage` · **CLI:** `beamhop lifecycle prune-storage` · **scope:** relay · **permission:** `config.write`
 - changes settings/data · needs a second approver when approvals are on
 - *Technical:* Oldest-first day windows over storageCaps[relay].lowValueKinds until targetPercent of maxBytes; legal holds respected.
+
+## logs
+
+### Recent logs
+
+What the server wrote to its log recently, newest first. Passwords, keys and IP addresses are hidden.
+
+- **id:** `logs.query` · **CLI:** `beamhop logs query` · **scope:** node · **permission:** `insights.read`
+- read-only
+- *Technical:* In-memory ring buffer (modules.admin-api.logs.keep lines, since restart) fed from kernel.ports.logger and `error` bus events; secrets redacted, IPs replaced by ports.crypto.hashIp. Times are Unix milliseconds.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `level` | list of `debug` \| `info` \| `warn` \| `error` |  | Only these levels |
+| `source` | string |  | Only lines from this part of the server |
+| `text` | string |  | Only lines containing this text |
+| `since` | number |  | From (Unix milliseconds) |
+| `until` | number |  | Until (Unix milliseconds) |
+| `limit` | number | `200` | Most lines to return |
 
 ## media
 

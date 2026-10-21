@@ -352,6 +352,54 @@ export function createActions(rt: AlertsRuntime): ActionDef[] {
     },
   });
 
+  const oncall = defineAction({
+    id: 'alerts.oncall',
+    title: "Who's on call",
+    description: 'The on-call rotation and who is on duty right now.',
+    technical:
+      'alerts.oncall/schedule; current slot = floor((now-startAt)/(periodDays·86400)) mod rotation.length.',
+    scope: 'node',
+    permission: 'insights.read',
+    readOnly: true,
+    keywords: ['on-call', 'rotation', 'duty', 'schedule'],
+    input: z.object({}),
+    async run() {
+      const schedule = await docs.get<OnCallSchedule>(ONCALL_COLLECTION, 'schedule');
+      const t = now();
+      const cur = onDuty(schedule, t);
+      let until: number | null = null;
+      if (schedule && cur) {
+        const period = Math.max(1, schedule.periodDays) * 86400;
+        until = schedule.startAt + (Math.floor((t - schedule.startAt) / period) + 1) * period;
+      }
+      return {
+        output: { schedule, onDuty: cur, until, now: t },
+        summary: schedule
+          ? `${schedule.rotation.length} people take turns every ${schedule.periodDays} days`
+          : 'No on-call rotation',
+      };
+    },
+  });
+
+  const tips = defineAction({
+    id: 'alerts.tips',
+    title: 'Tips',
+    description: 'Short tips for running your relay that you have not hidden yet.',
+    technical: 'TIPS minus alerts.tips/dismissed.',
+    scope: 'node',
+    permission: 'insights.read',
+    readOnly: true,
+    input: z.object({}),
+    async run() {
+      const dismissed = (await docs.get<string[]>(TIPS_COLLECTION, 'dismissed')) ?? [];
+      const open = TIPS.filter((t) => !dismissed.includes(t.id));
+      return {
+        output: { tips: open, dismissed: dismissed.length },
+        summary: `${open.length} tip${open.length === 1 ? '' : 's'}`,
+      };
+    },
+  });
+
   const sendDigest = defineAction({
     id: 'alerts.send-digest',
     title: 'Send the digest now',
@@ -403,7 +451,9 @@ export function createActions(rt: AlertsRuntime): ActionDef[] {
     pushKeyAction,
     subscribePush,
     setOncall,
+    oncall,
     sendDigest,
     dismissTip,
+    tips,
   ] as unknown as ActionDef[];
 }

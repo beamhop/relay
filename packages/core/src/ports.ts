@@ -223,6 +223,18 @@ export interface Logger {
   child(fields: Record<string, unknown>): Logger;
 }
 
+/** One structured log line as seen by {@link LogListener}s (fields include child-logger fields). */
+export interface LogRecord {
+  /** Unix milliseconds. */
+  at: number;
+  level: LogLevel;
+  msg: string;
+  fields: Record<string, unknown>;
+}
+
+/** Observer of everything written through `kernel.ports.logger` (see `Kernel.onLog`). */
+export type LogListener = (rec: LogRecord) => void;
+
 export interface Crypto {
   sha256Hex(data: Uint8Array): Promise<string>;
   randomHex(bytes: number): string;

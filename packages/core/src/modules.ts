@@ -17,7 +17,16 @@ import type { BeamhopConfig, EffectiveLimits, RelayConfig } from './config.ts';
 import type { Connection, RequestGate, RequestGateContext, RouteContext } from './connection.ts';
 import { PolicyPipeline } from './policy.ts';
 import type { PolicyHooks } from './policy.ts';
-import type { Notification, Ports, RelayId, RuntimeName, Scheduler } from './ports.ts';
+import type {
+  LogLevel,
+  LogListener,
+  Logger,
+  Notification,
+  Ports,
+  RelayId,
+  RuntimeName,
+  Scheduler,
+} from './ports.ts';
 
 export type Subsystem =
   | 'relay'
@@ -179,6 +188,12 @@ export interface Kernel {
   disableModule?(id: string): Promise<boolean>;
   /** Enabled modules in registration order (runtimes stop them in reverse on shutdown). */
   modules?(): BeamhopModule[];
+  /**
+   * Observe every line written through `ports.logger` (and its children), after the
+   * runtime logger got it. Listeners must be cheap and must not log themselves.
+   * Returns an unsubscribe function. Optional for non-core kernel implementations.
+   */
+  onLog?(fn: LogListener): () => void;
 }
 
 export type KernelEnv = {
@@ -344,13 +359,20 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
         },
       })
     : undefined;
-  const ports: Ports = scheduler
-    ? new Proxy(opts.ports, {
-        get(t, k, r) {
-          return k === 'scheduler' ? scheduler : Reflect.get(t, k, r);
-        },
-      })
-    : opts.ports;
+  const logListeners = new Set<LogListener>();
+  const baseLogger = opts.ports.logger as Logger | undefined;
+  const nowMs = () => opts.ports.clock?.nowMs() ?? Date.now();
+  const logger = baseLogger ? teeLogger(baseLogger, {}, logListeners, nowMs) : undefined;
+  const ports: Ports =
+    scheduler || logger
+      ? new Proxy(opts.ports, {
+          get(t, k, r) {
+            if (k === 'scheduler' && scheduler) return scheduler;
+            if (k === 'logger' && logger) return logger;
+            return Reflect.get(t, k, r);
+          },
+        })
+      : opts.ports;
 
   const kernel: Kernel = {
     runtime: opts.runtime,
@@ -419,6 +441,14 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     enableModule: (m) => serial(() => enable(m)),
     disableModule: (id) => serial(() => disable(id)),
     modules: () => [...order],
+    onLog(fn) {
+      logListeners.add(fn);
+      const off = () => {
+        logListeners.delete(fn);
+      };
+      active?.offs.push(off);
+      return off;
+    },
   };
 
   const parseSection = (m: BeamhopModule) => {
@@ -719,3 +749,29 @@ export function defineModule(m: BeamhopModule): BeamhopModule {
 }
 
 export type { ActionDef, PolicyHooks };
+
+/** Logger that forwards to `inner` and reports each line (with child fields) to `listeners`. */
+function teeLogger(
+  inner: Logger,
+  base: Record<string, unknown>,
+  listeners: Set<LogListener>,
+  nowMs: () => number,
+): Logger {
+  return {
+    log(level: LogLevel, msg: string, fields?: Record<string, unknown>) {
+      inner.log(level, msg, fields);
+      if (listeners.size === 0) return;
+      const rec = { at: nowMs(), level, msg, fields: { ...base, ...fields } };
+      for (const l of listeners) {
+        try {
+          l(rec);
+        } catch {
+          // a broken listener never breaks logging
+        }
+      }
+    },
+    child(fields: Record<string, unknown>) {
+      return teeLogger(inner.child(fields), { ...base, ...fields }, listeners, nowMs);
+    },
+  };
+}

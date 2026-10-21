@@ -10,6 +10,7 @@
   import { ago, short } from '$lib/utils';
   import Button from '../ui/button.svelte';
   import Skeleton from '../ui/skeleton.svelte';
+  import NotesButton from '../notes/NotesButton.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
   let items = $state<RecycleEntry[] | null>(null);
@@ -70,6 +71,7 @@
           </p>
           {#if prefs.lens}<p class="font-mono text-[10px] text-muted-foreground">{e.id} · by {e.by}</p>{/if}
         </div>
+        <NotesButton subject={{ type: e.type === 'event' ? 'event' : 'blob', id: e.event?.id ?? e.id }} />
         <Button size="sm" variant="secondary" onclick={() => restore([e.id])}>{m.bin_restore()}</Button>
       </li>
     {/each}

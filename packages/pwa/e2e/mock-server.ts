@@ -15,6 +15,7 @@ import { ConfigSchema, RelaySchema } from '@beamhop/core';
 import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { registerActivityMocks } from './mocks/activity.ts';
 import { enterprise } from './mocks/enterprise.ts';
 import { homeActions } from './mocks/home.ts';
 import { registerMediaMocks } from './mocks/media.ts';
@@ -1336,6 +1337,7 @@ const fail = (status: number, code: string, message: string) =>
   Response.json({ error: { code, message } }, { status });
 
 const app = new Hono();
+registerActivityMocks({ app, actions: ACTIONS as never, state: () => S as never, token });
 
 app.post('/__reset', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as ResetOptions;

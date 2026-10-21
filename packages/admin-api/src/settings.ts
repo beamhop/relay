@@ -86,6 +86,23 @@ export const AdminApiConfigSchema = z
       })
       .prefault({})
       .describe('Live updates in the admin app'),
+    logs: z
+      .object({
+        keep: technical(
+          z
+            .number()
+            .int()
+            .min(100)
+            .max(100_000)
+            .default(5000)
+            .describe(
+              'How many recent log lines the admin app can show. Older lines are dropped; nothing is written to disk.',
+            ),
+          'Capacity of the in-memory log ring buffer behind logs.query (since restart, per process).',
+        ),
+      })
+      .prefault({})
+      .describe('Recent logs in the admin app'),
   })
   .prefault({})
   .describe('Admin app sign-in and safety settings');
