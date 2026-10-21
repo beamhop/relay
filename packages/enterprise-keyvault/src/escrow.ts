@@ -40,6 +40,12 @@ export interface ApprovalDecision {
  */
 export interface ApprovalsLike {
   check(req: ApprovalRequest): Promise<ApprovalDecision>;
+  /**
+   * True when the compliance approval gate wraps this action id: the wrapped action
+   * only runs after a second admin's approval for this exact input was consumed
+   * (`_approvalId`), so the action itself must not ask again.
+   */
+  isGated?(actionId: string): boolean;
 }
 
 export class ApprovalRequiredError extends Error {
@@ -67,6 +73,8 @@ export async function requireApproval(
       'This needs a second admin to approve, but approvals are not set up. Turn on Compliance first.',
     );
   }
+  // Already enforced by the action gate (run reached only with a consumed approval).
+  if (approvals.isGated?.(req.actionId)) return { status: 'approved', approvers: [] };
   const d = await approvals.check(req);
   if (d.status === 'approved') return d;
   const id = d.requestId ? ` (request ${d.requestId})` : '';

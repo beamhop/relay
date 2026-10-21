@@ -51,7 +51,13 @@ export function createActions(rt: KeyvaultRuntime): ActionDef[] {
     scope: 'node',
     permission: 'node.manage',
     sensitive: true,
-    input: z.object({ force: z.boolean().default(false) }),
+    input: z.object({
+      force: z.boolean().default(false),
+      approvalId: z
+        .string()
+        .optional()
+        .describe('Approved request id (when the approval gate does not wrap this action)'),
+    }),
     keywords: ['kms', 'rotate', 'master key', 'kek'],
     async preview(input) {
       const deks = await rt.envelope.listDeks();
@@ -72,8 +78,9 @@ export function createActions(rt: KeyvaultRuntime): ActionDef[] {
           actionId: 'keyvault.rotate-kek',
           relayId: null,
           principalId: ctx.principal.id,
-          input,
+          input: { force: input.force },
           ...(ctx.reason ? { reason: ctx.reason } : {}),
+          ...(input.approvalId ? { approvalId: input.approvalId } : {}),
         },
         true,
       );
@@ -116,6 +123,10 @@ export function createActions(rt: KeyvaultRuntime): ActionDef[] {
       subjectId: z.string().min(1),
       afterDays: z.number().int().min(0).optional(),
       reason: z.string().min(3),
+      approvalId: z
+        .string()
+        .optional()
+        .describe('Approved request id (when the approval gate does not wrap this action)'),
     }),
     async preview(input) {
       const rec = await rt.signer.record(input.subjectId);
@@ -139,8 +150,13 @@ export function createActions(rt: KeyvaultRuntime): ActionDef[] {
           actionId: 'keyvault.destroy-key',
           relayId: null,
           principalId: ctx.principal.id,
-          input,
+          input: {
+            subjectId: input.subjectId,
+            reason: input.reason,
+            ...(input.afterDays !== undefined ? { afterDays: input.afterDays } : {}),
+          },
           reason: input.reason,
+          ...(input.approvalId ? { approvalId: input.approvalId } : {}),
         },
         true,
       );

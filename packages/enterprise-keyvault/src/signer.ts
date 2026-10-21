@@ -49,6 +49,17 @@ export interface SignContext {
   reason?: string;
 }
 
+/** `kernel.use('compliance.siem')` (enterprise-compliance). */
+export interface SiemLike {
+  record(r: {
+    stream: 'signing' | 'escrow';
+    type: string;
+    summary: string;
+    principalId?: string;
+    data?: Record<string, unknown>;
+  }): void;
+}
+
 export type AuditOp =
   | 'sign'
   | 'nip44_encrypt'
@@ -523,6 +534,30 @@ export class Signer {
       r.op === 'sign'
         ? `${r.ok ? 'Signed' : 'Refused to sign'} ${describeKind(r.kind ?? -1)} for ${r.subjectId}${who}`
         : `${opLabel(r.op)} for ${r.subjectId}${who}${r.ok ? '' : ' (failed)'}`;
+    // Compliance SIEM export (tamper-evident chain) when that module is loaded.
+    try {
+      this.kernel.use<SiemLike>('compliance.siem')?.record({
+        stream: r.op === 'escrow_decrypt' ? 'escrow' : 'signing',
+        type: `keyvault.${r.op}`,
+        principalId:
+          r.principalId ?? (r.sessionId ? `session:${r.sessionId}` : `keyvault:${r.subjectId}`),
+        summary,
+        data: {
+          subjectId: r.subjectId,
+          ok: r.ok,
+          ...(r.pubkey ? { pubkey: r.pubkey } : {}),
+          ...(r.kind !== undefined ? { kind: r.kind } : {}),
+          ...(r.eventId ? { eventId: r.eventId } : {}),
+          ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+          ...(r.client ? { client: r.client } : {}),
+          ...(r.via ? { via: r.via } : {}),
+          ...(r.reason ? { reason: r.reason } : {}),
+          ...(r.error ? { error: r.error } : {}),
+        },
+      });
+    } catch (err) {
+      this.kernel.ports.logger.log('warn', 'keyvault SIEM record failed', { err: String(err) });
+    }
     this.kernel.bus.emit('admin.action', {
       relayId: null,
       actionId: `keyvault.${r.op}`,
