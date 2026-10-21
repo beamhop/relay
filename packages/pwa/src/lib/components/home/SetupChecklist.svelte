@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** First-week checklist with a progress ring (§7); hidden once everything is done. */
   import Check from '@lucide/svelte/icons/check';

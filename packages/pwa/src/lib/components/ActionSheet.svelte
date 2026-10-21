@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Global action runner: generated form → preview diff → apply → undo toast. */
   import LoaderCircle from '@lucide/svelte/icons/loader-circle';
@@ -5,8 +6,10 @@
   import { fieldsFromSchema } from '$lib/forms/json-schema';
   import { flatten, formDefaults, unflatten } from '$lib/forms/values';
   import { prefs } from '$lib/stores/prefs.svelte';
+  import { names } from '$lib/stores/names.svelte';
   import Sheet from './Sheet.svelte';
   import DiffList from './DiffList.svelte';
+  import OutputView from './OutputView.svelte';
   import Button from './ui/button.svelte';
   import GeneratedForm from './forms/LazyForm.svelte';
   import type { TestRelayReport } from '$lib/api/types';
@@ -70,7 +73,7 @@
       {/if}
     {:else if cur.phase === 'done' && cur.result}
       {@const out = (cur.result.output ?? {}) as { code?: string; codes?: string[]; token?: string }}
-      {#if !FRIENDLY.has(cur.action.id)}<p class="mb-3 text-sm">{cur.result.summary}</p>{/if}
+      {#if !FRIENDLY.has(cur.action.id)}<p class="mb-3 text-sm">{names.text(cur.result.summary)}</p>{/if}
       {#if out.code || out.token || out.codes}
         <p class="mb-2 text-xs text-warning">{m.action_shown_once()}</p>
         <div class="mb-3 rounded-xl border bg-muted/40 p-4 font-mono text-sm break-all select-all" data-testid="action-secret">
@@ -87,8 +90,16 @@
           <TestRelayResult report={cur.result.output as TestRelayReport} onnavigate={() => flow.close()} />
         {/await}
       {/if}
-      {#if prefs.lens || (cur.action.readOnly && !FRIENDLY.has(cur.action.id))}
-        <pre class="max-h-[50dvh] overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px]" data-testid="action-output">{JSON.stringify(cur.result.output, null, 2)}</pre>
+      {#if cur.action.readOnly && !FRIENDLY.has(cur.action.id)}
+        <div class="max-h-[60dvh] overflow-auto" data-testid="action-output-view">
+          <OutputView value={cur.result.output} />
+        </div>
+      {/if}
+      {#if prefs.lens}
+        <details class="mt-3" data-lens>
+          <summary class="cursor-pointer text-xs text-muted-foreground">{m.out_raw()}</summary>
+          <pre class="mt-2 max-h-[50dvh] overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px]" data-testid="action-output">{JSON.stringify(cur.result.output, null, 2)}</pre>
+        </details>
       {/if}
     {/if}
   {/if}

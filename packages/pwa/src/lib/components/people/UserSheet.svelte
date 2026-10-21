@@ -1,9 +1,11 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** User detail bottom sheet: plan, storage, quick actions and internal team notes (§6.12). */
   import { app } from '$lib/stores/app.svelte';
   import { flow, query, runNow } from '$lib/stores/actions.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
-  import { ago, formatBytes, short } from '$lib/utils';
+  import { ago, formatBytes } from '$lib/utils';
+  import { names } from '$lib/stores/names.svelte';
   import Sheet from '../Sheet.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
@@ -54,7 +56,7 @@
   }
 </script>
 
-<Sheet bind:open title={user?.name ?? short(user?.pubkey, 8)} onclose={() => (user = null)} testid="user-sheet">
+<Sheet bind:open title={user?.name ?? names.label(user?.pubkey)} onclose={() => (user = null)} testid="user-sheet">
   {#if user}
     <div class="space-y-5">
       <div class="flex flex-wrap gap-2">

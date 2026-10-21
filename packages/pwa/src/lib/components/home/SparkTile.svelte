@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Sparkline tile (inline SVG, no chart library). Shows "—" when there is no data yet. */
   import { sparkPaths } from '$lib/sparkline';

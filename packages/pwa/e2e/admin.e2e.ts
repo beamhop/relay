@@ -158,6 +158,35 @@ test.describe('signed in', () => {
     await expect(page.locator('[data-goal]')).toHaveCount(5);
   });
 
+  test('read-only results are human: no raw JSON or bare hex unless the lens is on', async ({
+    page,
+  }) => {
+    const showTeam = async () => {
+      await page.getByTestId('fab').click();
+      const palette = page.getByTestId('command-palette');
+      await palette.getByRole('combobox').fill('team');
+      await palette.getByRole('option', { name: /Show the team/ }).click();
+      return page.getByTestId('action-sheet');
+    };
+    await page.goto('/admin/');
+    let sheet = await showTeam();
+    const view = sheet.getByTestId('action-output-view');
+    await expect(view).toContainText('Owner');
+    await expect(view).toContainText('Roles');
+    const text = (await sheet.textContent()) ?? '';
+    expect(text).not.toContain('{"');
+    expect(text).not.toMatch(/[0-9a-f]{64}/);
+    await expect(sheet.getByTestId('action-output')).toHaveCount(0);
+    await sheet.getByRole('button', { name: 'Close' }).last().click();
+
+    await page.goto('/admin/settings');
+    await page.getByTestId('lens-toggle').click();
+    await page.goto('/admin/');
+    sheet = await showTeam();
+    await sheet.getByText('Raw data').click();
+    await expect(sheet.getByTestId('action-output')).toContainText('"displayName"');
+  });
+
   test('technical lens toggles and persists', async ({ page }) => {
     await page.goto('/admin/settings/access');
     await expect(page.locator('[data-lens]')).toHaveCount(0);

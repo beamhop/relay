@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * GeneratedForm, loaded on first use. The form stack (superforms, formsnap,

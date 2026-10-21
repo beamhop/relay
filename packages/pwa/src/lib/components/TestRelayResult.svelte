@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** "Test my relay" result as a friendly checklist (technical details under the lens). */
   import Check from '@lucide/svelte/icons/check';

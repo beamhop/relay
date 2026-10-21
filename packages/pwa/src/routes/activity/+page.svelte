@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Activity (§6.1): live stream, moderation queue, recycle bin, team feed, alerts. */
   import { page } from '$app/state';

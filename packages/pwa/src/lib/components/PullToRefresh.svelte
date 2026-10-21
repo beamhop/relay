@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Pull-to-refresh for phone screens (passive touch listeners; scrolling is never blocked). */
   import type { Snippet } from 'svelte';

@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * Sign in with a NIP-07 extension, a NIP-46 bunker, a private key held in

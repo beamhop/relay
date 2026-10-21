@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import Sheet from '../Sheet.svelte';
   import { m } from '$lib/paraglide/messages.js';

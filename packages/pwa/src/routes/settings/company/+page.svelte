@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Settings › Company sign-in (enterprise identity module). */
   import CompanySignIn from '$lib/components/company/CompanySignIn.svelte';

@@ -1,5 +1,5 @@
-import { bytesToHex } from '@noble/hashes/utils.js';
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { bytesToHex } from '@noble/hashes/utils.js';
 /** Phone: fixes from user testing (brand link, key sign-in, plugins, palette, help, cards, checklist, quotas, company sign-in, toasts). */
 import { expect, test } from '@playwright/test';
 import { nip19 } from 'nostr-tools';

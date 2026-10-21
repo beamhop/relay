@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Home (§6.1, §6.9): "is everything OK, and what needs me?" */
   import { onMount } from 'svelte';

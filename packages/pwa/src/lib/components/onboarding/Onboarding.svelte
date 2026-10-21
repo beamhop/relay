@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
    * 60-second wizard (§7): claim → sign in → persona → domain + TLS → done

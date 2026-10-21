@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import '../app.css';
   import { onMount } from 'svelte';
@@ -12,6 +13,7 @@
   import { prefs } from '$lib/stores/prefs.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
   import { assistant } from '$lib/stores/assistant.svelte';
+  import { names } from '$lib/stores/names.svelte';
   import { to } from '$lib/nav';
   import TabBar from '$lib/components/shell/TabBar.svelte';
   import RelaySwitcher from '$lib/components/shell/RelaySwitcher.svelte';
@@ -66,6 +68,11 @@
   $effect(() => {
     if (app.phase === 'ready' && !app.onboarding) live.start();
     else live.stop();
+  });
+
+  // People names for public keys (team list + signed-in admin), once per relay.
+  $effect(() => {
+    if (app.phase === 'ready' && !app.onboarding) void names.ensure(app.relayId);
   });
 
   // Presence ping (experience module): lets the server know an admin has the app open.

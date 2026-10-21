@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** One assistant suggestion: the standard plain-language diff + Approve (§6.3, §6.5). */
   import Lightbulb from '@lucide/svelte/icons/lightbulb';

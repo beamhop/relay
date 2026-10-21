@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   import WifiOff from '@lucide/svelte/icons/wifi-off';
   import { app } from '$lib/stores/app.svelte';

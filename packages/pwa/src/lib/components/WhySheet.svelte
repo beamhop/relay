@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** "Why?" sheet (§6.10): cause, technical details, and where to go next. */
   import Sheet from './Sheet.svelte';

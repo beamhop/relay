@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /** Who-did-what feed (§6.12), linked to the audit log. */
   import { onMount } from 'svelte';
@@ -7,6 +8,7 @@
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
   import { ago } from '$lib/utils';
+  import { names } from '$lib/stores/names.svelte';
   import Button from '../ui/button.svelte';
   import Skeleton from '../ui/skeleton.svelte';
   import { m } from '$lib/paraglide/messages.js';
@@ -49,7 +51,7 @@
       <li class="flex gap-3 text-sm">
         <span class="mt-1.5 size-2 shrink-0 rounded-full {i.ok ? 'bg-primary' : 'bg-destructive'}"></span>
         <div class="min-w-0 flex-1">
-          <p>{i.text}</p>
+          <p>{names.text(i.text)}</p>
           <p class="text-xs text-muted-foreground">
             {ago(i.at)}{i.relayId && app.relays.length > 1 ? ` · ${i.relayId}` : ''}
             {#if prefs.lens}<span class="font-mono"> · {i.actionId} · #{i.seq}</span>{/if}
