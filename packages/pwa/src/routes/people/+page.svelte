@@ -70,28 +70,42 @@
     ),
   );
 
-  function start(id: string, input: Record<string, unknown>, form = false, onDone?: (r: RunResult) => void) {
+  function start(
+    id: string,
+    input: Record<string, unknown>,
+    form = false,
+    onDone?: (r: RunResult) => void,
+    editable = false,
+  ) {
     const def = app.action(id);
     if (!def) return;
-    void flow.start(def, input, { form, onDone: (r) => (onDone ? onDone(r) : void load()), onUndo: () => void load() });
+    void flow.start(def, input, {
+      form,
+      editable,
+      onDone: (r) => (onDone ? onDone(r) : void load()),
+      onUndo: () => void load(),
+    });
   }
 
   const roleLabel = (r: string) =>
     ({ owner: m.role_owner(), admin: m.role_admin(), moderator: m.role_moderator(), viewer: m.role_viewer() })[r] ?? r;
 
+  // Invites (§6.6 top tasks): every field has a default, so go straight to the preview ("Change" opens the form).
   function inviteMember() {
-    start('access.create-invite', {}, true, (r) => {
+    start('access.create-invite', {}, false, (r) => {
       const o = r.output as { code: string; expiresAt: number };
       invites = [{ code: o.code, kind: 'member', expiresAt: o.expiresAt }, ...invites];
-    });
+    }, true);
   }
   function inviteAdmin() {
-    start('admins.invite', { role: 'moderator' }, true, (r) => {
+    start('admins.invite', { role: 'moderator' }, false, (r) => {
       const o = r.output as { code?: string; expiresAt?: number };
       if (o.code) invites = [{ code: o.code, kind: 'admin', ...(o.expiresAt ? { expiresAt: o.expiresAt } : {}) }, ...invites];
       void load();
-    });
+    }, true);
   }
+  const canInviteMember = $derived(app.hasAction('access.create-invite'));
+  const canInviteAdmin = $derived(app.hasAction('admins.invite') && app.can('admins.manage', false));
 
   const sectionLinks = $derived(app.uiRoutes.filter((r) => r.placement === 'people-section'));
   const accessMode = $derived(relayCfg?.access.mode);
@@ -167,6 +181,16 @@
   <h1 class="text-xl font-semibold tracking-tight">{m.nav_people()}</h1>
   <InsightsLink section="community" />
 </div>
+{#if canInviteMember || canInviteAdmin}
+  <div class="mb-3 flex flex-wrap gap-2" data-testid="people-invite">
+    {#if canInviteMember}
+      <Button size="sm" variant="secondary" onclick={inviteMember}><Ticket class="size-4" />{m.invite_member()}</Button>
+    {/if}
+    {#if canInviteAdmin}
+      <Button size="sm" variant="secondary" onclick={inviteAdmin}><UserPlus class="size-4" />{m.team_invite()}</Button>
+    {/if}
+  </div>
+{/if}
 <Segmented
   label={m.nav_people()}
   tabs={[
@@ -179,11 +203,6 @@
 
 <div class="mt-4">
   {#if tab === 'team'}
-    <div class="mb-3 flex justify-end">
-      {#if app.hasAction('admins.invite') && app.can('admins.manage', false)}
-        <Button size="sm" onclick={inviteAdmin}><UserPlus class="size-4" />{m.team_invite()}</Button>
-      {/if}
-    </div>
     <ul class="divide-y rounded-xl border" data-testid="team-list">
       {#each admins as a (a.id)}
         <li>
@@ -213,20 +232,15 @@
       {/each}
     </ul>
   {:else if tab === 'invites'}
-    <div class="grid gap-2 sm:grid-cols-2">
-      {#if app.hasAction('access.create-invite')}
-        <Button variant="secondary" class="h-auto justify-start py-3" onclick={inviteMember}>
-          <Ticket class="size-4" />
-          <span class="text-left"><span class="block">{m.invite_member()}</span><span class="block text-xs font-normal text-muted-foreground">{m.invite_member_desc()}</span></span>
-        </Button>
+    <!-- The invite buttons sit above the tabs; here: what each one does, and the codes made in this visit. -->
+    <dl class="grid gap-2 text-sm sm:grid-cols-2">
+      {#if canInviteMember}
+        <div class="rounded-xl border p-3"><dt class="flex items-center gap-2 font-medium"><Ticket class="size-4" />{m.invite_member()}</dt><dd class="mt-0.5 text-xs text-muted-foreground">{m.invite_member_desc()}</dd></div>
       {/if}
-      {#if app.hasAction('admins.invite') && app.can('admins.manage', false)}
-        <Button variant="secondary" class="h-auto justify-start py-3" onclick={inviteAdmin}>
-          <UserPlus class="size-4" />
-          <span class="text-left"><span class="block">{m.team_invite()}</span><span class="block text-xs font-normal text-muted-foreground">{m.invite_admin_desc()}</span></span>
-        </Button>
+      {#if canInviteAdmin}
+        <div class="rounded-xl border p-3"><dt class="flex items-center gap-2 font-medium"><UserPlus class="size-4" />{m.team_invite()}</dt><dd class="mt-0.5 text-xs text-muted-foreground">{m.invite_admin_desc()}</dd></div>
       {/if}
-    </div>
+    </dl>
     {#if invites.length}
       <ul class="mt-4 divide-y rounded-xl border" data-testid="invites">
         {#each invites as i (i.code)}

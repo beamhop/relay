@@ -1,6 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  /** Config time machine (§6.11): a timeline of revisions; restore any point in one tap. */
+  /**
+   * Config time machine (§6.11): a timeline of revisions; restore any point in one tap
+   * (Restore on the entry, with an undo toast). Tapping an entry shows what it would change.
+   */
   import { onMount } from 'svelte';
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
   import { app } from '$lib/stores/app.svelte';
@@ -48,13 +51,14 @@
     }
   }
 
-  async function restore() {
-    if (!picked) return;
+  /** Restore a revision at once: it is undoable, so an undo toast replaces the confirm step (§6.2). */
+  async function restore(target: RevisionInfo | null = picked) {
+    if (!target || restoring) return;
     restoring = true;
     try {
-      const r = await app.api.restore(picked.revision);
+      const r = await app.api.restore(target.revision);
       open = false;
-      announce({ summary: m.history_restored({ rev: picked.revision }), ...(r.undo ? { undo: r.undo } : {}) }, () => load());
+      announce({ summary: m.history_restored({ rev: target.revision }), ...(r.undo ? { undo: r.undo } : {}) }, () => load());
       await load();
     } catch (err) {
       const e = asApiError(err);
@@ -106,9 +110,9 @@
 {:else}
   <ol class="relative mt-6 ml-2 border-l pl-5" data-testid="timeline">
     {#each items as r (r.revision)}
-      <li class="relative pb-5">
+      <li class="relative flex items-start gap-2 pb-5">
         <span class="absolute top-1.5 -left-[26px] size-3 rounded-full border-2 border-background {r.revision === head ? 'bg-primary' : 'bg-muted-foreground/50'}"></span>
-        <button class="w-full rounded-lg p-2 text-left hover:bg-muted/50" onclick={() => pick(r)} data-testid={`revision-${r.revision}`}>
+        <button class="min-w-0 flex-1 rounded-lg p-2 text-left hover:bg-muted/50" onclick={() => pick(r)} data-testid={`revision-${r.revision}`}>
           <p class="text-sm">{r.summary || m.history_no_summary()}</p>
           <p class="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {r.authorName} · {ago(r.at)}
@@ -117,6 +121,17 @@
             {#if prefs.lens}<span class="font-mono">#{r.revision} · {r.changes} ops</span>{/if}
           </p>
         </button>
+        {#if r.revision !== head}
+          <Button
+            size="sm"
+            variant="secondary"
+            class="mt-1.5 shrink-0"
+            disabled={restoring}
+            onclick={() => restore(r)}
+            aria-label={`${m.tt_restore()}: ${r.summary || m.history_no_summary()}`}
+            data-testid={`revision-restore-${r.revision}`}
+          ><RotateCcw class="size-3.5" />{m.tt_restore()}</Button>
+        {/if}
       </li>
     {/each}
   </ol>
@@ -130,7 +145,7 @@
     <DiffList {diff} />
   {/if}
   {#snippet footer()}
-    <Button class="w-full" disabled={restoring || !picked || picked.revision === head} onclick={restore} data-testid="restore">
+    <Button class="w-full" disabled={restoring || !picked || picked.revision === head} onclick={() => restore()} data-testid="restore">
       <RotateCcw class="size-4" />{picked?.revision === head ? m.history_current() : m.history_restore()}
     </Button>
   {/snippet}

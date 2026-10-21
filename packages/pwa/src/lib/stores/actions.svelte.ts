@@ -24,6 +24,8 @@ export interface FlowState {
   onDone?: (r: RunResult) => void;
   /** Called after the run was undone from its toast. */
   onUndo?: () => void;
+  /** The form was skipped (every field has a default): the preview offers "Change" to open it. */
+  editable?: boolean;
 }
 
 export function asApiError(err: unknown): ApiError {
@@ -115,16 +117,26 @@ export function withContext(
 class ActionFlow {
   current = $state<FlowState | null>(null);
 
-  /** Start a flow. `form`: show the generated input form first. */
+  /**
+   * Start a flow. `form`: show the generated input form first. `editable`: go
+   * straight to the preview with the defaults, with "Change" there to open the
+   * form (§6.6: no form step when the defaults are fine).
+   */
   async start(
     action: CatalogAction,
     raw: Record<string, unknown> = {},
-    opts: { form?: boolean; onDone?: (r: RunResult) => void; onUndo?: () => void } = {},
+    opts: {
+      form?: boolean;
+      editable?: boolean;
+      onDone?: (r: RunResult) => void;
+      onUndo?: () => void;
+    } = {},
   ): Promise<void> {
     const input = withContext(action.id, raw);
     const st: FlowState = { action, input, phase: 'form', diff: [], error: null, result: null };
     if (opts.onDone) st.onDone = opts.onDone;
     if (opts.onUndo) st.onUndo = opts.onUndo;
+    if (opts.editable && !opts.form) st.editable = true;
     this.current = st;
     if (!opts.form) await this.preview(input);
   }
@@ -174,6 +186,14 @@ class ActionFlow {
       haptic('warning');
       return null;
     }
+  }
+
+  /** Back from the preview to the input form ("Change"). */
+  edit(): void {
+    const cur = this.current;
+    if (!cur || cur.phase !== 'preview') return;
+    cur.error = null;
+    cur.phase = 'form';
   }
 
   close(): void {
