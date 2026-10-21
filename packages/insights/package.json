@@ -1,0 +1,11 @@
+{
+  "name": "@beamhop/insights",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Metrics, health score, analytics, Prometheus/OTel export",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*" },
+  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+}

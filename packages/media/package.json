@@ -1,0 +1,11 @@
+{
+  "name": "@beamhop/media",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Media pipeline: metadata strip, resize, thumbnails, transcode, perceptual hash",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*" },
+  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+}

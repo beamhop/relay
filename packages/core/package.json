@@ -10,7 +10,9 @@
   "dependencies": {
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
-    "zod": "^3.25.76"
+    "zod": "^4.1.0",
+    "hono": "^4.13.13",
+    "nostr-tools": "^2.25.2"
   },
   "devDependencies": {
     "@beamhop/testkit": "workspace:*"

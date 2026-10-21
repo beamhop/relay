@@ -7,13 +7,14 @@
  * Isolation rule (§12.0): a module that is not enabled is never registered,
  * so it contributes no hooks, routes, actions, cards, or hot-path cost.
  */
+import { Hono } from 'hono';
 import type { z } from 'zod';
 import { ActionRegistry } from './actions.ts';
 import type { ActionDef } from './actions.ts';
-import type { AuthProvider } from './auth.ts';
+import type { AuthProvider, Principal } from './auth.ts';
 import { EventBus } from './bus.ts';
 import type { BeamhopConfig, EffectiveLimits, RelayConfig } from './config.ts';
-import type { Connection, HttpHandler } from './connection.ts';
+import type { Connection, RouteContext } from './connection.ts';
 import { PolicyPipeline } from './policy.ts';
 import type { PolicyHooks } from './policy.ts';
 import type { Notification, Ports, RelayId, RuntimeName } from './ports.ts';
@@ -125,7 +126,11 @@ export interface Kernel {
   onConfigChange(fn: (next: BeamhopConfig, prev: BeamhopConfig) => void): () => void;
   /** Module section from `config.modules[id]`, validated by that module's schema. */
   moduleConfig<T>(id: string): T | undefined;
-  readonly http: HttpRoute[];
+  /**
+   * Shared Hono app (runs on Bun and Cloudflare). The runtime sets `route` before dispatch;
+   * admin-api auth middleware sets `principal`. Modules add routes directly.
+   */
+  readonly http: Hono<KernelEnv>;
   readonly authProviders: AuthProvider[];
   readonly access: AccessResolver[];
   readonly health: HealthCheck[];
@@ -142,22 +147,16 @@ export interface Kernel {
   use<T>(name: string): T | undefined;
 }
 
-export interface HttpRoute {
-  /** `GET`, `POST`, … or `*`. */
-  method: string;
-  /** URLPattern-style pathname, e.g. `/api/v1/relays/:relay/users`. */
-  path: string;
-  handler: HttpHandler;
-  /** Lower first. Default 100. */
-  order?: number;
-}
+export type KernelEnv = {
+  Variables: { route: RouteContext; principal?: Principal };
+};
 
 export interface BeamhopModule {
   id: string;
   /** Module ids that must be registered first. */
   dependsOn?: string[];
   /** Schema for `config.modules[id]` (feature modules outside core config). */
-  configSchema?: z.ZodTypeAny;
+  configSchema?: z.ZodType;
   /** Registration must be cheap and side-effect free besides using the kernel. */
   register(kernel: Kernel): void | Promise<void>;
   /** Start background work (schedulers) after all modules registered. */
@@ -226,7 +225,7 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     moduleConfig<T>(id: string) {
       return current.modules[id] as T | undefined;
     },
-    http: [],
+    http: new Hono<KernelEnv>(),
     authProviders: [],
     access: [],
     health: [],
@@ -258,7 +257,6 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     await m.register(kernel);
     enabled.add(m.id);
   }
-  kernel.http.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
   for (const m of ordered) await m.start?.(kernel);
   return kernel;
 }

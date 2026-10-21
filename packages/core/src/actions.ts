@@ -43,7 +43,7 @@ export interface ActionResult<O = unknown> {
   summary: string;
 }
 
-export interface ActionDef<I extends z.ZodTypeAny = z.ZodTypeAny, O = unknown> {
+export interface ActionDef<I extends z.ZodType = z.ZodType, O = unknown> {
   /** Dotted id, e.g. `moderation.ban-pubkey`. Used as CLI command `beamhop moderation ban-pubkey`. */
   id: string;
   /** Plain-language title for UI/palette. */
@@ -72,7 +72,7 @@ export interface ActionDef<I extends z.ZodTypeAny = z.ZodTypeAny, O = unknown> {
 export class ActionRegistry {
   private readonly defs = new Map<string, ActionDef>();
 
-  register<I extends z.ZodTypeAny, O>(def: ActionDef<I, O>): void {
+  register<I extends z.ZodType, O>(def: ActionDef<I, O>): void {
     if (this.defs.has(def.id)) throw new Error(`duplicate action id: ${def.id}`);
     this.defs.set(def.id, def as unknown as ActionDef);
   }
@@ -90,6 +90,6 @@ export class ActionRegistry {
   }
 }
 
-export function defineAction<I extends z.ZodTypeAny, O>(def: ActionDef<I, O>): ActionDef<I, O> {
+export function defineAction<I extends z.ZodType, O>(def: ActionDef<I, O>): ActionDef<I, O> {
   return def;
 }

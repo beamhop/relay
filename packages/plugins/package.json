@@ -1,0 +1,11 @@
+{
+  "name": "@beamhop/plugins",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Plugin SDK, host (hot reload / bundled), catalog, webhooks",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*" },
+  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+}

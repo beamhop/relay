@@ -1,0 +1,11 @@
+{
+  "name": "@beamhop/enterprise-identity",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Enterprise: OIDC, SCIM, directory sync, npub binding, group mapping, NIP-05",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*" },
+  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@beamhop/runtime-cf",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Cloudflare runtime: Worker + Durable Objects + D1 + R2",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@beamhop/core": "workspace:*" },
+  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+}

@@ -11,15 +11,15 @@
  */
 import { z } from 'zod';
 
-const technicalNotes = new WeakMap<z.ZodTypeAny, string>();
+const technicalNotes = new WeakMap<z.ZodType, string>();
 
 /** Attach a technical-lens note (NIP numbers, kinds, raw semantics) to a schema node. */
-export function technical<T extends z.ZodTypeAny>(schema: T, note: string): T {
+export function technical<T extends z.ZodType>(schema: T, note: string): T {
   technicalNotes.set(schema, note);
   return schema;
 }
 
-export function technicalNote(schema: z.ZodTypeAny): string | undefined {
+export function technicalNote(schema: z.ZodType): string | undefined {
   return technicalNotes.get(schema);
 }
 
@@ -54,7 +54,7 @@ export const AccessSchema = z
           read: z.boolean().default(false).describe('People must sign in to read'),
           write: z.boolean().default(false).describe('People must sign in to post'),
         })
-        .default({}),
+        .prefault({}),
       'NIP-42 AUTH required for REQ (read) and/or EVENT (write).',
     ),
     wot: z
@@ -78,9 +78,9 @@ export const AccessSchema = z
           .describe('Extra trusted people (pubkeys) besides the owner'),
         refreshMinutes: z.number().int().min(5).default(360),
       })
-      .default({}),
+      .prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const TierSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
@@ -111,7 +111,7 @@ export const LimitsOverrideSchema = z
     blockedKinds: z.array(z.number().int()),
   })
   .partial()
-  .default({});
+  .prefault({});
 export type LimitsOverride = z.infer<typeof LimitsOverrideSchema>;
 
 export const RetentionRuleSchema = z.object({
@@ -137,7 +137,7 @@ export const BlossomSchema = z
         resize: z.boolean().default(true),
         transcode: z.boolean().default(false),
       })
-      .default({}),
+      .prefault({}),
     scanning: z
       .object({
         enabled: z
@@ -146,9 +146,9 @@ export const BlossomSchema = z
           .describe('Check uploads against known-abuse image lists'),
         lists: z.array(z.string()).default([]),
       })
-      .default({}),
+      .prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const RelayInfoSchema = z
   .object({
@@ -160,7 +160,7 @@ export const RelayInfoSchema = z
     pubkey: z.string().optional().describe("Owner's public key"),
     rules: z.string().optional().describe('Community rules, shown on your landing page'),
   })
-  .default({});
+  .prefault({});
 
 export const PublicPagesSchema = z
   .object({
@@ -168,7 +168,7 @@ export const PublicPagesSchema = z
     portal: z.boolean().default(true),
     status: z.boolean().default(true),
   })
-  .default({});
+  .prefault({});
 
 export const RelaySchema = z.object({
   id: z
@@ -178,7 +178,7 @@ export const RelaySchema = z.object({
   hosts: z.array(z.string()).min(1).describe('Domain names this relay answers on'),
   pathPrefix: z.string().optional(),
   persona: PersonaSchema.default('public-social'),
-  goals: GoalsSchema.default({}),
+  goals: GoalsSchema.prefault({}),
   info: RelayInfoSchema,
   access: AccessSchema,
   tiers: z.array(TierSchema).default([{ id: 'default', name: 'Default' }]),
@@ -195,7 +195,7 @@ export const StorageSchema = z
     driver: z.enum(['sqlite', 'postgres', 'd1', 'memory']).default('sqlite'),
     url: z.string().optional().describe('Database file path or connection URL'),
   })
-  .default({});
+  .prefault({});
 
 export const BlobStorageSchema = z
   .object({
@@ -207,7 +207,7 @@ export const BlobStorageSchema = z
     accessKeyId: z.string().optional(),
     secretAccessKey: z.string().optional(),
   })
-  .default({});
+  .prefault({});
 
 export const NodeSchema = z
   .object({
@@ -219,10 +219,10 @@ export const NodeSchema = z
         mode: z.enum(['auto', 'acme', 'proxy', 'off']).default('auto'),
         email: z.string().email().optional(),
       })
-      .default({}),
+      .prefault({}),
     trustProxy: z.boolean().default(false),
   })
-  .default({});
+  .prefault({});
 
 export const AlertChannelSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('webpush'), id: z.string() }),
@@ -248,7 +248,7 @@ export const AlertsSchema = z
     channels: z.array(AlertChannelSchema).default([]),
     digest: z.enum(['off', 'daily', 'weekly']).default('daily'),
   })
-  .default({});
+  .prefault({});
 
 export const AiSchema = z
   .object({
@@ -257,7 +257,7 @@ export const AiSchema = z
     model: z.string().optional(),
     apiKey: z.string().optional(),
   })
-  .default({});
+  .prefault({});
 
 export const BackupSchema = z
   .object({
@@ -266,13 +266,13 @@ export const BackupSchema = z
     target: BlobStorageSchema.optional(),
     keep: z.number().int().positive().default(14),
   })
-  .default({});
+  .prefault({});
 
 export const PrivacySchema = z
   .object({
     ipLogging: z.enum(['hashed', 'truncated', 'off']).default('hashed'),
   })
-  .default({});
+  .prefault({});
 
 export const ConfigSchema = z.object({
   version: z.literal(1).default(1),
@@ -288,7 +288,7 @@ export const ConfigSchema = z.object({
     .array(z.object({ id: z.string(), enabled: z.boolean().default(true), config: z.unknown() }))
     .default([]),
   /** Module sections keyed by module id. Absent unless the module is enabled. */
-  modules: z.record(z.string(), z.unknown()).default({}),
+  modules: z.record(z.string(), z.unknown()).prefault({}),
 });
 export type BeamhopConfig = z.infer<typeof ConfigSchema>;
 
