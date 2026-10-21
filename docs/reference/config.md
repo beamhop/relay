@@ -15,6 +15,7 @@ Every setting can be changed in the admin app (with preview and undo), in `beamh
 | `node.tls.mode`<br><sub>env `BEAMHOP_NODE__TLS__MODE`</sub> | `auto` \| `acme` \| `proxy` \| `off` | `"auto"` |  |
 | `node.tls.email`<br><sub>env `BEAMHOP_NODE__TLS__EMAIL`</sub> | string |  |  |
 | `node.trustProxy`<br><sub>env `BEAMHOP_NODE__TRUST_PROXY`</sub> | boolean | `false` |  |
+| `node.countryHeader`<br><sub>env `BEAMHOP_NODE__COUNTRY_HEADER`</sub> | string |  | *Technical:* Header set by the trusted reverse proxy with the ISO 3166 country of the client (e.g. cf-ipcountry). Read only when trustProxy is on; never derived from IPs. |
 | `storage.driver`<br><sub>env `BEAMHOP_STORAGE__DRIVER`</sub> | `sqlite` \| `postgres` \| `d1` \| `memory` | `"sqlite"` |  |
 | `storage.url`<br><sub>env `BEAMHOP_STORAGE__URL`</sub> | string |  | Database file path or connection URL |
 | `blobStorage.driver`<br><sub>env `BEAMHOP_BLOB_STORAGE__DRIVER`</sub> | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` |  |
@@ -140,6 +141,7 @@ Each section exists only when that feature is turned on; enterprise features are
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `sessionTtlSeconds` | number | `43200` | How long a sign-in lasts before admins must sign in again |
+| `sessionMaxAgeSeconds` | number | `604800` | Longest time someone can stay signed in without signing in again *Technical:* Absolute max age of a session JWT across sliding refreshes (POST …/session/refresh); measured from auth_time. |
 | `keyRotationDays` | number | `7` | How often the sign-in signing key is replaced *Technical:* HS256 session signing key rotation period; previous keys stay valid for one session lifetime. |
 | `undoWindowSeconds` | number | `300` | How long you can undo a change |
 | `passkeys.rpId` | string |  | Domain passkeys are tied to *Technical:* WebAuthn relying party id; defaults to the request host name. |
@@ -203,7 +205,7 @@ Each section exists only when that feature is turned on; enterprise features are
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `approvals.enabled` | boolean | `true` | Require a second admin for risky actions |
-| `approvals.gatedActions` | list of string | `["keyvault.escrow-decrypt","keyvault.destroy-key","keyvau…` | Actions that need a second admin |
+| `approvals.gatedActions` | list of string | `["escrow.decrypt-dm","keyvault.destroy-key","keyvault.rot…` | Actions that need a second admin |
 | `approvals.gateAllSensitive` | boolean | `true` | Also require approval for every action marked risky *Technical:* Also gate every action whose ActionDef has `sensitive: true`. |
 | `approvals.requestTtlMinutes` | number | `1440` | How long a request waits for approval |
 | `approvals.executeWithinMinutes` | number | `60` | How long an approval stays usable |
@@ -344,6 +346,7 @@ Each section exists only when that feature is turned on; enterprise features are
 | `backups.format` | `auto` \| `sqlite` \| `ndjson` | `"auto"` | *Technical:* auto: SQLite file snapshot (VACUUM INTO) on Bun+SQLite, else logical NDJSON per table. |
 | `backups.includeBlobBytes` | boolean | `false` | Also copy media files to the backup storage |
 | `backups.includeMetrics` | boolean | `true` | Include chart history |
+| `backups.includeSecrets` | boolean | `false` | Keep passwords and keys in backups that are not encrypted *Technical:* Without ports.keyWrapper archives are not encrypted, so secret-looking config fields (password, token, secret, key, salt, webhook, URL credentials) are masked unless this is on. Encrypted archives always keep them. |
 | `backups.checkMinutes` | number | `15` |  |
 | `litestream.enabled` | boolean | `false` | Watch continuous replication to a standby (Litestream) |
 | `litestream.metricsUrl` | string | `"http://127.0.0.1:9090/metrics"` |  |
@@ -442,9 +445,10 @@ Each section exists only when that feature is turned on; enterprise features are
 | `groups` | section |  | *Technical:* NIP-29 relay-based groups: h-tagged posts, moderation kinds 9000–9009, join/leave 9021/9022, relay-signed 39000–39003. Admins can always create groups via the groups.* actions. |
 | `groups.enabled` | boolean | `true` | Allow group chats (channels) on this relay |
 | `groups.whoCanCreate` | `anyone` \| `owner` | `"anyone"` | Who may start a new group from a Nostr app |
+| `countScanLimit` | number | `10000` | *Technical:* NIP-45: when filters may match audience-restricted events (gift wraps, private NIP-29 groups), COUNT scans up to this many matching events and applies REQ visibility per event; hitting the cap marks the answer approximate (a lower bound). |
 | `vanishIdCap` | number | `1000` | *Technical:* NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total. |
 | `software` | string | `"https://github.com/beamhop/beamhop"` |  |
-| `version` | string | `"0.0.0"` |  |
+| `version` | string | `"0.1.0-alpha.0"` |  |
 
 ### `modules.webhooks`
 
