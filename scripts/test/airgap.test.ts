@@ -124,7 +124,7 @@ describe('airgap-bundle.ts', () => {
     const io = new BufferIo();
     const ctx = {
       io,
-      env: { HOME: root },
+      env: { HOME: root, BEAMHOP_UPDATE_ALLOW_UNSIGNED: '1' }, // unsigned test release (developer override)
       cwd: root,
       home: root,
       fetch: (i: string | URL | Request, init?: RequestInit) => fetch(i, init),
