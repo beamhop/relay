@@ -8,7 +8,11 @@ import { z } from 'zod';
 
 export const MODULE_ID = 'enterprise-compliance';
 
-/** Gated by default (§12.9). Ids that are not registered on this node are ignored. */
+/**
+ * Gated by default (§12.9). Each id must be a real action of a shipped package
+ * (checked by runtime-bun/test/gated-actions.test.ts); ids whose module is not
+ * enabled on this node are ignored.
+ */
 export const DEFAULT_GATED_ACTIONS = [
   'escrow.decrypt-dm',
   'keyvault.destroy-key',

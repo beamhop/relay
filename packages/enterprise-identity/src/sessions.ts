@@ -122,6 +122,30 @@ export class TeamSessions {
     return all;
   }
 
+  /** Every session of people who signed in with one provider (binding keys `<idp>:<subject>`). */
+  async listByIdp(idp: string): Promise<TeamSessionRecord[]> {
+    const out: TeamSessionRecord[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.kernel.ports.docs.list<TeamSessionRecord>(COL.teamSessions, {
+        prefix: `${idp}:`,
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      });
+      out.push(...page.items.map((i) => i.value));
+      cursor = page.items.length ? page.cursor : undefined;
+    } while (cursor);
+    return out;
+  }
+
+  /** End every session of people who signed in with one provider. */
+  async revokeByIdp(idp: string): Promise<number> {
+    const all = await this.listByIdp(idp);
+    for (const s of all)
+      await this.kernel.ports.docs.delete(COL.teamSessions, this.key(s.bindingKey, s.sid));
+    return all.length;
+  }
+
   async gc(): Promise<void> {
     const now = this.kernel.ports.clock.now();
     const page = await this.kernel.ports.docs.list<TeamSessionRecord>(COL.teamSessions, {

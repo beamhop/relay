@@ -20,6 +20,7 @@ import { issuerOf } from './oidc.ts';
 import { redirectUriOf } from './routes.ts';
 import { SCIM_BASE, createScimToken, scimTokenInfo } from './scim.ts';
 import type { EnterpriseIdentityService } from './service.ts';
+import type { AdminRecordLike } from './services.ts';
 import { type Binding, COL, type GroupMapping, bindingKey } from './store.ts';
 
 export interface ActionDeps {
@@ -103,6 +104,25 @@ function idpIdOf(input: { provider: 'google' | 'microsoft' | 'oidc'; id?: string
 
 export function createActions(deps: ActionDeps): ActionDef[] {
   const { kernel, identity, oidc, google } = deps;
+
+  /** Admin config service (admin-api): the versioned, undoable config-change path. */
+  const configService = () => {
+    const svc = kernel.use<{
+      apply?(
+        next: unknown,
+        o: { principalId: string; summary?: string; reason?: string },
+      ): Promise<unknown>;
+    }>('admin.config');
+    if (!svc?.apply) throw new Error('Settings cannot be changed on this server');
+    return svc as Required<typeof svc>;
+  };
+
+  /** Admin-app records created by signing in with one provider (`sso:<idp>:<subject>`). */
+  const adminSignIns = async (idp: string): Promise<AdminRecordLike[]> => {
+    const dir = identity.svc.adminDirectory();
+    if (!dir) return [];
+    return (await dir.list()).filter((r) => r.id.startsWith(`sso:${idp}:`));
+  };
   const store = identity.store;
   const undoToken = (actionId: string, payload: unknown) => ({
     actionId,
@@ -432,6 +452,117 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     }),
 
     defineAction({
+      id: 'enterprise.disconnect-idp',
+      title: 'Disconnect a company sign-in provider',
+      description:
+        'Removes a sign-in provider. People who sign in with it can no longer sign in, and their open sessions end.',
+      technical:
+        'Removes modules.enterprise-identity.idps[provider] through admin.config apply (versioned config revision); deletes enterprise.team-sessions with binding prefix `<provider>:` and admin records `sso:<provider>:*`. Bindings, mappings and SCIM data are kept. Gated by the two-person rule (§12.9).',
+      scope: 'node',
+      permission: 'node.manage',
+      sensitive: true,
+      keywords: ['sso', 'company sign-in', 'disconnect', 'remove provider', 'idp'],
+      input: z.object({
+        provider: z.string().min(1).max(64).describe('Id of the sign-in provider to remove'),
+      }),
+      async preview(input) {
+        const idp = identity.idp(input.provider);
+        if (!idp)
+          return [
+            { kind: 'warning', text: `There is no sign-in provider called “${input.provider}”` },
+          ];
+        const name = idpName(idp);
+        const people = (await identity.store.list()).filter(
+          (b) => b.idp === idp.id && b.status !== 'deleted',
+        ).length;
+        const sessions = (await identity.sessions.listByIdp(idp.id)).length;
+        const admins = (await adminSignIns(idp.id)).length;
+        const lines: DiffLine[] = [
+          {
+            kind: 'remove',
+            text: `${name} will be removed from the sign-in options`,
+            technical: `modules.${MODULE_ID}.idps[${idp.id}] → removed (new config revision)`,
+          },
+          {
+            kind: 'warning',
+            text: `${people === 1 ? '1 person who signs' : `${people} people who sign`} in with it will no longer be able to sign in`,
+          },
+          {
+            kind: 'remove',
+            text: `${sessions === 1 ? '1 open session' : `${sessions} open sessions`} from it will end`,
+            technical: `enterprise.team-sessions prefix ${idp.id}: (${sessions})`,
+          },
+        ];
+        if (admins)
+          lines.push({
+            kind: 'remove',
+            text: `${admins === 1 ? '1 admin' : `${admins} admins`} signed in with it will be signed out of the admin app`,
+            technical: `admin.directory sso:${idp.id}:* (${admins})`,
+          });
+        return lines;
+      },
+      async run(input, ctx) {
+        const idp = identity.idp(input.provider);
+        if (!idp) throw new Error(`There is no sign-in provider called “${input.provider}”`);
+        const cfgSvc = configService();
+        const cur: BeamhopConfig = kernel.config();
+        const section = { ...((cur.modules[MODULE_ID] as Record<string, unknown>) ?? {}) };
+        const list = (section.idps as Array<{ id: string }>) ?? [];
+        const index = list.findIndex((i) => i.id === idp.id);
+        const prevEntry = index >= 0 ? list[index] : undefined;
+        section.idps = list.filter((i) => i.id !== idp.id);
+        const name = idpName(idp);
+        await cfgSvc.apply(
+          { ...cur, modules: { ...cur.modules, [MODULE_ID]: section } },
+          {
+            principalId: ctx.principal.id,
+            summary: `Disconnected ${name}`,
+            ...(ctx.reason ? { reason: ctx.reason } : {}),
+          },
+        );
+        oidc.forget(idp.id);
+        const sessionsEnded = await identity.sessions.revokeByIdp(idp.id);
+        const dir = identity.svc.adminDirectory();
+        const removedAdmins = await adminSignIns(idp.id);
+        for (const r of removedAdmins) await dir?.remove(r.id);
+        return {
+          output: { provider: idp.id, sessionsEnded, adminsSignedOut: removedAdmins.length },
+          summary: `Disconnected ${name}`,
+          undo: {
+            actionId: 'enterprise.disconnect-idp',
+            payload: { provider: idp.id, index, entry: prevEntry, admins: removedAdmins },
+            expiresAt: kernel.ports.clock.now() + UNDO_SECONDS,
+          },
+        };
+      },
+      async undo(payload, ctx) {
+        const p = payload as {
+          provider: string;
+          index: number;
+          entry?: { id: string };
+          admins: AdminRecordLike[];
+        };
+        if (p.entry) {
+          const cfgSvc = configService();
+          const cur: BeamhopConfig = kernel.config();
+          const section = { ...((cur.modules[MODULE_ID] as Record<string, unknown>) ?? {}) };
+          const list = ((section.idps as Array<{ id: string }>) ?? []).filter(
+            (i) => i.id !== p.provider,
+          );
+          list.splice(Math.max(0, Math.min(p.index, list.length)), 0, p.entry);
+          section.idps = list;
+          await cfgSvc.apply(
+            { ...cur, modules: { ...cur.modules, [MODULE_ID]: section } },
+            { principalId: ctx.principal.id, summary: `Reconnected ${p.provider} sign-in (undo)` },
+          );
+          oidc.forget(p.provider);
+        }
+        const dir = identity.svc.adminDirectory();
+        for (const r of p.admins) if (dir && !(await dir.get(r.id))) await dir.put(r);
+      },
+    }),
+
+    defineAction({
       id: 'enterprise.test-connection',
       title: 'Test the company directory connection',
       description: 'Checks that sign-in and directory sync can reach your provider.',
@@ -542,6 +673,14 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     }),
   ];
   return actions as unknown as ActionDef[];
+}
+
+function idpName(idp: { id: string; type: 'google' | 'microsoft' | 'oidc'; label?: string }) {
+  return idp.label
+    ? `“${idp.label}”`
+    : idp.type === 'oidc'
+      ? `“${idp.id}”`
+      : providerName(idp.type);
 }
 
 function providerName(p: 'google' | 'microsoft' | 'oidc'): string {

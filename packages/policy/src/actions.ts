@@ -258,6 +258,73 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     },
   });
 
+  const bulkDelete = defineAction({
+    id: 'moderation.bulk-delete',
+    title: 'Remove many posts',
+    description: `Hide up to 500 posts at once. They stay in the recycle bin for ${days()} days.`,
+    technical:
+      'Bulk soft delete by event id: each event copied to policy.recycle then deleteByIds (no tombstone, no NIP-09 kind 5). Gated by the two-person rule (§12.9) when enterprise-compliance approvals are on.',
+    scope: 'relay',
+    permission: 'moderation.write',
+    sensitive: true,
+    bulk: true,
+    keywords: ['delete', 'remove', 'bulk', 'mass', 'purge', 'takedown'],
+    input: z.object({
+      eventIds: z.array(z.string().regex(HEX64, 'expected a 64-character hex id')).min(1).max(500),
+      reason: z.string().max(200).optional(),
+    }),
+    async preview(input, ctx) {
+      const relayId = needRelay(ctx);
+      const ids = [...new Set(input.eventIds)];
+      let found = 0;
+      for (const id of ids) {
+        if (await rt.state.isRecycled(relayId, id)) continue;
+        if (await ports.events.getById(relayId, id)) found++;
+      }
+      const lines: DiffLine[] = [
+        {
+          kind: 'remove',
+          text: `Move ${plural(found, 'post')} to the recycle bin (restorable for ${days()} days)`,
+          technical: `deleteByIds(${found}) + policy.recycle`,
+        },
+      ];
+      const missing = ids.length - found;
+      if (missing)
+        lines.push({
+          kind: 'info',
+          text: `${plural(missing, 'post')} could not be found or ${missing === 1 ? 'is' : 'are'} already in the recycle bin`,
+        });
+      return lines;
+    },
+    async run(input, ctx) {
+      const relayId = needRelay(ctx);
+      const by = ctx.principal.id;
+      const reason = input.reason ?? ctx.reason;
+      const removed: string[] = [];
+      let notFound = 0;
+      for (const id of new Set(input.eventIds)) {
+        const e = (await rt.state.isRecycled(relayId, id))
+          ? null
+          : await ports.events.getById(relayId, id);
+        if (!e) {
+          notFound++;
+          continue;
+        }
+        await rt.queue.removeEvent(relayId, e, by, reason);
+        removed.push(id);
+      }
+      return {
+        output: { removed: removed.length, notFound },
+        summary: `Moved ${plural(removed.length, 'post')} to the recycle bin (restorable for ${days()} days)`,
+        undo: undoToken(rt, 'moderation.bulk-delete', { ids: removed }),
+      };
+    },
+    async undo(payload, ctx) {
+      const relayId = needRelay(ctx);
+      for (const id of (payload as { ids: string[] }).ids) await rt.queue.restore(relayId, id);
+    },
+  });
+
   const restore = defineAction({
     id: 'moderation.restore',
     title: 'Restore from recycle bin',
@@ -936,6 +1003,7 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     queueAction,
     keep,
     remove,
+    bulkDelete,
     restore,
     recycleBin,
     ban,
