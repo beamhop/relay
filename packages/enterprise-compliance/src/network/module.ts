@@ -38,7 +38,55 @@ interface Compiled {
   cfg: NetworkConfig;
   admin: IpAllowlist;
   relays: Map<string, IpAllowlist>;
+  denyAll: IpAllowlist;
+  denyRelays: Map<string, IpAllowlist>;
   mtls: MtlsVerifier | null;
+}
+
+/** Path of the per-group outbound relay policy read by the team client. */
+export const NETWORK_POLICY_PATH = '/.well-known/beamhop/network';
+
+/** Published outbound policy (`GET /.well-known/beamhop/network`), or null when none is set. */
+export interface OutboundPolicy {
+  groups: Record<string, { outbound: string[] }>;
+  default: { outbound: string[] | null };
+}
+
+export function outboundPolicy(cfg: NetworkConfig): OutboundPolicy | null {
+  const groups: OutboundPolicy['groups'] = {};
+  for (const [id, list] of Object.entries(cfg.outbound.groups)) groups[id] = { outbound: list };
+  if (Object.keys(groups).length === 0 && cfg.outbound.default === null) return null;
+  return { groups, default: { outbound: cfg.outbound.default } };
+}
+
+function normRelay(url: string): string {
+  try {
+    const u = new URL(url.trim());
+    const path = u.pathname.replace(/\/+$/, '');
+    return `${u.protocol}//${u.host.toLowerCase()}${path}`;
+  } catch {
+    return url.trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
+/**
+ * Whether content of NIP-29 group `groupId` may be sent to `relayUrl` (besides the home
+ * relay, which is always allowed). For any module that forwards or mirrors group events.
+ */
+export function outboundAllowed(cfg: NetworkConfig, groupId: string, relayUrl: string): boolean {
+  const list = cfg.outbound.groups[groupId] ?? cfg.outbound.default;
+  if (list === null) return true;
+  const want = normRelay(relayUrl);
+  return list.some((u) => normRelay(u) === want);
+}
+
+/**
+ * Whether headers set by a proxy in front of Beamhop can be trusted without a shared
+ * secret. On Cloudflare the edge is the only proxy and it forwards client-supplied headers
+ * unchanged (only `CF-Connecting-IP` is authoritative), so `node.trustProxy` is ignored there.
+ */
+export function trustsProxyHeaders(kernel: Kernel): boolean {
+  return kernel.runtime !== 'cloudflare' && kernel.config().node.trustProxy;
 }
 
 function deny(status: number, message: string): Response {
@@ -62,6 +110,10 @@ export interface NetworkControls {
   check(req: Request, ctx: RequestGateContext): Promise<Response | undefined>;
   /** Verified zero-trust identity of a request, if any. */
   identity(req: Request): Promise<ZeroTrustIdentity | null>;
+  /** Per-group outbound relay allow (see {@link outboundAllowed}). */
+  outboundAllowed(groupId: string, relayUrl: string): boolean;
+  /** The published outbound policy, or null when none is set. */
+  outboundPolicy(): OutboundPolicy | null;
 }
 
 export function createNetworkControls(kernel: Kernel): NetworkControls {
@@ -84,7 +136,18 @@ export function createNetworkControls(kernel: Kernel): NetworkControls {
         now: () => new Date(kernel.ports.clock.nowMs()),
       });
     }
-    compiled = { raw, cfg, admin: new IpAllowlist(cfg.allowlist.admin), relays, mtls };
+    const denyRelays = new Map<string, IpAllowlist>();
+    for (const [id, list] of Object.entries(cfg.denylist.relays))
+      denyRelays.set(id, new IpAllowlist(list));
+    compiled = {
+      raw,
+      cfg,
+      admin: new IpAllowlist(cfg.allowlist.admin),
+      relays,
+      denyAll: new IpAllowlist(cfg.denylist.all),
+      denyRelays,
+      mtls,
+    };
     return compiled;
   };
 
@@ -92,7 +155,7 @@ export function createNetworkControls(kernel: Kernel): NetworkControls {
     if (verified.has(req)) return verified.get(req) ?? null;
     const { cfg } = settings();
     if (cfg.zeroTrust.provider === 'off') return null;
-    const r = await zt.verify(req, cfg.zeroTrust, kernel.config().node.trustProxy);
+    const r = await zt.verify(req, cfg.zeroTrust, trustsProxyHeaders(kernel));
     const id = r.ok ? r.identity : null;
     verified.set(req, id);
     return id;
@@ -105,7 +168,18 @@ export function createNetworkControls(kernel: Kernel): NetworkControls {
     const isAdmin = ctx.route.relayId === '' || cfg.adminPaths.some((p) => path.startsWith(p));
     const relayId = ctx.route.relayId;
 
-    // 1. IP allowlists (raw IP only used here, in memory).
+    // 1. IP deny and allow lists (raw IP only used here, in memory).
+    const ip = ctx.clientIp;
+    // A non-empty list `allows` exactly the addresses it contains.
+    const hit = (l: IpAllowlist | undefined) => !!ip && !!l && !l.empty && l.allows(ip);
+    if (hit(c.denyAll) || (!isAdmin && relayId && hit(c.denyRelays.get(relayId)))) {
+      log.log('info', 'request blocked by IP deny list', {
+        ipHash: ctx.route.ipHash,
+        relayId,
+        admin: isAdmin,
+      });
+      return deny(403, 'Access from your network is not allowed.');
+    }
     const list = isAdmin ? c.admin : relayId ? c.relays.get(relayId) : undefined;
     if (list && !list.allows(ctx.clientIp)) {
       log.log('info', 'request blocked by IP allowlist', {
@@ -120,7 +194,9 @@ export function createNetworkControls(kernel: Kernel): NetworkControls {
     const m = cfg.mtls;
     if (m.enabled && (m.scope === 'all' || (m.scope === 'admin') === isAdmin)) {
       if (!c.mtls) return deny(403, 'Device certificates are required but not configured.');
-      if (!proxySecretOk(req, m.proxySecret, kernel.config().node.trustProxy))
+      if (kernel.runtime === 'cloudflare' && !m.proxySecret)
+        return deny(403, 'Company-device checks are not available on Cloudflare.');
+      if (!proxySecretOk(req, m.proxySecret, trustsProxyHeaders(kernel)))
         return deny(403, 'Your device could not be verified.');
       if (m.verifyHeader && (req.headers.get(m.verifyHeader) ?? '').toUpperCase() !== 'SUCCESS')
         return deny(403, 'Your device certificate was not accepted.');
@@ -182,7 +258,12 @@ export function createNetworkControls(kernel: Kernel): NetworkControls {
     return undefined;
   };
 
-  return { check, identity };
+  return {
+    check,
+    identity,
+    outboundAllowed: (groupId, relayUrl) => outboundAllowed(settings().cfg, groupId, relayUrl),
+    outboundPolicy: () => outboundPolicy(settings().cfg),
+  };
 }
 
 export const networkModule: BeamhopModule = defineModule({
@@ -227,6 +308,14 @@ export const networkModule: BeamhopModule = defineModule({
     };
     kernel.authProviders.push(provider);
 
+    // Per-group outbound relay allow for the team client (same origin). 404 = no policy.
+    kernel.http.get(NETWORK_POLICY_PATH, (c) => {
+      const policy = controls.outboundPolicy();
+      if (!policy) return c.json({ error: 'No network policy is set' }, 404);
+      c.header('cache-control', 'private, max-age=60');
+      return c.json(policy);
+    });
+
     // Exchange a verified gateway identity for a normal admin session (PWA sign-in).
     kernel.http.post('/api/zero-trust/session', async (c) => {
       const idn = await controls.identity(c.req.raw);
@@ -259,6 +348,28 @@ export const networkModule: BeamhopModule = defineModule({
               'Network controls see your proxy’s address, not your users’ — turn on “behind a proxy”',
             technical:
               'node.trustProxy=false: client IP / identity headers from the proxy are ignored',
+          };
+        if (kernel.runtime === 'cloudflare' && cfg.mtls.enabled && !cfg.mtls.proxySecret)
+          return {
+            score: 30,
+            status: 'critical',
+            message:
+              'Company-device certificates are not available on Cloudflare — connections that need them are refused',
+            technical:
+              'Workers cannot terminate mTLS or read client certificates; modules.enterprise-network.mtls needs a TLS-terminating proxy in front with mtls.proxySecret, or use zeroTrust.provider=cloudflare-access (device posture), or the Bun server.',
+          };
+        if (
+          kernel.runtime === 'cloudflare' &&
+          cfg.zeroTrust.provider === 'entra-app-proxy' &&
+          !cfg.zeroTrust.proxySecret
+        )
+          return {
+            score: 30,
+            status: 'critical',
+            message:
+              'On Cloudflare the Microsoft access proxy must send a shared secret — company sign-in is refused until it does',
+            technical:
+              'node.trustProxy is ignored on Workers; set modules.enterprise-network.zeroTrust.proxySecret',
           };
         if (cfg.mtls.enabled && !cfg.mtls.caPem)
           return {

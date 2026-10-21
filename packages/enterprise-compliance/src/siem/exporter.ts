@@ -166,6 +166,8 @@ export class SiemExporter {
     this.queue = p.catch((err) =>
       this.rt.log('error', 'SIEM event log append failed', { err: errMsg(err) }),
     );
+    // Workers: the append must outlive the request that caused it.
+    this.rt.background(this.queue);
     return p;
   }
 

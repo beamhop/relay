@@ -16,6 +16,28 @@ export const DEFAULT_BUILTINS = [
   '@beamhop/admin-api',
 ] as const;
 
+/**
+ * Optional (enterprise) module id → package. A package is bundled when one of its modules
+ * has a `config.modules[id]` section, or for all of them with `enterprise: true`
+ * (`--enterprise`), so they can be turned on later from the admin app without a redeploy.
+ * Bundled optional modules still stay off until configured (§12.0).
+ */
+export const OPTIONAL_MODULE_PACKAGES: Readonly<Record<string, string>> = {
+  'enterprise-compliance': '@beamhop/enterprise-compliance',
+  'enterprise-network': '@beamhop/enterprise-compliance',
+  'enterprise-identity': '@beamhop/enterprise-identity',
+  'enterprise-keyvault': '@beamhop/enterprise-keyvault',
+};
+
+/** Optional packages to bundle for `config` (deduped, stable order). */
+export function optionalPackages(config: BeamhopConfig, all = false): string[] {
+  const out: string[] = [];
+  for (const [id, pkg] of Object.entries(OPTIONAL_MODULE_PACKAGES)) {
+    if ((all || config.modules[id] !== undefined) && !out.includes(pkg)) out.push(pkg);
+  }
+  return out;
+}
+
 /** Package of the bundled plugin host (`createBundledPluginHost`). */
 export const PLUGINS_PACKAGE = '@beamhop/plugins';
 
@@ -44,6 +66,8 @@ export interface ImportMapInput {
   runtimeSpecifier: string;
   /** Inline the config into the bundle (default true). */
   inlineConfig?: boolean;
+  /** Bundle every optional (enterprise) package, configured or not. */
+  enterprise?: boolean;
   /** Ids served by the plugin host's built-ins (default: `BUILTIN_PLUGINS` keys). */
   builtinPlugins?: readonly string[];
 }
@@ -68,7 +92,11 @@ export function generateImportMap(input: ImportMapInput): ImportMapResult {
   const config: BeamhopConfig = parseConfig(input.config ?? {});
   const builtins: ImportMapResult['builtins'] = [];
   const skipped: string[] = [];
-  for (const pkg of input.builtins ?? DEFAULT_BUILTINS) {
+  const wanted = [...(input.builtins ?? DEFAULT_BUILTINS)];
+  for (const pkg of optionalPackages(config, input.enterprise)) {
+    if (!wanted.includes(pkg)) wanted.push(pkg);
+  }
+  for (const pkg of wanted) {
     const specifier = input.resolve(pkg);
     if (specifier) builtins.push({ pkg, specifier });
     else skipped.push(pkg);

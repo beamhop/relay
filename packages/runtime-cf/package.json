@@ -9,16 +9,22 @@
     ".": "./src/index.ts",
     "./build": "./src/bundle/index.ts"
   },
-  "bin": { "beamhop-cf-build": "./src/bundle/cli.ts" },
+  "bin": {
+    "beamhop-cf-build": "./src/bundle/cli.ts"
+  },
   "scripts": {
     "build:entry": "bun src/bundle/cli.ts",
-    "test:cf": "vitest run --config test-cf/vitest.config.ts"
+    "test:cf": "bun run test:workerd",
+    "test:workerd": "vitest run --config test-cf/vitest.config.ts && vitest run --config test-cf/vitest.enterprise.config.ts"
   },
   "dependencies": {
     "@beamhop/admin-api": "workspace:*",
     "@beamhop/blobs": "workspace:*",
     "@beamhop/blossom": "workspace:*",
     "@beamhop/core": "workspace:*",
+    "@beamhop/enterprise-compliance": "workspace:*",
+    "@beamhop/enterprise-identity": "workspace:*",
+    "@beamhop/enterprise-keyvault": "workspace:*",
     "@beamhop/plugins": "workspace:*",
     "@beamhop/policy": "workspace:*",
     "@beamhop/relay": "workspace:*",

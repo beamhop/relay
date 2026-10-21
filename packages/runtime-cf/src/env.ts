@@ -28,6 +28,13 @@ export interface CfEnv {
   RELAY_SHARDS?: string;
   /** Minimum log level: debug | info | warn | error (default info). */
   LOG_LEVEL?: string;
+  /**
+   * Optional owner claim code chosen by you (`wrangler secret put BEAMHOP_CLAIM_CODE`, at least
+   * 8 characters). Used while the relay has no owner; ignored afterwards.
+   */
+  BEAMHOP_CLAIM_CODE?: string;
+  /** Key vault master key for `kek.keyEnv` (`wrangler secret put BEAMHOP_MASTER_KEY`). */
+  BEAMHOP_MASTER_KEY?: string;
   /** Per-query CPU budget in ms for chunked event queries (default 2000). */
   QUERY_BUDGET_MS?: string;
 }

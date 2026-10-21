@@ -33,13 +33,16 @@ import type {
   HibernatableWebSocket,
   ScheduledControllerLike,
 } from './cf-types.ts';
+import { ensureClaimCode } from './claim.ts';
 import { type CfEnv, numberVar, shardCount } from './env.ts';
-import { type BundledModules, resolveModules } from './plugins.ts';
+import { type BundledModules, type Namespace, resolveModules } from './plugins.ts';
+import { BACKGROUND_SERVICE, BackgroundTasks } from './ports/background.ts';
 import { CfCrypto, CfLogger, type LogSink, cfClock, parseLogLevel } from './ports/basic.ts';
 import { type GuardOptions, GuardedEventStore } from './ports/guards.ts';
 import { CfImagesMediaProcessor } from './ports/media.ts';
 import { ShardedPubSub, shardName } from './ports/pubsub.ts';
 import { CronScheduler } from './ports/scheduler.ts';
+import { storeView } from './ports/views.ts';
 import {
   CONFIG_CHANNEL,
   H_COUNTRY,
@@ -60,6 +63,8 @@ export const ROUTE_ENV_KEY = 'beamhopRoute';
 export const cfRuntimeModule: BeamhopModule = defineModule({
   id: 'runtime-cf',
   register(kernel) {
+    // Work that must outlive a response (drained via `ctx.waitUntil`), one tracker per kernel.
+    kernel.provide(BACKGROUND_SERVICE, new BackgroundTasks());
     kernel.http.use('*', async (c, next) => {
       const route = (c.env as Record<string, unknown> | undefined)?.[ROUTE_ENV_KEY];
       if (route) c.set('route', route as RouteContext);
@@ -98,6 +103,37 @@ function optionalSources(mods: BeamhopModule[]): OptionalModuleSource[] {
     load: async () => m,
     defaultSection: async () => ({ ...(CF_OPTIONAL_DEFAULTS[m.id] ?? {}) }),
   }));
+}
+
+/** Package of the key vault; its factory is given the Worker secrets (no `process.env` on Workers). */
+export const KEYVAULT_PACKAGE = '@beamhop/enterprise-keyvault';
+
+/** Worker vars/secrets as a string lookup (non-string bindings are never exposed). */
+export function envLookup(env: CfEnv): (name: string) => string | undefined {
+  return (name) => {
+    const v = (env as unknown as Record<string, unknown>)[name];
+    return typeof v === 'string' ? v : undefined;
+  };
+}
+
+/**
+ * Rebuild modules whose package needs Worker bindings at construction time. Today: the key
+ * vault reads `kek.keyEnv` (e.g. `BEAMHOP_MASTER_KEY`) from Worker secrets.
+ */
+export function withRuntimeDeps(
+  modules: BeamhopModule[],
+  builtins: Record<string, Namespace>,
+  env: CfEnv,
+): BeamhopModule[] {
+  const kv = builtins[KEYVAULT_PACKAGE]?.createKeyvaultModule;
+  if (typeof kv !== 'function') return modules;
+  return modules.map((m) =>
+    m.id === 'enterprise-keyvault'
+      ? (kv as (deps: { env: (n: string) => string | undefined }) => BeamhopModule)({
+          env: envLookup(env),
+        })
+      : m,
+  );
 }
 
 /** Module id of the plugin host (`createBundledPluginHost` from `@beamhop/plugins`). */
@@ -172,6 +208,16 @@ function cached<T>(build: (env: CfEnv) => Promise<T>): (env: CfEnv) => Promise<T
   };
 }
 
+export function backgroundOf(kernel: Kernel): BackgroundTasks | undefined {
+  return kernel.use<BackgroundTasks>(BACKGROUND_SERVICE);
+}
+
+/** Hand pending background work of `kernel` to the request's `waitUntil`. */
+function keepBackgroundAlive(kernel: Kernel, execCtx?: ExecutionContextLike): void {
+  const bg = backgroundOf(kernel);
+  if (bg && bg.size > 0 && execCtx?.waitUntil) execCtx.waitUntil(bg.drain());
+}
+
 export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
   const shared = cached<SharedServices>(async (env) => {
     const clock = opts.clock ?? cfClock;
@@ -207,7 +253,10 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     ];
     // Optional (enterprise) modules: bundled, but registered only while their
     // `config.modules[id]` section exists; hot-loaded/unloaded on config changes.
-    const { modules, optional } = splitOptional(all, baseConfig);
+    const { modules, optional } = splitOptional(
+      withRuntimeDeps(all, opts.builtins ?? {}, env),
+      baseConfig,
+    );
     const services: SharedServices = {
       env,
       logger,
@@ -222,10 +271,11 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
           runtime: 'cloudflare',
           config: baseConfig,
           modules,
+          // Per-kernel views: modules may wrap store methods (legal hold, encryption).
           ports: {
-            events,
-            blobs: stores.blobs,
-            blobIndex: stores.blobIndex,
+            events: storeView(events),
+            blobs: storeView(stores.blobs),
+            blobIndex: storeView(stores.blobIndex),
             docs: stores.docs,
             metrics: stores.metrics,
             pubsub: over.pubsub,
@@ -258,6 +308,13 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     // Propagate config revisions committed in the Worker to every room's kernel.
     ctx.kernel.onConfigChange((next) => {
       void pubsub.publish(CONFIG_CHANNEL, next);
+    });
+    // First run: create (or take from a secret) the owner claim code and log it once.
+    await ensureClaimCode(ctx.kernel, {
+      docs: services.stores.docs,
+      logger: services.logger,
+      clock: services.clock,
+      preset: env.BEAMHOP_CLAIM_CODE,
     });
     return ctx;
   });
@@ -332,6 +389,8 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     } catch (err) {
       services.logger.log('error', 'Request failed', { error: String(err), path: url.pathname });
       return new Response('Something went wrong.', { status: 500 });
+    } finally {
+      keepBackgroundAlive(kernel, execCtx);
     }
   }
 
@@ -341,7 +400,11 @@ export function createCloudflareRuntime(opts: CloudflareRuntimeOptions = {}) {
     _execCtx?: ExecutionContextLike,
   ): Promise<string[]> {
     const ctx = await workerContext(env);
-    return ctx.scheduler.runDue(controller.scheduledTime);
+    try {
+      return await ctx.scheduler.runDue(controller.scheduledTime);
+    } finally {
+      await backgroundOf(ctx.kernel)?.drain();
+    }
   }
 
   const roomHooks = opts.room;

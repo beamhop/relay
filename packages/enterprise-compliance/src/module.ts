@@ -125,6 +125,25 @@ export function createComplianceModule(opts: ExporterOptions = {}): BeamhopModul
         },
       });
       kernel.health.push(residencyHealth(() => st.residency));
+      if (kernel.runtime === 'cloudflare') {
+        kernel.health.push({
+          id: 'enterprise-compliance.cloudflare',
+          subsystem: 'security',
+          weight: 1,
+          async run() {
+            const syslog = rt.settings().siem.sinks.filter((s) => s.enabled && s.type === 'syslog');
+            if (syslog.length === 0)
+              return { score: 100, status: 'ok', message: 'Compliance features are active' };
+            return {
+              score: 50,
+              status: 'warn',
+              message:
+                'Syslog destinations are not available on Cloudflare — use Splunk, Sentinel, Chronicle or a webhook',
+              technical: `Workers cannot open raw TCP/UDP syslog connections; sinks: ${syslog.map((s) => s.id).join(', ')}`,
+            };
+          },
+        });
+      }
       kernel.ui.push(
         {
           path: '/settings/compliance',

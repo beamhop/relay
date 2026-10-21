@@ -344,6 +344,9 @@ Each section exists only when that feature is turned on; enterprise features are
 | `allowlist` | section |  | Limit access to company networks |
 | `allowlist.admin` | list of string | `[]` | Networks allowed to open the admin app (everyone when empty) |
 | `allowlist.relays` | map |  | Networks allowed to use each relay (everyone when empty) |
+| `denylist` | section |  | Block specific networks |
+| `denylist.all` | list of string | `[]` | Networks that are always blocked, for the admin app and every relay |
+| `denylist.relays` | map |  | Networks blocked from each relay |
 | `mtls` | section |  | Company devices only (client certificates) |
 | `mtls.enabled` | boolean | `false` | Only company devices can connect |
 | `mtls.scope` | `admin` \| `relays` \| `all` | `"all"` | Where the company-device check applies. |
@@ -370,6 +373,9 @@ Each section exists only when that feature is turned on; enterprise features are
 | `privateOnly` | section |  | Private-only mode |
 | `privateOnly.enabled` | boolean | `false` | Hide the landing and status pages; share only minimal relay info |
 | `privateOnly.keepPortal` | boolean | `true` | Keep the self-service portal |
+| `outbound` | section |  | Where team groups may post besides this relay *Technical:* Per-group outbound relay allow (NIP-29 group id = h tag), published at GET /.well-known/beamhop/network for the team client. Enforced by the client; Beamhop itself never forwards group events to other relays. |
+| `outbound.default` | list of string | `null` | Other relays every group may also post to. Empty = only this relay. Not set = no limit. |
+| `outbound.groups` | map |  | Other relays each group may also post to (empty = only this relay) |
 
 ### `modules.insights`
 
