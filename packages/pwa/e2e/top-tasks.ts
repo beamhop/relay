@@ -184,13 +184,12 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'invite-admin',
     title: 'Invite someone to the admin team',
-    phone: ['People', 'Invites', 'Invite to team', 'Continue', 'Confirm'],
-    fix: 'Skip the input form when every field has a default (the role defaults to moderator): go straight to the preview, with "Change" on the preview to edit the role. Also show "Invite to team" on the People screen header so the Invites tab is not needed: People → Invite to team → Confirm (3).',
+    phone: ['People', 'Invite to team', 'Confirm'],
     run: async (t, page) => {
       await t.nav('People');
-      await t.tap('Invites', page.getByTestId('tab-invites'));
       await t.tap('Invite to team', page.getByRole('button', { name: /Invite to team/ }));
-      await t.tap('Continue', sheet(page).getByTestId('action-continue'));
+      // No form: the defaults (moderator) are on the preview, with "Change" to edit them.
+      await expect(sheet(page).getByTestId('action-change')).toBeVisible();
       await t.tap('Confirm', sheet(page).getByTestId('action-confirm'));
       await expect(sheet(page).getByTestId('action-secret')).toBeVisible();
       expect(await log(page)).toContain('admins.invite');
@@ -199,13 +198,12 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'invite-link',
     title: 'Create an invite link for a new member',
-    phone: ['People', 'Invites', 'Invite a member', 'Continue', 'Confirm'],
-    fix: 'Same as "Invite someone to the admin team": skip the form when the defaults are fine (1 use, 7 days) and show the defaults on the preview with "Change"; put "Invite a member" on the People screen header: People → Invite a member → Confirm (3).',
+    phone: ['People', 'Invite a member', 'Confirm'],
     run: async (t, page) => {
       await t.nav('People');
-      await t.tap('Invites', page.getByTestId('tab-invites'));
       await t.tap('Invite a member', page.getByRole('button', { name: /Invite a member/ }));
-      await t.tap('Continue', sheet(page).getByTestId('action-continue'));
+      await expect(sheet(page).getByTestId('diff')).toContainText('A new invite for 1 people');
+      await expect(sheet(page).getByTestId('action-change')).toBeVisible();
       await t.tap('Confirm', sheet(page).getByTestId('action-confirm'));
       await expect(sheet(page).getByTestId('action-secret')).toContainText('INVITE');
       expect(await log(page)).toContain('access.create-invite');
@@ -238,22 +236,13 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'members-only',
     title: 'Make the relay members-only',
-    phone: [
-      'Settings',
-      'Access',
-      'Open the "Who can post" list',
-      'Only people I approve',
-      'Save',
-      'Apply',
-    ],
-    fix: 'Put "Who can post" as three tappable choices (Anyone / People I approve / Web of trust) at the top of the Settings screen; tapping one opens the review sheet directly: Settings → Only people I approve → Apply (3). A segmented control instead of a native drop-down also removes the extra "open the list" tap.',
+    phone: ['Settings', 'People I approve', 'Apply'],
     run: async (t, page) => {
       await t.nav('Settings');
-      await t.tap('Access', page.getByTestId('section-access'));
-      const select = page.locator('[data-setting-field$="access.mode"] select');
-      await t.choose('Open the "Who can post" list', 'Only people I approve', select, 'allowlist');
-      await t.tap('Save', page.getByTestId('section-save'));
-      await t.tap('Apply', page.getByTestId('config-diff-sheet').getByTestId('config-apply'));
+      await t.tap('People I approve', page.getByTestId('who-allowlist'));
+      const review = page.getByTestId('config-diff-sheet');
+      await expect(review.getByTestId('diff')).toBeVisible();
+      await t.tap('Apply', review.getByTestId('config-apply'));
       await expect
         .poll(async () => (await serverLog(page)).relay as unknown as { access: { mode: string } })
         .toMatchObject({ access: { mode: 'allowlist' } });
@@ -262,17 +251,16 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'goal-slider',
     title: 'Make the relay less open (goal slider)',
-    phone: ['Settings', 'Goals', 'Drag "How open the relay is"', 'Save', 'Apply'],
-    fix: 'Show the five goal sliders on the Settings screen itself and open the review sheet when a slider is released (no separate Save): Settings → drag → Apply (3).',
+    phone: ['Settings', 'Drag "How open the relay is"', 'Apply'],
     run: async (t, page) => {
       await t.nav('Settings');
-      await t.tap('Goals', page.getByTestId('goals-link'));
-      const thumb = page.locator('[data-goal="openness"] [role="slider"]');
-      await expect(thumb).toBeVisible();
+      const thumb = page.locator('[data-goal-quick="openness"] [role="slider"]');
+      await expect(thumb).toHaveAttribute('aria-valuenow', '70');
       await t.swipe('Drag "How open the relay is"', thumb, -90);
-      await expect(page.getByTestId('goal-changes').locator('li').first()).toBeVisible();
-      await t.tap('Save', page.getByTestId('goals-save'));
-      await t.tap('Apply', page.getByTestId('config-diff-sheet').getByTestId('config-apply'));
+      // Releasing the slider opens the review sheet: no separate Save.
+      const review = page.getByTestId('config-diff-sheet');
+      await expect(review.getByTestId('diff')).toContainText('How open the relay is');
+      await t.tap('Apply', review.getByTestId('config-apply'));
       await expect.poll(async () => (await serverLog(page)).relay.goals.openness).toBeLessThan(70);
     },
   },
@@ -303,15 +291,14 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'snooze-alert',
     title: 'Snooze an alert for an hour',
-    phone: ['Activity', 'Alerts', 'Snooze', '1 hour'],
-    fix: 'Make "Snooze" snooze for 1 hour in one tap, with "Undo · Longer…" on the toast for other durations (or swipe an alert row left to snooze 1 hour): Activity → Alerts → Snooze (3).',
+    phone: ['Activity', 'Alerts', 'Snooze 1 hour'],
     run: async (t, page) => {
       await t.nav('Activity');
       await t.tap('Alerts', page.getByTestId('tab-alerts'));
       const row = page.getByTestId('alert-row').first();
-      await t.tap('Snooze', row.getByTestId('alert-snooze'));
-      await t.tap('1 hour', row.getByTestId('alert-snooze-1h'));
+      await t.tap('Snooze 1 hour', row.getByTestId('alert-snooze'));
       await expect(row.getByTestId('alert-muted')).toContainText('Snoozed until');
+      await expect(page.getByTestId('toast').first().getByTestId('toast-undo')).toBeVisible();
     },
   },
   {
@@ -340,8 +327,7 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'release-quarantine',
     title: 'Release a file that was held back (quarantined)',
-    phone: ['Media', 'Quarantined', 'Release', 'Confirm'],
-    fix: 'Release is undoable, so run it straight away with an Undo toast instead of a preview sheet (keep the preview for "Delete for good"): Media → Quarantined → Release (3). Optionally show held files as a Home card with Release / Delete.',
+    phone: ['Media', 'Quarantined', 'Release'],
     run: async (t, page) => {
       await t.nav('Media');
       await t.tap('Quarantined', page.getByTestId('tab-quarantine'));
@@ -349,23 +335,18 @@ export const TOP_TASKS: TopTask[] = [
       await expect(rows).toHaveCount(2);
       const ruled = page.locator('[data-testid="q-row"][data-abuse="false"]');
       await t.tap('Release', ruled.getByTestId('q-release'));
-      await t.tap('Confirm', sheet(page).getByTestId('action-confirm'));
       await expect(rows).toHaveCount(1);
+      await expect(page.getByTestId('toast').first().getByTestId('toast-undo')).toBeVisible();
       expect(await log(page)).toContain('media.release-quarantine');
     },
   },
   {
     id: 'backup-now',
     title: 'Make a backup now',
-    phone: ['Search', 'Type "back up"', 'Back up now', 'Confirm'],
-    fix: 'A backup only adds data, so run "Back up now" without a confirm sheet (show the result in a toast), and add a "Back up now" button to the Backups row of the Settings screen: Settings → Back up now (2).',
+    phone: ['Settings', 'Back up now'],
     run: async (t, page) => {
-      await t.search();
-      const palette = page.getByTestId('command-palette');
-      await t.type('Type "back up"', palette.getByRole('combobox'), 'back up');
-      await t.tap('Back up now', palette.getByRole('option', { name: /Back up now/ }));
-      await expect(sheet(page).getByTestId('diff')).toContainText('Make a new backup');
-      await t.tap('Confirm', sheet(page).getByTestId('action-confirm'));
+      await t.nav('Settings');
+      await t.tap('Back up now', page.getByTestId('settings-backup-now'));
       await expect(page.getByTestId('toast').first()).toContainText('Backup made');
       expect(await log(page)).toContain('backups.run-now');
     },
@@ -373,15 +354,13 @@ export const TOP_TASKS: TopTask[] = [
   {
     id: 'restore-revision',
     title: 'Go back to an earlier version of the settings',
-    phone: ['Settings', 'Settings history', 'The earlier version', 'Restore'],
-    fix: 'Restoring is undoable: give each History entry its own "Restore" button that restores at once with an Undo toast (the diff stays one tap away under the entry): Settings → Settings history → Restore (3).',
+    phone: ['Settings', 'Settings history', 'Restore'],
     run: async (t, page) => {
       await t.nav('Settings');
       await t.tap('Settings history', page.getByTestId('history-link'));
-      await t.tap('The earlier version', page.getByTestId('revision-1'));
-      await expect(page.getByRole('dialog')).toContainText('Who can post');
-      await t.tap('Restore', page.getByTestId('restore'));
+      await t.tap('Restore', page.getByTestId('revision-restore-1'));
       await expect(page.getByTestId('timeline')).toContainText('Restored revision 1');
+      await expect(page.getByTestId('toast').first().getByTestId('toast-undo')).toBeVisible();
       expect(await log(page)).toContain('config.restore');
     },
   },
@@ -500,6 +479,7 @@ export function renderDoc(): string {
     'relaxed. When a fix lands, the test starts passing, Playwright reports',
     '"expected to fail", and the entry moves up by updating its path in `top-tasks.ts`.',
     '',
+    ...(over.length ? [] : ['None: every task fits the budget on phone and desktop.']),
     ...over.flatMap((t) => [
       `- **${t.title}** (${pathFor(t, 'phone').length} taps): ${arrow(pathFor(t, 'phone'))}.`,
       `  Suggested fix: ${t.fix ?? '(missing)'}`,

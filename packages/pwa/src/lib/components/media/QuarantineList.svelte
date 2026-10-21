@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
   /**
-   * Quarantined files (§5.3, §6.1). Swipe right to release (undo toast), swipe
+   * Quarantined files (§5.3, §6.1). Swipe right or tap Release to release (undo toast;
+   * abuse-list matches are previewed first), swipe
    * left to delete for good (always previewed: it cannot be undone). The same
    * actions are buttons on each row. Abuse-list matches show only metadata.
    */
@@ -48,6 +49,15 @@
     void flow.start(def, { sha256: i.sha256 }, { onDone: () => drop(i.sha256), onUndo: () => void load() });
   }
 
+  /**
+   * Release is undoable (undo puts the file back on hold), so it runs at once with an
+   * undo toast (§6.2). Abuse-list matches keep the preview: releasing one needs a look first.
+   */
+  function release(i: QuarantineItem) {
+    if (i.abuse) start('media.release-quarantine', i);
+    else void releaseNow(i);
+  }
+
   const reason = (i: QuarantineItem) =>
     i.abuse ? m.media_q_abuse() : i.source === 'rule' ? `${m.media_q_rule()}: ${i.reason}` : i.reason || m.media_q_other();
 </script>
@@ -63,7 +73,7 @@
     {#each items as i (i.sha256)}
       <li data-testid="q-row" data-abuse={i.abuse}>
         <SwipeRow
-          left={canAct ? [{ id: 'release', label: m.media_q_release(), tone: 'accent', run: () => void releaseNow(i) }] : []}
+          left={canAct ? [{ id: 'release', label: m.media_q_release(), tone: 'accent', run: () => release(i) }] : []}
           right={canAct ? [{ id: 'confirm', label: m.media_q_delete(), tone: 'critical', run: () => start('media.confirm-quarantine', i) }] : []}
         >
           <div class="flex gap-3 p-3">
@@ -80,7 +90,7 @@
               <ItemLens lines={[`sha256 ${i.sha256}`, `mime ${i.type ?? 'unknown'}`, `uploads on this relay ${i.uploaders}`, i.technical]} />
               {#if canAct}
                 <div class="mt-2 flex gap-2">
-                  <Button size="sm" variant="secondary" onclick={() => start('media.release-quarantine', i)} data-testid="q-release">{m.media_q_release()}</Button>
+                  <Button size="sm" variant="secondary" onclick={() => release(i)} data-testid="q-release">{m.media_q_release()}</Button>
                   <Button size="sm" variant="destructive" onclick={() => start('media.confirm-quarantine', i)} data-testid="q-confirm">{m.media_q_delete()}</Button>
                 </div>
               {/if}

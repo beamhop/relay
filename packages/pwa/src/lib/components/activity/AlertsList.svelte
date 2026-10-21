@@ -240,18 +240,34 @@
                     {#if canMute}
                       <button type="button" class="ml-1 text-primary" onclick={() => unmute(muted)} data-testid="alert-unmute">{m.act_alert_unmute()}</button>
                     {/if}
+                    {#if muted.until !== null && canSnooze}
+                      <button
+                        type="button"
+                        class="ml-1 text-primary"
+                        aria-expanded={snoozing === r.id}
+                        onclick={() => (snoozing = snoozing === r.id ? null : r.id)}
+                        data-testid="alert-snooze-longer">{m.tt_snooze_longer()}</button
+                      >
+                    {/if}
                   </p>
                 {/if}
                 <div class="mt-1 flex flex-wrap items-center gap-3">
                   {#if fromModule}<WhyButton subject={{ subject: 'alert', alertId: r.id }} />{:else if !r.id.startsWith('live-')}<WhyButton subject={{ subject: 'card', cardId: r.id }} />{/if}
                   {#if r.rule && !muted}
                     {#if canSnooze}
+                      <!-- One tap snoozes for an hour (undo toast); "Longer…" offers the other durations. -->
+                      <button
+                        type="button"
+                        class="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                        onclick={() => snooze(r, '1h')}
+                        data-testid="alert-snooze">{m.tt_snooze_1h()}</button
+                      >
                       <button
                         type="button"
                         class="text-xs text-muted-foreground underline-offset-2 hover:underline"
                         aria-expanded={snoozing === r.id}
                         onclick={() => (snoozing = snoozing === r.id ? null : r.id)}
-                        data-testid="alert-snooze">{m.act_alert_snooze()}</button
+                        data-testid="alert-snooze-more">{m.tt_snooze_longer()}</button
                       >
                     {/if}
                     {#if canMute}

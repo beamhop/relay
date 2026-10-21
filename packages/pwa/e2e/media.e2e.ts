@@ -52,14 +52,19 @@ test('quarantine: abuse match is never shown; release with undo; swipe to delete
   await ruled.getByTestId('q-thumb-toggle').click();
   await expect(img).toHaveAttribute('data-revealed', 'true');
 
-  // Release → preview → apply → undo.
+  // Release runs at once (it is undoable) → undo puts the file back on hold.
   await ruled.getByTestId('q-release').click();
   const sheet = page.getByTestId('action-sheet');
-  await expect(sheet.getByTestId('diff')).toContainText('available to everyone again');
-  await sheet.getByTestId('action-confirm').click();
   await expect(rows).toHaveCount(1);
+  await expect(sheet).toHaveCount(0);
   await page.getByTestId('toast-undo').click();
   await expect(rows).toHaveCount(2);
+
+  // An abuse-list match is previewed before it is released.
+  await abuse.getByTestId('q-release').click();
+  await expect(sheet.getByTestId('diff')).toContainText('available to everyone again');
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
 
   // Swipe left → "Delete for good" → always previewed (cannot be undone).
   await touchSwipe(page, abuse, -260, 0);

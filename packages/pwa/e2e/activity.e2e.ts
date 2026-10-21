@@ -156,10 +156,16 @@ test.describe('alerts', () => {
     await expect(rows.first().getByTestId('why-button')).toBeVisible();
     await expect(rows.nth(1).getByTestId('why-button')).toBeVisible();
 
+    // One tap snoozes for an hour; "Longer…" offers the other durations.
     await rows.first().getByTestId('alert-snooze').click();
-    await rows.first().getByTestId('alert-snooze-1h').click();
     await expect(rows.first().getByTestId('alert-muted')).toContainText('Snoozed until');
-    expect((await activityState(page)).mutes[0]?.until).not.toBeNull();
+    const hour = (await activityState(page)).mutes[0]?.until as number;
+    expect(hour).not.toBeNull();
+    await rows.first().getByTestId('alert-snooze-longer').click();
+    await rows.first().getByTestId('alert-snooze-1d').click();
+    await expect
+      .poll(async () => (await activityState(page)).mutes[0]?.until as number)
+      .toBeGreaterThan(hour + 3600);
 
     await rows.first().getByTestId('alert-unmute').click();
     await expect(rows.first().getByTestId('alert-muted')).toHaveCount(0);

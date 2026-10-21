@@ -69,6 +69,9 @@
     {:else if cur.phase === 'preview'}
       <p class="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{m.action_what_changes()}</p>
       <DiffList diff={cur.diff} />
+      {#if cur.editable && fields.length}
+        <Button size="sm" variant="secondary" class="mt-3" onclick={() => flow.edit()} data-testid="action-change">{m.tt_change()}</Button>
+      {/if}
       {#if cur.action.undoable}
         <p class="mt-3 text-xs text-muted-foreground">{m.action_undo_hint()}</p>
       {/if}
