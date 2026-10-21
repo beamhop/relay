@@ -11,16 +11,19 @@
  */
 import { z } from 'zod';
 
-const technicalNotes = new WeakMap<z.ZodType, string>();
+const technicalNotes = new WeakMap<object, string>();
 
 /** Attach a technical-lens note (NIP numbers, kinds, raw semantics) to a schema node. */
 export function technical<T extends z.ZodType>(schema: T, note: string): T {
   technicalNotes.set(schema, note);
+  // Also key by the schema definition: zod clones (e.g. `.describe()`) share `_zod.def`,
+  // so the note survives `technical(x, n).describe(...)`.
+  technicalNotes.set(schema._zod.def, note);
   return schema;
 }
 
 export function technicalNote(schema: z.ZodType): string | undefined {
-  return technicalNotes.get(schema);
+  return technicalNotes.get(schema) ?? technicalNotes.get(schema._zod.def);
 }
 
 const slider = (d: string) => z.number().int().min(0).max(100).describe(d);
