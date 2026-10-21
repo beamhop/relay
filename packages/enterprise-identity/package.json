@@ -6,6 +6,17 @@
   "license": "AGPL-3.0-or-later",
   "description": "Enterprise: OIDC, SCIM, directory sync, npub binding, group mapping, NIP-05",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "hono": "^4.13.13",
+    "jose": "^6.2.13",
+    "oauth4webapi": "^3.8.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@beamhop/admin-api": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/relay": "workspace:*",
+    "@beamhop/testkit": "workspace:*"
+  }
 }
