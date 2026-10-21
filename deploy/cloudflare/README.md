@@ -5,7 +5,23 @@ No server, no certificates to manage (Cloudflare serves HTTPS), and high availab
 with the platform. Quickest route: the **Deploy to Cloudflare** button in the main
 [README](../../README.md), which creates the D1 database and R2 bucket for you.
 
-## Deploy
+## One command
+
+```bash
+npm create beamhop@latest -- --cf
+```
+
+It asks three things (relay name, your own domain or a free `workers.dev` address, your npub as
+owner, which is optional), signs you in to Cloudflare if needed, creates the D1 database and R2
+bucket, writes `wrangler.toml` with the real ids, sets up the database tables, deploys, sets the
+`IP_HASH_SALT` secret and prints the admin link with a one-time claim code. Open the link, sign
+in, enter the code: you are the owner.
+
+Running it again is safe (existing database, bucket and secrets are reused). `--dry-run` shows
+every command without running it; `-y --name … --domain … --owner …` runs it without questions.
+Details and the Worker bundle assumption: [packages/create-beamhop](../../packages/create-beamhop/README.md).
+
+## Deploy by hand
 
 ```bash
 bun install                                   # at the repo root

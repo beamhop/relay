@@ -1,0 +1,15 @@
+{
+  "name": "create-beamhop",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Set up Beamhop with one command: `npm create beamhop@latest -- --cf` deploys it to Cloudflare",
+  "bin": { "create-beamhop": "./dist/cli.js" },
+  "exports": { ".": "./src/index.ts" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "build": "bun build src/cli.ts --target node --outfile dist/cli.js",
+    "prepack": "bun run build"
+  }
+}
