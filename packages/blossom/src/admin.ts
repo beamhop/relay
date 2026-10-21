@@ -125,7 +125,7 @@ export function registerActions(kernel: Kernel, svc: BlossomService): void {
       title: 'List media files',
       description: 'See files uploaded to this relay, optionally for one person.',
       technical:
-        'BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent). `url` / `thumbUrl` are absolute, based on the relay’s public URL (route.publicUrl, else hosts[0] + node.tls), so an admin app on another host can load them.',
+        'BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent). `tier`: hot/cold storage (docs blossom.tiers); `owners`: uploads of the same hash on this relay. `url` / `thumbUrl` are absolute, based on the relay’s public URL (route.publicUrl, else hosts[0] + node.tls), so an admin app on another host can load them.',
       scope: 'relay',
       permission: 'relay.read',
       readOnly: true,
@@ -157,6 +157,8 @@ export function registerActions(kernel: Kernel, svc: BlossomService): void {
           out.push({
             ...i,
             quarantined: !!(await svc.quarantined(i.sha256)),
+            tier: (await svc.tiering?.tierOf(i.sha256)) ?? 'hot',
+            owners: (await ports.blobIndex.owners(relay.id, i.sha256)).length,
             url: svc.blobUrl(relay.id, i.sha256, i.type),
             ...(thumbUrl ? { thumbUrl } : {}),
           });

@@ -240,6 +240,28 @@ Each section exists only when that feature is turned on; enterprise features are
 | `rules.moderationBacklog` | section |  | Review queue |
 | `rules.moderationBacklog.enabled` | boolean | `true` | Warn when reports waiting for review pile up. |
 
+### `modules.blossom`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `tiers` | section |  | Fast and cheaper storage for media files |
+| `tiers.hot` | section |  | Main (fast) file storage |
+| `tiers.hot.maxBytes` | number |  | Most this server’s main file storage may hold, in bytes. Empty = no limit. *Technical:* Cap on the hot BlobStore (usage counted by the tiering job). |
+| `tiers.cold` | section |  | Cheaper storage for files nobody has opened in a while |
+| `tiers.cold.store` | section |  | Where older files go. Usually a cheaper cloud bucket (for example Cloudflare R2 or S3). |
+| `tiers.cold.store.driver` | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` | Which storage service to use. Pick cloud storage when this server's disk is too small or you want copies kept elsewhere. |
+| `tiers.cold.store.path` | string |  | Folder on this server where the files go. Empty = a folder inside the data folder. |
+| `tiers.cold.store.bucket` | string |  | Name of the storage bucket you created with your provider. |
+| `tiers.cold.store.endpoint` | string |  | Your provider's storage address. Leave empty for Amazon S3 and Google Cloud; needed for R2, MinIO and others. *Technical:* S3 API endpoint (path-style). Defaults: https://s3.<region>.amazonaws.com, https://storage.googleapis.com. |
+| `tiers.cold.store.region` | string |  | Data-center region of the bucket. Empty = us-east-1 for S3, auto otherwise. *Technical:* SigV4 signing region. |
+| `tiers.cold.store.accessKeyId` | string |  | The access key ID from your storage provider. |
+| `tiers.cold.store.secretAccessKey` | string |  | The secret that goes with the access key. Stored privately, never shown again. |
+| `tiers.cold.afterDays` | number | `30` | Move a file to cheaper storage after this many days without anyone opening it. *Technical:* Days since the last GET (tracked per sha256 in docs `blossom.tiers`, else the newest BlobIndex uploadedAt). |
+| `tiers.cold.minSizeBytes` | number | `0` | Only move files at least this big, in bytes. Small files are cheap to keep close. *Technical:* Blobs smaller than this stay in the hot store. |
+| `tiers.cold.maxBytes` | number |  | Most the cheaper storage may hold, in bytes. Empty = no limit. |
+| `tiers.cold.promoteOnAccess` | boolean | `false` | Bring a file back to fast storage when someone opens it again. *Technical:* On a GET served from the cold store, copy it back to the hot store in the background (if hot has room) and delete the cold copy. |
+| `tiers.whenHotFull` | `cold` \| `refuse` | `"cold"` | What happens to new uploads when the main storage is full. *Technical:* refuse → HTTP 507 with X-Reason; cold needs tiers.cold. |
+
 ### `modules.enterprise-compliance`
 
 | Setting | Type | Default | Description |

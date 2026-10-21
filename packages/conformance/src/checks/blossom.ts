@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** Blossom: BUD-01, 02, 04, 05, 06 over plain fetch with kind 24242 auth. */
+/** Blossom: BUD-01, 02, 03, 04, 05, 06 over plain fetch with kind 24242 auth. */
 import {
   type Check,
   type Key,
@@ -10,6 +10,7 @@ import {
   short,
   skip,
 } from '../types.ts';
+import { mustAccept, query } from './util.ts';
 
 export interface BlobDescriptor {
   url?: unknown;
@@ -308,6 +309,53 @@ const bud02: Check[] = [
   }),
 ];
 
+const bud03: Check[] = [
+  check({
+    id: 'bud03.server-list',
+    spec: 'BUD-03',
+    title: 'Keeps user server lists (kind 10063) and uses them as hints',
+    blossom: true,
+    async run(ctx) {
+      const media = base(ctx);
+      const k = ctx.key();
+      const elsewhere = 'https://media-mirror.invalid';
+      const list = ctx.sign(k, {
+        kind: 10063,
+        tags: [
+          ['server', media],
+          ['server', elsewhere],
+        ],
+      });
+      const c = await ctx.connect();
+      await mustAccept(c, list, 'a server list (kind 10063)');
+      const got = await query(c, [{ kinds: [10063], authors: [k.pk] }]);
+      expect(
+        got.length === 1 && got[0]?.id === list.id,
+        'The server list (kind 10063) was not returned by a query for it.',
+      );
+      const servers = (got[0]?.tags ?? []).filter((t) => t[0] === 'server').map((t) => t[1]);
+      expect(
+        servers[0] === media && servers[1] === elsewhere,
+        'The server list came back with its servers changed or reordered.',
+      );
+      // Optional server behaviour: a missing blob with an author hint points to their other server.
+      const sha = await sha256Hex(randomBlob(24));
+      const res = await ctx.fetch(`${media}/${sha}?as=${k.pk}`, { redirect: 'manual' });
+      await drain(res);
+      const loc = res.headers.get('location') ?? '';
+      if (res.status >= 300 && res.status < 400) {
+        expect(
+          loc.startsWith(`${elsewhere}/${sha}`),
+          `The redirect for a missing file went to "${short(loc)}", not the author's other server.`,
+        );
+        return "Stores the list and redirects missing files to the author's other server.";
+      }
+      expect(res.status === 404, `A missing file with an author hint answered HTTP ${res.status}.`);
+      return 'Stores the list (no redirect hints for missing files).';
+    },
+  }),
+];
+
 const bud04: Check[] = [
   check({
     id: 'bud04.mirror',
@@ -444,4 +492,4 @@ const bud06: Check[] = [
   }),
 ];
 
-export const blossomChecks: Check[] = [...bud01, ...bud02, ...bud04, ...bud05, ...bud06];
+export const blossomChecks: Check[] = [...bud01, ...bud02, ...bud03, ...bud04, ...bud05, ...bud06];

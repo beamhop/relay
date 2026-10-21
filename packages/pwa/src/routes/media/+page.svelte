@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-  /** Media (§6.1): file grid, quarantined items, per-person usage, quotas; multi-select bulk delete. */
+  /**
+   * Media (§6.1): file grid with a detail sheet (lens, team notes), quarantined
+   * items (release / delete for good), per-person usage and quotas, storage
+   * tiers and cleanup status; multi-select bulk delete.
+   */
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import FileIcon from '@lucide/svelte/icons/file';
@@ -12,7 +16,6 @@
   import { announce, asApiError, flow, query, runNow } from '$lib/stores/actions.svelte';
   import { quotaOf } from '$lib/components/people/users';
   import QuotaBar from '$lib/components/people/QuotaBar.svelte';
-  import { prefs } from '$lib/stores/prefs.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
   import type { BlobItem, RelayConfig, UsageSummary } from '$lib/api/types';
   import { ago, cn, formatBytes } from '$lib/utils';
@@ -24,6 +27,12 @@
   import Badge from '$lib/components/ui/badge.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
   import PullToRefresh from '$lib/components/PullToRefresh.svelte';
+  import ItemLens from '$lib/components/ItemLens.svelte';
+  import StorageTiersCard from '$lib/components/media/StorageTiersCard.svelte';
+  import CleanupStatus from '$lib/components/media/CleanupStatus.svelte';
+  import QuarantineList from '$lib/components/media/QuarantineList.svelte';
+  import FileSheet from '$lib/components/media/FileSheet.svelte';
+  import { type MediaFile, fileLensLines } from '$lib/components/media/media';
   import { m } from '$lib/paraglide/messages.js';
 
   const tab = $derived(page.url.searchParams.get('tab') ?? 'files');
@@ -35,6 +44,9 @@
   let view = $state<'grid' | 'list'>('grid');
   let relayCfg = $state<RelayConfig | null>(null);
   let summary = $state<UsageSummary | null>(null);
+  let detail = $state<MediaFile | null>(null);
+  let quarantineCount = $state<number | null>(null);
+  const reviewQueue = $derived(app.hasAction('media.list-quarantine'));
 
   async function load(more = false) {
     try {
@@ -50,12 +62,18 @@
       blobs ??= [];
     }
     relayCfg = (await app.api.relayConfig().catch(() => null))?.relay ?? relayCfg;
-    if (!more) summary = await query<UsageSummary>('media.usage-summary');
+    if (!more) {
+      summary = await query<UsageSummary>('media.usage-summary');
+      if (reviewQueue) {
+        const q = await query<{ items: unknown[] }>('media.list-quarantine', { limit: 100 });
+        quarantineCount = q?.items.length ?? null;
+      }
+    }
   }
   onMount(() => load());
 
   const key = (b: BlobItem) => `${b.sha256}:${b.pubkey}`;
-  const files = $derived((blobs ?? []).filter((b) => (tab === 'quarantine' ? b.quarantined : !b.quarantined)));
+  const files = $derived((blobs ?? []).filter((b) => (tab === 'quarantine' ? b.quarantined : !b.quarantined)) as MediaFile[]);
   const usage = $derived.by(() => {
     const per = new Map<string, { pubkey: string; bytes: number; files: number }>();
     for (const b of blobs ?? []) {
@@ -98,8 +116,13 @@
     if (r) await load();
   }
 
+  function openFile(b: MediaFile) {
+    if (selecting) toggle(b);
+    else detail = b;
+  }
+
   const isImage = (b: BlobItem) => (b.type ?? '').startsWith('image/');
-  const src = (b: BlobItem) => `/${b.sha256}`;
+  const src = (b: MediaFile) => b.thumbUrl ?? b.url ?? `/${b.sha256}`;
   const quota = $derived(relayCfg?.blossom?.defaultQuotaBytes);
 </script>
 
@@ -125,7 +148,7 @@
   label={m.nav_media()}
   tabs={[
     { id: 'files', label: m.media_tab_files() },
-    { id: 'quarantine', label: m.media_tab_quarantine(), count: (blobs ?? []).filter((b) => b.quarantined).length },
+    { id: 'quarantine', label: m.media_tab_quarantine(), count: quarantineCount ?? (blobs ?? []).filter((b) => b.quarantined).length },
     { id: 'usage', label: m.media_tab_usage() },
   ]}
 />
@@ -135,7 +158,11 @@
   <PullToRefresh onrefresh={() => load()}>
     {#if blobs === null}
       <div class="grid grid-cols-3 gap-2 md:grid-cols-6">{#each Array(9) as _, i (i)}<Skeleton class="aspect-square" />{/each}</div>
+    {:else if tab === 'quarantine' && reviewQueue}
+      <QuarantineList oncount={(n) => (quarantineCount = n)} />
     {:else if tab === 'usage'}
+      {#if app.hasAction('media.storage-tiers')}<StorageTiersCard />{/if}
+      {#if app.hasAction('media.cleanup-status')}<CleanupStatus />{/if}
       {#if summary}
         <div class="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="usage-summary">
           <div class="rounded-xl border p-3">
@@ -228,7 +255,8 @@
           <li class="relative">
             <button
               class={cn('group relative block aspect-square w-full overflow-hidden rounded-lg border bg-muted', selected.has(key(b)) && 'ring-2 ring-primary')}
-              onclick={() => (selecting ? toggle(b) : undefined)}
+              onclick={() => openFile(b)}
+              data-testid="media-tile"
               aria-pressed={selecting ? selected.has(key(b)) : undefined}
               aria-label={`${b.type ?? ''} ${formatBytes(b.size)}`}
             >
@@ -258,9 +286,11 @@
               <div class="flex items-center gap-3 p-3">
                 {#if selecting}<input type="checkbox" class="size-4" checked={selected.has(key(b))} onchange={() => toggle(b)} aria-label={m.common_select()} />{/if}
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-sm">{b.type ?? m.media_file()} · {formatBytes(b.size)}</p>
-                  <p class="text-xs text-muted-foreground">{names.label(b.pubkey)} · {b.uploadedAt ? ago(b.uploadedAt) : ''}</p>
-                  {#if prefs.lens}<p class="truncate font-mono text-[10px] text-muted-foreground">{b.sha256}</p>{/if}
+                  <button type="button" class="block w-full text-left" onclick={() => openFile(b)} data-testid="media-row">
+                    <p class="truncate text-sm">{b.type ?? m.media_file()} · {formatBytes(b.size)}</p>
+                    <p class="text-xs text-muted-foreground">{names.label(b.pubkey)} · {b.uploadedAt ? ago(b.uploadedAt) : ''}</p>
+                  </button>
+                  <ItemLens lines={fileLensLines(b)} />
                 </div>
                 {#if b.quarantined}<Badge tone="critical">{m.media_quarantined()}</Badge>{/if}
               </div>
@@ -283,3 +313,11 @@
     </div>
   </div>
 {/if}
+
+<FileSheet
+  bind:file={detail}
+  ondelete={(f) => {
+    detail = null;
+    void deleteOne(f);
+  }}
+/>

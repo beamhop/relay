@@ -17,6 +17,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { registerPeopleMocks } from './mocks/people.ts';
 import { pluginWriterActions } from './mocks/plugins.ts';
+import { registerMediaMocks } from './mocks/media.ts';
 
 type Relay = z.infer<typeof RelaySchema>;
 type Diff = {
@@ -1272,6 +1273,7 @@ function moreActions(): Action[] {
 ACTIONS.push(...moreActions());
 registerPeopleMocks(ACTIONS, () => S);
 ACTIONS.push(...pluginWriterActions({ setPlugin }));
+registerMediaMocks(ACTIONS, () => S);
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')
