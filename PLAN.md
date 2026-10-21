@@ -110,6 +110,14 @@ Target admin: **pro / infra operators** — but the UX must be simple enough tha
 - SQLite WAL, prepared statements, write batching (group commit every N ms).
 - Load test suite in CI fails builds on regression.
 
+### 3.5a Build-by-reuse (decided 2026-10-21)
+Implementation speed comes from reuse and generation, not hand-writing:
+- **Reuse:** nostr-tools (NIP primitives), Hono + zod-openapi (HTTP on Bun & CF, OpenAPI), Drizzle (one schema for bun:sqlite/D1, plus pg), aws4fetch (S3/R2/GCS), jose / SimpleWebAuthn / oauth4webapi (auth), sharp (media, Bun), Vercel AI SDK, shadcn-svelte + superforms (UI), Litestream (backups + HA), hoytech negentropy (NIP-77), mikedilger relay-tester (conformance).
+- **Fork:** Flotilla + @welshman (team client, MIT).
+- **Generate:** admin API routes, OpenAPI docs, CLI commands, command palette, AI tools and NIP-86 methods from the action registry; settings forms, ⓘ help and config reference from the zod config schema.
+- **Contract-first:** ports + in-memory reference adapters + contract test suites in `@beamhop/testkit`, so parallel work integrates mechanically.
+- Conventions for contributors and agents: `CLAUDE.md`.
+
 ### 3.6 Monorepo (Bun workspaces)
 ```
 packages/
