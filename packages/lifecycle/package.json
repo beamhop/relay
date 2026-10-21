@@ -4,8 +4,15 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "description": "Retention, backups, recycle bin, owner recovery, safe mode",
+  "description": "Retention, storage caps, legal-hold hook, backups/restore, Litestream, safe mode known-good, user data export",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "dependencies": {
+    "@beamhop/blobs": "workspace:*",
+    "@beamhop/core": "workspace:*",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@beamhop/storage-sql": "workspace:*",
+    "@beamhop/testkit": "workspace:*"
+  }
 }

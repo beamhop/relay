@@ -186,6 +186,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   let closeDefaults: (() => Promise<void>) | undefined;
   let memoryFallbacks: string[] = [];
   let ports: Ports;
+  let sqlService: { exec: unknown; path?: string; url?: string } | undefined;
   if (complete) {
     ports = opts.ports as Ports;
   } else {
@@ -193,6 +194,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     ports = { ...defaults.ports, ...opts.ports, logger } as Ports;
     closeDefaults = defaults.close;
     memoryFallbacks = defaults.memoryFallbacks.filter((k) => !opts.ports?.[k as keyof Ports]);
+    if (!opts.ports?.events) sqlService = defaults.sql;
   }
 
   // ── Kernel ──
@@ -206,6 +208,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     config: bootConfig,
     modules: opts.modules,
   });
+  // Runtime facts for modules (lifecycle: safe mode, data dir, SQL snapshots).
+  kernel.provide('runtime', { name: 'bun', safe, dataDir: layout.root });
+  if (sqlService) kernel.provide('storage.sql', sqlService);
 
   if (safe) {
     const lkg = await lastKnownGood(kernel);
