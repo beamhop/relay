@@ -4,7 +4,7 @@
 
 Every admin operation is an action. The admin app, the CLI (`beamhop <group> <name>`), the admin API (`POST /api/v1/nodes/self[/relays/<relay>]/actions/<id>`, see `/api/v1/openapi.json`), the command palette and NIP-86 all run these same actions. Changes show a preview first and can be undone where marked.
 
-[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [backups](#backups) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
+[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [media](#media) · [moderation](#moderation) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
 
 ## access
 
@@ -258,6 +258,47 @@ Get notified about this kind of alert again.
 | `relayId` | string |  | Relay (omit for the current one, null for server-wide alerts) |
 | `allRelays` | boolean | `false` | Apply to every relay |
 
+## approvals
+
+### Approve a request
+
+Let another admin go ahead with a risky change. You cannot approve your own.
+
+- **id:** `approvals.approve` · **CLI:** `beamhop approvals approve` · **scope:** node · **permission:** `relay.read`
+- changes settings/data
+- *Technical:* Two-person rule: approver ≠ requester, approver needs the gated action’s permission; single-use, expires.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `requestId` | string |  | Approval request id |
+| `note` | string |  | Optional note for the requester |
+
+### Deny a request
+
+Stop a risky change another admin asked for (or withdraw your own).
+
+- **id:** `approvals.deny` · **CLI:** `beamhop approvals deny` · **scope:** node · **permission:** `relay.read`
+- changes settings/data
+- *Technical:* Marks the request denied; it can no longer be used.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `requestId` | string |  | Approval request id |
+| `note` | string |  | Optional note for the requester |
+
+### Show approval requests
+
+Risky changes waiting for (or decided by) a second admin.
+
+- **id:** `approvals.list` · **CLI:** `beamhop approvals list` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* Two-person rule (§12.9); requests live in compliance.approvals.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `status` | `pending` \| `approved` \| `denied` \| `expired` \| `used` |  |  |
+| `limit` | number | `100` |  |
+
 ## backups
 
 ### Backups
@@ -333,6 +374,136 @@ Make sure a backup is complete and undamaged.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `id` | string |  |  |
+
+## compliance
+
+### Check where data is stored
+
+Make sure each relay’s data stays in its required region.
+
+- **id:** `compliance.check-residency` · **CLI:** `beamhop compliance check-residency` · **scope:** node · **permission:** `compliance.read`
+- read-only
+
+### Start a legal hold
+
+Freeze data so nobody can delete it — not the people themselves, retention or admins — until the hold is released.
+
+- **id:** `compliance.create-hold` · **CLI:** `beamhop compliance create-hold` · **scope:** node · **permission:** `compliance.write`
+- changes settings/data
+- *Technical:* Blocks retention / NIP-62 vanish / crypto-shred / recycle purge via lifecycle.holds; NIP-09 & admin deletions are archived to compliance.hold-archive first; blobs are pinned.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `name` | string |  | Matter name |
+| `reason` | string |  | Why the data must be kept |
+| `pubkeys` | list of string | `[]` | People (public keys, hex) |
+| `subjects` | list | `[]` | People from the company directory |
+| `subjects[].subject` | string |  |  |
+| `subjects[].idp` | string |  |  |
+| `groups` | list of string | `[]` | Company directory groups |
+| `relays` | list of string | `[]` | Relays (all when empty) |
+| `since` | number |  | From (unix time) |
+| `until` | number |  | Until (unix time) |
+| `kinds` | list of number |  |  |
+
+### Export data for legal review (eDiscovery)
+
+Collect posts and a list of files for chosen people, groups, dates or words into a signed archive that anyone can check for tampering.
+
+- **id:** `compliance.export` · **CLI:** `beamhop compliance export` · **scope:** node · **permission:** `compliance.write`
+- changes settings/data
+- *Technical:* NDJSON events per relay + blobs.ndjson manifest + manifest.json (sha256 of every file) + signature.json (BIP-340 by the node key); stored content-addressed in the blob store and pinned.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `name` | string |  |  |
+| `pubkeys` | list of string | `[]` | People (public keys, hex) |
+| `subjects` | list | `[]` | People from the company directory |
+| `subjects[].subject` | string |  |  |
+| `subjects[].idp` | string |  |  |
+| `groups` | list of string | `[]` | Company directory groups |
+| `relays` | list of string | `[]` | Relays (all when empty) |
+| `since` | number |  | From (unix time) |
+| `until` | number |  | Until (unix time) |
+| `kinds` | list of number |  |  |
+| `keywords` | list of string | `[]` | Only posts containing these words |
+| `includeBlobs` | boolean |  | Include the list of files |
+
+### Download an eDiscovery archive file
+
+Get one file of an archive (base64).
+
+- **id:** `compliance.export-file` · **CLI:** `beamhop compliance export-file` · **scope:** node · **permission:** `compliance.read`
+- read-only
+- *Technical:* Reads the content-addressed file from the blob store.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `exportId` | string |  |  |
+| `path` | string |  |  |
+
+### Show eDiscovery exports
+
+Signed archives created for legal review.
+
+- **id:** `compliance.list-exports` · **CLI:** `beamhop compliance list-exports` · **scope:** node · **permission:** `compliance.read`
+- read-only
+
+### Show legal holds
+
+Data that cannot be deleted because of a legal hold.
+
+- **id:** `compliance.list-holds` · **CLI:** `beamhop compliance list-holds` · **scope:** node · **permission:** `compliance.read`
+- read-only
+- *Technical:* compliance.holds; enforced via lifecycle.holds + store-level archive guard.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `includeReleased` | boolean | `false` |  |
+
+### Release a legal hold
+
+Let normal deletion rules apply again. Needs a second admin’s approval.
+
+- **id:** `compliance.release-hold` · **CLI:** `beamhop compliance release-hold` · **scope:** node · **permission:** `compliance.write`
+- changes settings/data · needs a second approver when approvals are on
+- *Technical:* Sets status=released; lifecycle may delete held data on its next pass.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `holdId` | string |  |  |
+| `reason` | string |  | Why the hold can end |
+
+### Show SIEM export status
+
+How far each security log destination has caught up.
+
+- **id:** `compliance.siem-status` · **CLI:** `beamhop compliance siem-status` · **scope:** node · **permission:** `compliance.read`
+- read-only
+
+### Test a SIEM connection
+
+Send one test record to your security log system.
+
+- **id:** `compliance.test-sink` · **CLI:** `beamhop compliance test-sink` · **scope:** node · **permission:** `compliance.write`
+- changes settings/data
+- *Technical:* Sends a synthetic `siem.test` record; cursors are not moved.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `sinkId` | string |  | Destination (all when empty) |
+
+### Make a usage report
+
+People, posts and storage per company group for one month (CSV and PDF).
+
+- **id:** `compliance.usage-report` · **CLI:** `beamhop compliance usage-report` · **scope:** node · **permission:** `compliance.read`
+- changes settings/data
+- *Technical:* Stored in the blob store (pinned) and indexed in compliance.reports.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `month` | string |  | Month, e.g. 2026-09 (last month when empty) |
 
 ## config
 

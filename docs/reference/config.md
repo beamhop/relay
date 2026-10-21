@@ -198,11 +198,119 @@ Each section exists only when that feature is turned on; enterprise features are
 | `rules.backup.enabled` | boolean | `true` |  |
 | `rules.moderationBacklog.enabled` | boolean | `true` |  |
 
+### `modules.enterprise-compliance`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `approvals.enabled` | boolean | `true` | Require a second admin for risky actions |
+| `approvals.gatedActions` | list of string | `["keyvault.escrow-decrypt","keyvault.destroy-key","keyvau…` | Actions that need a second admin |
+| `approvals.gateAllSensitive` | boolean | `true` | Also require approval for every action marked risky *Technical:* Also gate every action whose ActionDef has `sensitive: true`. |
+| `approvals.requestTtlMinutes` | number | `1440` | How long a request waits for approval |
+| `approvals.executeWithinMinutes` | number | `60` | How long an approval stays usable |
+| `siem.sinks` | list | `[]` |  |
+| `siem.sinks[](type=syslog).id` | string |  | Short name for this destination |
+| `siem.sinks[](type=syslog).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=syslog).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
+| `siem.sinks[](type=syslog).type` | `"syslog"` |  |  |
+| `siem.sinks[](type=syslog).host` | string |  | Syslog server host name |
+| `siem.sinks[](type=syslog).port` | number | `6514` |  |
+| `siem.sinks[](type=syslog).transport` | `tls` \| `tcp` \| `udp` | `"tls"` | How to connect *Technical:* RFC 5424 over TLS (RFC 5425) / TCP (RFC 6587 octet counting) / UDP (RFC 5426). Bun only. |
+| `siem.sinks[](type=syslog).facility` | number | `13` |  |
+| `siem.sinks[](type=syslog).appName` | string | `"beamhop"` |  |
+| `siem.sinks[](type=syslog).caPem` | string |  | Company CA for the syslog server certificate |
+| `siem.sinks[](type=splunk).id` | string |  | Short name for this destination |
+| `siem.sinks[](type=splunk).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=splunk).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
+| `siem.sinks[](type=splunk).type` | `"splunk"` |  |  |
+| `siem.sinks[](type=splunk).url` | string |  | Splunk HTTP Event Collector address |
+| `siem.sinks[](type=splunk).token` | string |  | HEC token |
+| `siem.sinks[](type=splunk).index` | string |  |  |
+| `siem.sinks[](type=splunk).sourcetype` | string | `"beamhop:audit"` |  |
+| `siem.sinks[](type=sentinel).id` | string |  | Short name for this destination |
+| `siem.sinks[](type=sentinel).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=sentinel).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
+| `siem.sinks[](type=sentinel).type` | `"sentinel"` |  |  |
+| `siem.sinks[](type=sentinel).tenantId` | string |  |  |
+| `siem.sinks[](type=sentinel).clientId` | string |  |  |
+| `siem.sinks[](type=sentinel).clientSecret` | string |  |  |
+| `siem.sinks[](type=sentinel).dceEndpoint` | string |  | Azure data collection endpoint *Technical:* Data Collection Endpoint ingestion URL (Logs Ingestion API) |
+| `siem.sinks[](type=sentinel).dcrImmutableId` | string |  |  |
+| `siem.sinks[](type=sentinel).streamName` | string | `"Custom-Beamhop_CL"` |  |
+| `siem.sinks[](type=sentinel).authorityHost` | string | `"https://login.microsoftonline.com"` |  |
+| `siem.sinks[](type=chronicle).id` | string |  | Short name for this destination |
+| `siem.sinks[](type=chronicle).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=chronicle).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
+| `siem.sinks[](type=chronicle).type` | `"chronicle"` |  |  |
+| `siem.sinks[](type=chronicle).customerId` | string |  |  |
+| `siem.sinks[](type=chronicle).logType` | string | `"BEAMHOP"` |  |
+| `siem.sinks[](type=chronicle).region` | string | `"us"` |  |
+| `siem.sinks[](type=chronicle).endpoint` | string |  | *Technical:* Defaults to https://{region}-malachiteingestion-pa.googleapis.com (v2 unstructuredlogentries:batchCreate) |
+| `siem.sinks[](type=chronicle).serviceAccount` | section |  | Google service account allowed to ingest |
+| `siem.sinks[](type=chronicle).serviceAccount.clientEmail` | string |  |  |
+| `siem.sinks[](type=chronicle).serviceAccount.privateKeyPem` | string |  |  |
+| `siem.sinks[](type=chronicle).serviceAccount.tokenUri` | string | `"https://oauth2.googleapis.com/token"` |  |
+| `siem.sinks[](type=webhook).id` | string |  | Short name for this destination |
+| `siem.sinks[](type=webhook).enabled` | boolean | `true` |  |
+| `siem.sinks[](type=webhook).streams` | list of `audit` \| `auth` \| `signing` \| `escrow` \| `config` \| `deletion` \| `compliance` |  | Which kinds of records to send (all when empty) |
+| `siem.sinks[](type=webhook).type` | `"webhook"` |  |  |
+| `siem.sinks[](type=webhook).url` | string |  |  |
+| `siem.sinks[](type=webhook).secret` | string |  | Signs each batch (HMAC-SHA256) |
+| `siem.sinks[](type=webhook).headers` | map |  |  |
+| `siem.intervalSeconds` | number | `15` |  |
+| `siem.batchSize` | number | `200` |  |
+| `siem.maxBatchesPerTick` | number | `10` |  |
+| `siem.maxOutbox` | number | `100000` | *Technical:* Bounded outbox: when full, the oldest non-audit records are dropped and counted. |
+| `siem.authEvents` | boolean | `true` | Send relay sign-ins |
+| `siem.deletionEvents` | boolean | `true` | Send deletions |
+| `holds.archiveOnDelete` | boolean | `true` | Keep a copy of held posts that people delete *Technical:* Copies held events to compliance.hold-archive before NIP-09/62/admin deletion. |
+| `holds.refreshSeconds` | number | `60` |  |
+| `ediscovery.maxEvents` | number | `500000` |  |
+| `ediscovery.includeBlobs` | boolean | `true` |  |
+| `retention.groups` | list | `[]` | Keep posts by members of a group for this many days |
+| `retention.groups[].group` | string |  |  |
+| `retention.groups[].days` | number |  |  |
+| `retention.defaultDays` | number |  |  |
+| `residency.databaseRegion` | string |  | Where the database is hosted |
+| `residency.relays` | map |  | Region each relay’s data must stay in |
+| `reports.monthly` | boolean | `true` | Make a usage report every month |
+| `encryption.blobs` | boolean | `false` | Encrypt stored media with your company key *Technical:* Per-blob AES-256-GCM data keys wrapped by ports.keyWrapper (KMS/Vault/local KEK). Existing plaintext blobs stay readable. |
+
 ### `modules.enterprise-identity`
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `` | transform |  |  |
+
+### `modules.enterprise-network`
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `adminPaths` | list of string | `["/api/","/admin"]` | *Technical:* Path prefixes treated as the admin app/API (node scope). |
+| `allowlist.admin` | list of string | `[]` | Networks allowed to open the admin app (everyone when empty) |
+| `allowlist.relays` | map |  | Networks allowed to use each relay (everyone when empty) |
+| `mtls.enabled` | boolean | `false` | Only company devices can connect |
+| `mtls.scope` | `admin` \| `relays` \| `all` | `"all"` |  |
+| `mtls.caPem` | string |  | Company CA certificate(s), PEM |
+| `mtls.certHeader` | string | `"x-client-cert"` | *Technical:* Header with the client certificate from the TLS-terminating proxy: URL-encoded PEM (nginx $ssl_client_escaped_cert, ALB), base64 DER, or Envoy XFCC (Cert="…"). |
+| `mtls.verifyHeader` | string |  | *Technical:* Optional proxy verdict header, e.g. x-ssl-client-verify: SUCCESS. |
+| `mtls.proxySecret` | section |  | Shared secret that proves a request came through your proxy |
+| `mtls.proxySecret.header` | string |  | Header your proxy adds |
+| `mtls.proxySecret.value` | string |  | Secret value only your proxy knows |
+| `mtls.allowedSubjects` | list of string | `[]` | Only certificates whose subject contains one of these (all when empty) |
+| `zeroTrust.provider` | `off` \| `google-iap` \| `cloudflare-access` \| `entra-app-proxy` | `"off"` | Identity-aware proxy in front of Beamhop |
+| `zeroTrust.scope` | `admin` \| `all` | `"admin"` |  |
+| `zeroTrust.audience` | string |  | Expected audience (IAP backend / Access AUD tag) |
+| `zeroTrust.teamDomain` | string |  | Cloudflare Access team domain, e.g. acme.cloudflareaccess.com |
+| `zeroTrust.jwksUrl` | string |  |  |
+| `zeroTrust.jwks` | section |  | *Technical:* Inline JWKS (air-gapped installs, tests); overrides jwksUrl. |
+| `zeroTrust.jwks.keys` | list of map |  |  |
+| `zeroTrust.userHeader` | string | `"x-ms-client-principal-name"` | *Technical:* Entra App Proxy header-based SSO: header carrying the signed-in user (UPN/email). |
+| `zeroTrust.proxySecret` | section |  | Shared secret that proves a request came through your proxy |
+| `zeroTrust.proxySecret.header` | string |  | Header your proxy adds |
+| `zeroTrust.proxySecret.value` | string |  | Secret value only your proxy knows |
+| `zeroTrust.admins` | map |  | Email → admin account id for the admin app |
+| `privateOnly.enabled` | boolean | `false` | Hide the landing and status pages; share only minimal relay info |
+| `privateOnly.keepPortal` | boolean | `true` | Keep the self-service portal |
 
 ### `modules.insights`
 
