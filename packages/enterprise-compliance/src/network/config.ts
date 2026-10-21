@@ -10,6 +10,11 @@ const cidr = z
   .string()
   .refine(isValidCidr, 'Not an IP address or range (e.g. 10.0.0.0/8, 2001:db8::/32)');
 
+const relayUrl = z
+  .string()
+  .trim()
+  .regex(/^wss?:\/\/\S+$/i, 'Not a relay address (e.g. wss://relay.example.com)');
+
 const ProxySecret = z
   .object({
     header: example(z.string().min(1).describe('Header your proxy adds'), 'x-proxy-secret'),
@@ -41,6 +46,19 @@ export const NetworkConfigSchema = z
       })
       .prefault({})
       .describe('Limit access to company networks'),
+    denylist: z
+      .object({
+        all: z
+          .array(cidr)
+          .default([])
+          .describe('Networks that are always blocked, for the admin app and every relay'),
+        relays: z
+          .record(z.string(), z.array(cidr))
+          .default({})
+          .describe('Networks blocked from each relay'),
+      })
+      .prefault({})
+      .describe('Block specific networks'),
     mtls: z
       .object({
         enabled: z.boolean().default(false).describe('Only company devices can connect'),
@@ -181,6 +199,26 @@ export const NetworkConfigSchema = z
       })
       .prefault({})
       .describe('Private-only mode'),
+    outbound: technical(
+      z
+        .object({
+          default: z
+            .array(relayUrl)
+            .describe('Other relays every group may also post to')
+            .nullable()
+            .default(null)
+            .describe(
+              'Other relays every group may also post to. Empty = only this relay. Not set = no limit.',
+            ),
+          groups: z
+            .record(z.string(), z.array(relayUrl))
+            .default({})
+            .describe('Other relays each group may also post to (empty = only this relay)'),
+        })
+        .prefault({})
+        .describe('Where team groups may post besides this relay'),
+      'Per-group outbound relay allow (NIP-29 group id = h tag), published at GET /.well-known/beamhop/network for the team client. Enforced by the client; Beamhop itself never forwards group events to other relays.',
+    ),
   })
   .prefault({});
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;

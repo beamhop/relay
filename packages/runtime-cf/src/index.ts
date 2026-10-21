@@ -12,3 +12,6 @@ export * from './ports/guards.ts';
 export * from './ports/media.ts';
 export * from './ports/pubsub.ts';
 export * from './ports/scheduler.ts';
+export * from './ports/background.ts';
+export * from './ports/views.ts';
+export * from './claim.ts';

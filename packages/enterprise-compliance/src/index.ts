@@ -16,7 +16,16 @@ export {
   type ComplianceSiemService,
   type ComplianceInternals,
 } from './module.ts';
-export { networkModule, createNetworkControls, type NetworkControls } from './network/module.ts';
+export {
+  networkModule,
+  createNetworkControls,
+  outboundAllowed,
+  outboundPolicy,
+  trustsProxyHeaders,
+  NETWORK_POLICY_PATH,
+  type NetworkControls,
+  type OutboundPolicy,
+} from './network/module.ts';
 export { NetworkConfigSchema, NETWORK_MODULE_ID, type NetworkConfig } from './network/config.ts';
 export {
   ComplianceConfigSchema,
@@ -44,6 +53,7 @@ export {
   type ArchiveManifest,
 } from './ediscovery.ts';
 export { EncryptedBlobStore, encryptInPlace } from './encrypted-blobs.ts';
+export { BACKGROUND_SERVICE, type BackgroundTasksLike } from './runtime.ts';
 export { RETENTION_SERVICE, type RetentionProvider } from './retention.ts';
 export { checkResidency, regionMatches, type ResidencyIssue } from './residency.ts';
 export { renderPdf } from './pdf.ts';

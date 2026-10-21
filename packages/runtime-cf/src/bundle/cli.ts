@@ -5,7 +5,10 @@
  * packages and enabled plugins) for `wrangler deploy`.
  *
  *   bun packages/runtime-cf/src/bundle/cli.ts \
- *     --config beamhop.config.json --out build/entry.ts [--project .] [--builtins a,b]
+ *     --config beamhop.config.json --out build/entry.ts [--project .] [--builtins a,b] [--enterprise]
+ *
+ * Enterprise packages are bundled when configured (`modules.enterprise-*`), or all of them
+ * with `--enterprise` so they can be switched on later from the admin app.
  *
  * Packages are resolved from the project directory first, then from this package
  * (so the monorepo scaffold in deploy/cloudflare works without being a workspace).
@@ -21,6 +24,7 @@ const { values } = parseArgs({
     out: { type: 'string', default: 'build/entry.ts' },
     project: { type: 'string', default: '.' },
     builtins: { type: 'string' },
+    enterprise: { type: 'boolean', default: false },
   },
 });
 
@@ -59,6 +63,7 @@ const result = generateImportMap({
         .filter(Boolean)
     : DEFAULT_BUILTINS,
   resolve: resolvePkg,
+  enterprise: values.enterprise === true,
   runtimeSpecifier: toSpecifier(resolve(runtimeDir, 'src', 'index.ts')),
 });
 

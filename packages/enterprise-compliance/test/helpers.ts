@@ -5,6 +5,7 @@ import {
   type Kernel,
   type Ports,
   type Principal,
+  type RuntimeName,
   createKernel,
   parseConfig,
 } from '@beamhop/core';
@@ -41,6 +42,7 @@ export async function makeKernel(opts: {
   relays?: unknown[];
   config?: Record<string, unknown>;
   compliance?: boolean;
+  runtime?: RuntimeName;
 }): Promise<TestEnv> {
   const ports = memoryPorts(opts.ports ?? {});
   const config = parseConfig({
@@ -50,7 +52,7 @@ export async function makeKernel(opts: {
   });
   const modules = [...(opts.extra ?? [])];
   if (opts.compliance !== false) modules.push(createComplianceModule(opts.exporter ?? {}));
-  const kernel = await createKernel({ runtime: 'test', ports, config, modules });
+  const kernel = await createKernel({ runtime: opts.runtime ?? 'test', ports, config, modules });
   return { kernel, ports };
 }
 

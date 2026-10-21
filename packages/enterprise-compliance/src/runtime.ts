@@ -22,6 +22,16 @@ export interface SiemInput {
   data?: Record<string, unknown>;
 }
 
+/**
+ * Runtime service for work that must finish after the response is sent. On Cloudflare the
+ * Worker hands tracked promises to `ctx.waitUntil` (otherwise the isolate may cancel them);
+ * on Bun no service exists and promises simply run.
+ */
+export const BACKGROUND_SERVICE = 'runtime.background';
+export interface BackgroundTasksLike {
+  waitUntil(p: Promise<unknown>): void;
+}
+
 /** Shared module runtime handed to every part of enterprise-compliance. */
 export interface Rt {
   kernel: Kernel;
@@ -30,6 +40,8 @@ export interface Rt {
   log(level: LogLevel, msg: string, fields?: Record<string, unknown>): void;
   /** Queue a record for SIEM export (no-op until the exporter is attached). */
   record(r: SiemInput): void;
+  /** Keep `p` alive past the current request (Cloudflare `waitUntil`); no-op elsewhere. */
+  background(p: Promise<unknown>): void;
   now(): number;
 }
 
@@ -54,6 +66,9 @@ export function createRt(kernel: Kernel): Rt & { setRecorder(fn: (r: SiemInput) 
       } catch (err) {
         logger.log('warn', 'could not queue a SIEM record', { err: String(err) });
       }
+    },
+    background: (p) => {
+      kernel.use<BackgroundTasksLike>(BACKGROUND_SERVICE)?.waitUntil(p);
     },
     setRecorder(fn) {
       recorder = fn;
