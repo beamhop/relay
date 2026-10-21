@@ -47,7 +47,17 @@ export const AiModuleConfigSchema = z
       .max(600)
       .default(90)
       .describe('Give up on a question after this long'),
-    maxToolResultChars: z.number().int().min(500).default(8_000),
+    maxToolResultChars: technical(
+      z
+        .number()
+        .int()
+        .min(500)
+        .default(8_000)
+        .describe(
+          'How much of each lookup result the assistant gets to read. Larger can help with big relays but costs more.',
+        ),
+      'Tool results are truncated to this many characters before being sent to the model.',
+    ),
     maxProposals: z
       .number()
       .int()
@@ -61,9 +71,14 @@ export const AiModuleConfigSchema = z
           .boolean()
           .default(true)
           .describe('Suggest a label (spam / abusive / fine) for new items waiting for review'),
-        intervalSeconds: z.number().int().min(10).default(60),
+        intervalSeconds: z
+          .number()
+          .int()
+          .min(10)
+          .default(60)
+          .describe('How often new items waiting for review are looked at, in seconds.'),
         perRun: technical(
-          z.number().int().min(1).max(100).default(10),
+          z.number().int().min(1).max(100).default(10).describe('Most items labeled each time.'),
           'Max queue items labeled per scheduler tick (rate limit).',
         ),
         perHour: z
@@ -72,10 +87,18 @@ export const AiModuleConfigSchema = z
           .min(1)
           .default(200)
           .describe('Most items labeled per hour (rate limit)'),
-        maxAttempts: z.number().int().min(1).max(5).default(2),
+        maxAttempts: z
+          .number()
+          .int()
+          .min(1)
+          .max(5)
+          .default(2)
+          .describe('How often to retry an item when the AI gives no usable answer.'),
       })
-      .prefault({}),
+      .prefault({})
+      .describe('Automatic label suggestions for the review queue'),
   })
-  .prefault({});
+  .prefault({})
+  .describe('AI assistant limits');
 
 export type AiModuleConfig = z.infer<typeof AiModuleConfigSchema>;

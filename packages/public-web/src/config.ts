@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import type { Kernel, RelayConfig } from '@beamhop/core';
+import { type Kernel, type RelayConfig, example, labels } from '@beamhop/core';
 import { z } from 'zod';
 import type { Translate } from './strings.ts';
 
@@ -7,15 +7,23 @@ export const PUBLIC_WEB_MODULE_ID = 'public-web';
 
 export const BrandingSchema = z
   .object({
-    accent: z
-      .string()
-      .regex(/^#[0-9a-fA-F]{3,8}$/)
-      .optional()
-      .describe('Accent color for buttons and links, e.g. #7aa2ff'),
-    theme: z.enum(['auto', 'dark', 'light']).default('auto').describe('Page color theme'),
+    accent: example(
+      z
+        .string()
+        .regex(/^#[0-9a-fA-F]{3,8}$/)
+        .optional()
+        .describe('Accent color for buttons and links, e.g. #7aa2ff'),
+      '#7aa2ff',
+    ),
+    theme: labels(z.enum(['auto', 'dark', 'light']).default('auto'), {
+      auto: "Match the visitor's device",
+      dark: 'Dark',
+      light: 'Light',
+    }).describe('Page color theme'),
     footer: z.string().max(500).optional().describe('Extra line shown at the bottom of pages'),
   })
-  .prefault({});
+  .prefault({})
+  .describe('Look of the public pages of one relay');
 export type Branding = z.infer<typeof BrandingSchema>;
 
 export const PublicWebConfigSchema = z
@@ -35,14 +43,20 @@ export const PublicWebConfigSchema = z
       .default(30)
       .describe('Days shown on the status page'),
     /** Per-relay branding, keyed by relay id. */
-    branding: z.record(z.string(), BrandingSchema).default({}),
+    branding: z
+      .record(z.string(), BrandingSchema)
+      .default({})
+      .describe('Colors and footer of the public pages, per relay.'),
     sourceUrl: z
       .string()
       .url()
       .default('https://github.com/beamhop/beamhop')
-      .describe('Link to the source code (AGPL)'),
+      .describe(
+        'Link to the source code, shown on every page. Change it if you run a modified version (the license requires sharing your changes).',
+      ),
   })
-  .prefault({});
+  .prefault({})
+  .describe('Public web pages (landing, member portal, status)');
 export type PublicWebConfig = z.infer<typeof PublicWebConfigSchema>;
 
 /** Everything a page needs, resolved once per request. */

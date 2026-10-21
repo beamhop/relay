@@ -375,13 +375,14 @@ Choose how often to back up, how many backups to keep and where they go.
 | `enabled` | boolean | `true` |  |
 | `schedule` | `hourly` \| `daily` \| `weekly` | `"daily"` |  |
 | `keep` | number | `14` |  |
-| `target.driver` | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` |  |
-| `target.path` | string |  |  |
-| `target.bucket` | string |  |  |
-| `target.endpoint` | string |  |  |
-| `target.region` | string |  |  |
-| `target.accessKeyId` | string |  |  |
-| `target.secretAccessKey` | string |  |  |
+| `target` | section |  | A place to keep files: this server or a cloud storage service |
+| `target.driver` | `fs` \| `s3` \| `r2` \| `gcs` \| `memory` | `"fs"` | Which storage service to use. Pick cloud storage when this server's disk is too small or you want copies kept elsewhere. |
+| `target.path` | string |  | Folder on this server where the files go. Empty = a folder inside the data folder. |
+| `target.bucket` | string |  | Name of the storage bucket you created with your provider. |
+| `target.endpoint` | string |  | Your provider's storage address. Leave empty for Amazon S3 and Google Cloud; needed for R2, MinIO and others. *Technical:* S3 API endpoint (path-style). Defaults: https://s3.<region>.amazonaws.com, https://storage.googleapis.com. |
+| `target.region` | string |  | Data-center region of the bucket. Empty = us-east-1 for S3, auto otherwise. *Technical:* SigV4 signing region. |
+| `target.accessKeyId` | string |  | The access key ID from your storage provider. |
+| `target.secretAccessKey` | string |  | The secret that goes with the access key. Stored privately, never shown again. |
 
 ### Check a backup
 
@@ -1195,13 +1196,13 @@ Adjust how a plugin behaves.
 | `config` | map |  | Settings to change |
 | `replace` | boolean | `false` | Replace all settings instead of merging |
 | `run` | section |  | How Beamhop runs the plugin |
-| `run.source` | string |  |  |
-| `run.trusted` | boolean |  |  |
-| `run.failMode` | `open` \| `closed` | `"open"` |  |
-| `run.timeBudgetMs` | number |  |  |
-| `run.maxMemoryMb` | number |  |  |
-| `run.priority` | number |  |  |
-| `run.approvedPermissions` | list of `read-events` \| `write-events` \| `network` \| `docs` |  |  |
+| `run.source` | string |  | Where the plugin code comes from. Leave empty for built-in and catalog plugins. *Technical:* npm package name, file:/abs/path.ts or a path. Default: built-in, then the installed record, then beamhop-plugin-<id> in the plugins directory. |
+| `run.trusted` | boolean |  | Run the plugin without safety limits for full speed. Only for code you fully trust; built-in plugins always are. *Technical:* In-process, no worker sandbox and no time budget. |
+| `run.failMode` | `open` \| `closed` | `"open"` | What happens when the plugin breaks or is too slow. Block posts only if the plugin is a safety check you cannot do without. |
+| `run.timeBudgetMs` | number |  | How long the plugin may take per post, in milliseconds. Empty = the default for all plugins. |
+| `run.maxMemoryMb` | number |  | Memory limit for the plugin, in megabytes (best effort). |
+| `run.priority` | number |  | Order among plugins: lower numbers run first. Empty = the plugin's own choice. *Technical:* Policy pipeline priority, ascending; clamped to 300+ so plugins run after built-in rules. |
+| `run.approvedPermissions` | list of `read-events` \| `write-events` \| `network` \| `docs` |  | What you allowed this plugin to do. A plugin that asks for more is not started. |
 
 ### Turn a plugin off
 
@@ -1275,11 +1276,11 @@ Shows every limit, where it comes from, and what it means.
 |---|---|---|---|
 | `tier` | string |  |  |
 | `goals` | section |  | What-if: preview the limits these goal values would give (nothing is saved) |
-| `goals.openness` | number | `70` | How open the relay is: 0 = very strict, 100 = anyone can post |
-| `goals.spamTolerance` | number | `40` | 0 = aggressive spam blocking, 100 = relaxed |
-| `goals.storage` | number | `60` | 0 = keep it lean (short retention), 100 = keep everything |
-| `goals.media` | number | `50` | 0 = basic media, 100 = rich media (resizing, video) |
-| `goals.speedVsCost` | number | `50` | 0 = cheapest to run, 100 = fastest |
+| `goals.openness` | number | `70` | How open the relay is: 0 = very strict, 100 = anyone can post. Move it down if strangers cause trouble. |
+| `goals.spamTolerance` | number | `40` | 0 = aggressive spam blocking, 100 = relaxed. Lower it during a spam wave; raise it if real posts get blocked. |
+| `goals.storage` | number | `60` | 0 = keep it lean (short retention), 100 = keep everything. Lower it when the disk fills up. |
+| `goals.media` | number | `50` | 0 = basic media, 100 = rich media (resizing, video). Higher uses more disk and processing. |
+| `goals.speedVsCost` | number | `50` | 0 = cheapest to run, 100 = fastest. Raise it if the relay feels slow and you can afford more resources. |
 | `persona` | `public-social` \| `private-team` \| `wot-community` \| `media-host` \| `organization` |  | What-if: preview the limits of this relay type (applied before `goals`) |
 
 ### Filter activity
@@ -1445,9 +1446,9 @@ Send a signed notification to another service when something happens.
 | `url` | string |  | Where to send notifications |
 | `events` | list of `conn.open` \| `conn.close` \| `event.accepted` \| `event.rejected` \| `event.held` \| `event.deleted` \| `req.served` \| `auth.success` \| `report.received` \| `blob.uploaded` \| `blob.deleted` \| `blob.quarantined` \| `admin.action` \| `config.changed` \| `error` | `[]` | What to send |
 | `filter` | section |  | Also send new posts matching this filter |
-| `filter.kinds` | list of number |  |  |
-| `filter.authors` | list of string |  |  |
-| `filter.relays` | list of string |  |  |
+| `filter.kinds` | list of number |  | Only send posts of these types. Empty = all types. *Technical:* Event kinds to match. |
+| `filter.authors` | list of string |  | Only send posts by these people. Empty = everyone. *Technical:* Hex pubkeys of event authors to match. |
+| `filter.relays` | list of string |  | Only send posts accepted on these relays (their internal ids). Empty = all relays. |
 | `secret` | string |  | Shared secret (created for you if empty) |
 | `description` | string |  |  |
 
