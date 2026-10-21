@@ -25,6 +25,7 @@
     "@beamhop/enterprise-compliance": "workspace:*",
     "@beamhop/enterprise-identity": "workspace:*",
     "@beamhop/enterprise-keyvault": "workspace:*",
+    "@beamhop/otel": "workspace:*",
     "@beamhop/plugins": "workspace:*",
     "@beamhop/policy": "workspace:*",
     "@beamhop/relay": "workspace:*",
