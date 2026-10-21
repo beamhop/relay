@@ -12,19 +12,34 @@
  * Likewise `packages/team-client/build` is embedded as the `team` bundle (served
  * at /app when `modules.team.enabled`; `--team <dir>` overrides the path).
  * Cross-compiling downloads the target Bun runtime on first use.
+ *
+ * Image processing (sharp) is a native addon + libvips and cannot live inside
+ * the single file. `--with-sharp` writes each target to `dist/<target>/beamhop`
+ * and copies that platform's sharp, `@img/sharp-<target>`,
+ * `@img/sharp-libvips-<target>` and their JS dependencies into
+ * `dist/<target>/node_modules`; ship the directory as one archive. At runtime
+ * the binary loads sharp from `node_modules` next to itself or from
+ * `BEAMHOP_SHARP_PATH` (see src/sharp.ts); without it, media is stored as-is.
+ * Cross-target sharp packages must be installed first, e.g.
+ * `bun install --os=linux --cpu=arm64`.
  */
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const PKG = resolve(import.meta.dir, '..');
+/** sharp is an optional dependency of @beamhop/media: resolve it from there. */
+const MEDIA_PKG = resolve(PKG, '../media');
 const PWA_BUILD = resolve(PKG, '../pwa/build');
 const TEAM_BUILD = resolve(PKG, '../team-client/build');
 const ALL_TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64'] as const;
@@ -114,6 +129,8 @@ async function compile(entry: string, target: string, outfile: string): Promise<
       '--minify',
       '--sourcemap',
       `--define=__BEAMHOP_VERSION__=${JSON.stringify(releaseVersion())}`,
+      // Lets the binary resolve packages shipped next to it (sharp's own dependencies).
+      '--compile-autoload-package-json',
       `--target=bun-${target}`,
       entry,
       '--outfile',
@@ -125,14 +142,74 @@ async function compile(entry: string, target: string, outfile: string): Promise<
   if (code !== 0) throw new Error(`bun build failed for ${target} (exit ${code})`);
 }
 
+/** sharp native packages for a target: `linux-x64` → `@img/sharp-linux-x64` + libvips. */
+function sharpNativeFor(target: string): Set<string> {
+  return new Set([`@img/sharp-${target}`, `@img/sharp-libvips-${target}`]);
+}
+
+/**
+ * The installed packages sharp needs on `target`: sharp, its JS dependencies,
+ * and the target's `@img/sharp-*` native packages (other platforms' optional
+ * packages are skipped). Returns name → real directory, plus native packages
+ * that are not installed (cross-compiling without `bun install --os/--cpu`).
+ */
+export function sharpPackages(
+  target: string,
+  fromDir = MEDIA_PKG,
+): { dirs: Map<string, string>; missing: string[] } {
+  const native = sharpNativeFor(target);
+  const dirs = new Map<string, string>();
+  const missing: string[] = [];
+  const queue: Array<{ name: string; from: string; optional: boolean }> = [
+    { name: 'sharp', from: fromDir, optional: false },
+  ];
+  while (queue.length > 0) {
+    const { name, from, optional } = queue.shift() as (typeof queue)[number];
+    if (dirs.has(name)) continue;
+    let dir: string;
+    try {
+      const req = createRequire(join(from, 'package.json'));
+      dir = realpathSync(dirname(req.resolve(`${name}/package.json`)));
+    } catch {
+      if (!optional || native.has(name)) missing.push(name);
+      continue;
+    }
+    dirs.set(name, dir);
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
+    };
+    for (const dep of Object.keys(pkg.dependencies ?? {}))
+      queue.push({ name: dep, from: dir, optional: false });
+    for (const dep of Object.keys(pkg.optionalDependencies ?? {}))
+      if (native.has(dep)) queue.push({ name: dep, from: dir, optional: true });
+  }
+  return { dirs, missing };
+}
+
+/** Copy sharp for `target` into `<dest>/node_modules` (flat npm layout). */
+export function copySharp(target: string, dest: string, fromDir = MEDIA_PKG): string[] {
+  const { dirs, missing } = sharpPackages(target, fromDir);
+  const nm = join(dest, 'node_modules');
+  for (const [name, dir] of dirs) {
+    const to = join(nm, ...name.split('/'));
+    rmSync(to, { recursive: true, force: true });
+    mkdirSync(dirname(to), { recursive: true });
+    cpSync(dir, to, { recursive: true, dereference: true });
+  }
+  return missing;
+}
+
 async function run(argv: string[]): Promise<void> {
   let outDir = join(PKG, 'dist');
   let targets: string[] = [...ALL_TARGETS];
   let pwaDir = PWA_BUILD;
   let teamDir = TEAM_BUILD;
+  let withSharp = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--host') targets = [hostTarget()];
+    if (a === '--with-sharp') withSharp = true;
+    else if (a === '--host') targets = [hostTarget()];
     else if (a === '--target') targets = (argv[++i] ?? '').split(',').filter(Boolean);
     else if (a === '--outdir') outDir = resolve(argv[++i] ?? outDir);
     else if (a === '--pwa') pwaDir = resolve(argv[++i] ?? pwaDir);
@@ -149,9 +226,19 @@ async function run(argv: string[]): Promise<void> {
       : 'team app build not found; skipping /app',
   );
   for (const t of targets) {
-    const outfile = join(outDir, `beamhop-${t}`);
+    // With sharp: dist/<target>/{beamhop,node_modules/} so sharp sits next to the binary.
+    const outfile = withSharp ? join(outDir, t, 'beamhop') : join(outDir, `beamhop-${t}`);
+    mkdirSync(dirname(outfile), { recursive: true });
     console.log(`compiling ${outfile}`);
     await compile(entry, t, outfile);
+    if (withSharp) {
+      const missing = copySharp(t, join(outDir, t));
+      if (missing.length)
+        console.warn(
+          `sharp for ${t} is incomplete (missing ${missing.join(', ')}); install it with \`bun install --os=${t.split('-')[0]} --cpu=${t.split('-')[1]}\`. Image processing will be off for this target.`,
+        );
+      else console.log(`copied sharp for ${t} into ${join(outDir, t, 'node_modules')}`);
+    }
   }
 }
 

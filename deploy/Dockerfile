@@ -2,7 +2,14 @@
 # Beamhop single-binary image. Build from the repo root:
 #   docker build -f deploy/Dockerfile -t beamhop .
 # Multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .
-# If packages/pwa/build exists in the build context, the admin app is embedded.
+# If packages/pwa/build (admin app) or packages/team-client/build (Team app) exist in
+# the build context, they are embedded.
+#
+# Image processing: sharp (native addon + libvips) cannot live inside the single
+# binary. `bun install` installs it for the build platform (optional dependency of
+# @beamhop/media) and `--with-sharp` copies it to /out/<target>/node_modules, which is
+# shipped next to the binary; the binary loads it from there (or BEAMHOP_SHARP_PATH).
+# Without it uploads are stored unchanged.
 
 ARG BUN_VERSION=1.4.3
 
@@ -11,15 +18,19 @@ WORKDIR /src
 COPY package.json tsconfig.base.json tsconfig.json ./
 COPY packages ./packages
 RUN bun install
-RUN bun packages/runtime-bun/scripts/build.ts --host --outdir /out \
- && mv /out/beamhop-linux-* /out/beamhop \
- && mkdir -p /data-empty
+# sharp (optional dependency of @beamhop/media) must be installed with its glibc
+# prebuilt for this platform; fail the image build early if it cannot load.
+RUN cd packages/media && bun -e "await import('sharp')"
+RUN bun packages/runtime-bun/scripts/build.ts --host --with-sharp --outdir /out \
+ && mv /out/linux-* /out/pkg \
+ && mkdir -p /out/pkg/node_modules /data-empty
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 LABEL org.opencontainers.image.title="Beamhop" \
       org.opencontainers.image.description="Nostr relay + Blossom media server" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
-COPY --from=build /out/beamhop /usr/local/bin/beamhop
+COPY --from=build /out/pkg/beamhop /usr/local/bin/beamhop
+COPY --from=build /out/pkg/node_modules /usr/local/bin/node_modules
 COPY --from=build --chown=65532:65532 /data-empty /data
 ENV BEAMHOP_DATA_DIR=/data \
     BEAMHOP_LISTEN=0.0.0.0:3334
