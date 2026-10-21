@@ -1,0 +1,112 @@
+<script lang="ts">
+  import {page} from "$app/stores"
+  import {getJson, setJson} from "@welshman/lib"
+  import {EVENT_TIME, ZAP_GOAL, THREAD, CLASSIFIED, PINBOARD, POLL, LONG_FORM} from "@welshman/util"
+  import {deriveDeduplicatedByValue} from "@welshman/store"
+  import Magnifier from "@assets/icons/magnifier.svg?dataurl"
+  import UsersGroup from "@assets/icons/users-group-rounded.svg?dataurl"
+  import Home from "@assets/icons/home.svg?dataurl"
+  import GalleryWide from "@assets/icons/gallery-wide.svg?dataurl"
+  import ChatRound from "@assets/icons/chat-round.svg?dataurl"
+  import StarFallMinimalistic from "@assets/icons/star-fall-minimalistic-2.svg?dataurl"
+  import NotesMinimalistic from "@assets/icons/notes-minimalistic.svg?dataurl"
+  import CalendarMinimalistic from "@assets/icons/calendar-minimalistic.svg?dataurl"
+  import CaseMinimalistic from "@assets/icons/case-minimalistic.svg?dataurl"
+  import DocumentText from "@assets/icons/document-text.svg?dataurl"
+  import Revote from "@assets/icons/revote.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import SecondaryNavItem from "@lib/components/SecondaryNavItem.svelte"
+  import SpaceSearch from "@app/components/SpaceSearch.svelte"
+  import {events} from "@app/core/plugins"
+  import {ENABLE_ZAPS} from "@app/core/env"
+  import {CONTENT_KINDS} from "@app/features/content"
+  import {deriveSpaceSupportsRooms} from "@app/core/relays"
+  import {makeSpaceChatPath, makeSpacePath} from "@app/ui/routes"
+  import {allNotifications, notifications} from "@app/ui/notifications"
+  import {pushModal} from "@app/ui/modal"
+
+  type Props = {
+    url: string
+  }
+
+  const {url}: Props = $props()
+
+  const supportsRooms = deriveSpaceSupportsRooms(url)
+  const chatPath = makeSpaceChatPath(url)
+  const goalsPath = makeSpacePath(url, "goals")
+  const threadsPath = makeSpacePath(url, "threads")
+  const classifiedsPath = makeSpacePath(url, "classifieds")
+  const articlesPath = makeSpacePath(url, "articles")
+  const calendarPath = makeSpacePath(url, "calendar")
+  const pollsPath = makeSpacePath(url, "polls")
+  const libraryPath = makeSpacePath(url, "library")
+
+  // Content events aren't retained across page loads, so seed from the kinds seen last time.
+  const spaceKindsKey = `space-kinds:${url}`
+  const cachedKinds: number[] = getJson(spaceKindsKey) ?? []
+
+  const spaceKinds = deriveDeduplicatedByValue(
+    $events.forUrl(url, [{kinds: CONTENT_KINDS}]).$,
+    $content => new Set([...cachedKinds, ...$content.map(e => e.kind)]),
+  )
+
+  // A comment can name content this space doesn't have, and it counts toward the space either way.
+  const showSection = (kind: number, path: string) =>
+    $spaceKinds.has(kind) || $allNotifications.has(path) || $page.url.pathname.startsWith(path)
+
+  const openSearch = () => pushModal(SpaceSearch, {url})
+
+  $effect(() => setJson(spaceKindsKey, [...$spaceKinds]))
+</script>
+
+<SecondaryNavItem href={makeSpacePath(url, "about")}>
+  <Icon icon={Home} /> Space Details
+</SecondaryNavItem>
+{#if !$supportsRooms}
+  <SecondaryNavItem href={chatPath} notification={$notifications.has(chatPath)}>
+    <Icon icon={ChatRound} /> Chat
+  </SecondaryNavItem>
+{/if}
+<SecondaryNavItem href={makeSpacePath(url, "directory")}>
+  <Icon icon={UsersGroup} /> Directory
+</SecondaryNavItem>
+{#if showSection(PINBOARD, libraryPath)}
+  <SecondaryNavItem href={libraryPath} notification={$notifications.has(libraryPath)}>
+    <Icon icon={GalleryWide} /> Library
+  </SecondaryNavItem>
+{/if}
+{#if ENABLE_ZAPS && showSection(ZAP_GOAL, goalsPath)}
+  <SecondaryNavItem href={goalsPath} notification={$notifications.has(goalsPath)}>
+    <Icon icon={StarFallMinimalistic} /> Goals
+  </SecondaryNavItem>
+{/if}
+{#if showSection(THREAD, threadsPath)}
+  <SecondaryNavItem href={threadsPath} notification={$notifications.has(threadsPath)}>
+    <Icon icon={NotesMinimalistic} /> Threads
+  </SecondaryNavItem>
+{/if}
+{#if showSection(LONG_FORM, articlesPath)}
+  <SecondaryNavItem href={articlesPath} notification={$notifications.has(articlesPath)}>
+    <Icon icon={DocumentText} /> Articles
+  </SecondaryNavItem>
+{/if}
+{#if showSection(CLASSIFIED, classifiedsPath)}
+  <SecondaryNavItem href={classifiedsPath} notification={$notifications.has(classifiedsPath)}>
+    <Icon icon={CaseMinimalistic} /> Classifieds
+  </SecondaryNavItem>
+{/if}
+{#if showSection(EVENT_TIME, calendarPath)}
+  <SecondaryNavItem href={calendarPath} notification={$notifications.has(calendarPath)}>
+    <Icon icon={CalendarMinimalistic} /> Calendar
+  </SecondaryNavItem>
+{/if}
+{#if showSection(POLL, pollsPath)}
+  <SecondaryNavItem href={pollsPath} notification={$notifications.has(pollsPath)}>
+    <Icon icon={Revote} /> Polls
+  </SecondaryNavItem>
+{/if}
+{#if $supportsRooms}
+  <SecondaryNavItem onclick={openSearch}>
+    <Icon icon={Magnifier} /> Search
+  </SecondaryNavItem>
+{/if}

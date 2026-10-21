@@ -1,0 +1,168 @@
+<script lang="ts">
+  import {onMount} from "svelte"
+  import {readable} from "svelte/store"
+  import {removeUndefined, spec} from "@welshman/lib"
+  import AltArrowLeft from "@assets/icons/alt-arrow-left.svg?dataurl"
+  import UserCircle from "@assets/icons/user-circle.svg?dataurl"
+  import MinusCircle from "@assets/icons/minus-circle.svg?dataurl"
+  import UserMinus from "@assets/icons/user-minus.svg?dataurl"
+  import Letter from "@assets/icons/letter-opened.svg?dataurl"
+  import Restart from "@assets/icons/restart.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Confirm from "@lib/components/Confirm.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import MenuButton from "@lib/components/MenuButton.svelte"
+  import Modal from "@lib/components/Modal.svelte"
+  import ModalBody from "@lib/components/ModalBody.svelte"
+  import ModalFooter from "@lib/components/ModalFooter.svelte"
+  import Profile from "@app/components/Profile.svelte"
+  import ProfileAbout from "@app/components/ProfileAbout.svelte"
+  import ProfileBadges from "@app/components/ProfileBadges.svelte"
+  import ProfileLocation from "@app/components/ProfileLocation.svelte"
+  import ProfileMenu from "@app/components/ProfileMenu.svelte"
+  import ProfilePinnedNote from "@app/components/ProfilePinnedNote.svelte"
+  import ProfileStatus from "@app/components/ProfileStatus.svelte"
+  import {user} from "@app/core/app"
+  import {messagingRelayLists, profiles, relayManagement} from "@app/core/plugins"
+  import {deriveSpacePermissions, spaceManagement} from "@app/core/management"
+  import type {BannedPubkeyItem} from "@app/core/management"
+  import {navigate, popModal, pushModal} from "@app/ui/modal"
+  import {pushToast} from "@app/ui/toast"
+  import {goToChat, makeProfilePath} from "@app/ui/routes"
+
+  export type Props = {
+    pubkey: string
+    url?: string
+  }
+
+  const {pubkey, url}: Props = $props()
+
+  const permissions = deriveSpacePermissions(url)
+  const bans = url ? $spaceManagement.bannedPubkeys(url) : readable<BannedPubkeyItem[]>([])
+  const isBanned = $derived($bans.some(spec({pubkey})))
+
+  const isSelf = $derived($user.pubkey === pubkey)
+
+  const back = () => history.back()
+
+  const viewProfile = () => navigate(makeProfilePath(pubkey))
+
+  const sendMessage = () => {
+    popModal()
+    goToChat([pubkey])
+  }
+
+  const loadBans = () => {
+    if (url && $permissions.listBans) {
+      $spaceManagement.loadBannedPubkeys(url)
+    }
+  }
+
+  const report = (error: string | undefined, message: string) => {
+    if (error) {
+      pushToast({theme: "error", message: error})
+    } else {
+      pushToast({message})
+      loadBans()
+      back()
+    }
+  }
+
+  const banMember = () =>
+    pushModal(Confirm, {
+      title: "Ban User",
+      message: `Are you sure you want to ban @${$profiles.display(pubkey, removeUndefined([url])).get()} from the space?`,
+      confirm: async () => {
+        const {error} = await $relayManagement.forUrl(url!).banPubkey(pubkey)
+
+        report(error, "User has successfully been banned!")
+      },
+    })
+
+  const removeMember = async () => {
+    const {error} = await $relayManagement.forUrl(url!).unallowPubkey(pubkey)
+
+    report(error, "User has successfully been removed!")
+  }
+
+  const restoreMember = async () => {
+    const {error} = await $relayManagement.forUrl(url!).allowPubkey(pubkey)
+
+    report(error, "User has successfully been restored!")
+  }
+
+  $effect(loadBans)
+
+  onMount(() => {
+    $profiles.forceLoad(pubkey)
+    $messagingRelayLists.load(pubkey)
+  })
+</script>
+
+<Modal label="Profile details">
+  <ModalBody>
+    <div class="flex flex-col gap-4">
+      <div class="flex justify-between">
+        <Profile showPubkey avatarSize={14} {pubkey} {url} />
+        {#snippet customActions()}
+          {#if !isSelf}
+            <li>
+              <Button onclick={sendMessage}>
+                <Icon size={4} icon={Letter} />
+                Send Message
+              </Button>
+            </li>
+          {/if}
+          {#if isBanned}
+            {#if $permissions.addMembers}
+              <li>
+                <Button onclick={restoreMember}>
+                  <Icon size={4} icon={Restart} />
+                  Restore Membership
+                </Button>
+              </li>
+            {/if}
+          {:else}
+            {#if $permissions.removeMembers}
+              <li>
+                <Button onclick={removeMember}>
+                  <Icon size={4} icon={UserMinus} />
+                  Remove Member
+                </Button>
+              </li>
+            {/if}
+            {#if $permissions.ban}
+              <li>
+                <Button class="text-error" onclick={banMember}>
+                  <Icon size={4} icon={MinusCircle} />
+                  Ban User
+                </Button>
+              </li>
+            {/if}
+          {/if}
+        {/snippet}
+        <MenuButton
+          aria-label="Profile actions"
+          component={ProfileMenu}
+          componentProps={{pubkey, url, customActions}} />
+      </div>
+      <ProfileStatus {pubkey} {url} />
+      <ProfileLocation {pubkey} {url} />
+      <ProfileAbout {pubkey} {url} />
+      <ProfileBadges {pubkey} {url} />
+      <ProfilePinnedNote {pubkey} {url} />
+    </div>
+  </ModalBody>
+  <ModalFooter>
+    <Button onclick={back} class="button button-link hidden md:flex">
+      <Icon icon={AltArrowLeft} />
+      Go back
+    </Button>
+    <div class="flex gap-2">
+      <Button onclick={viewProfile} class="button button-primary">
+        <Icon icon={UserCircle} />
+        View Full Profile
+      </Button>
+    </div>
+  </ModalFooter>
+</Modal>

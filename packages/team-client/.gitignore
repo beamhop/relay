@@ -1,0 +1,92 @@
+# Env
+.env.local
+.env.*.local
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
+# Generated assets
+static/desktop-logo.png
+static/favicon.ico
+static/pwa-64x64.png
+static/pwa-192x192.png
+static/pwa-512x512.png
+static/apple-touch-icon-180x180.png
+static/maskable-icon-512x512.png
+src/assets/icons/*.webp
+manifest.webmanifest
+android/app/src/main/res/drawable*/splash.png
+android/app/src/main/res/drawable-*/ic_stat_notify.png
+android/app/src/main/res/mipmap-*/ic_launcher*
+ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+ios/App/App/Assets.xcassets/Splash.imageset/Default@*.png
+
+# Capacitor
+ios/App/public/
+ios/App/Pods/
+ios/App/Podfile.lock
+ios/DerivedData/
+android/app/src/main/assets/public/
+
+# F-Droid preparation output
+.fdroid/
+
+# Web/JavaScript
+node_modules/
+.pnpm-store/
+build/
+build-server/
+.svelte-kit/
+.next/
+
+# iOS
+ios/App/App/public
+ios/DerivedData
+xcuserdata/
+*.xcworkspace/
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.xcuserstate
+*.dSYM.zip
+*.dSYM
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+.gradle/
+local.properties
+proguard/
+google-services.json
+GoogleService-Info.plist
+
+# IDEs and editors
+.roo
+.idea
+.vscode
+.claude
+.local
+CLAUDE.md
+
+# OS generated
+.DS_Store
+Thumbs.db
+package-lock.json
+!electron/package-lock.json

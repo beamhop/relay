@@ -1,0 +1,97 @@
+@layer components {
+  .room {
+    /* The mobile nav is fixed on top of the page, so the room view reserves its
+       height here rather than in each of its children — otherwise an overlaid or
+       floating child ends up stacking a second copy of the offset. */
+    @apply relative mb-14 md:mb-0;
+
+    .room__content {
+      @apply z-feature flex max-h-screen min-h-0 w-full min-w-0 flex-col flex-col-reverse gap-2 overflow-x-hidden overflow-y-auto;
+    }
+
+    .room__item:hover {
+      @apply bg-surface;
+    }
+
+    .room__item-actions {
+      @apply z-popover overflow-visible pb-1;
+    }
+
+    .room__item-actions > .join-item {
+      overflow: visible;
+    }
+
+    .room__compose {
+      @apply z-compose relative shrink-0;
+    }
+
+    .room__compose .room__compose-inner {
+      @apply min-w-0;
+    }
+  }
+
+  .room-pins-anchor {
+    @apply z-compose pointer-events-none absolute top-0 right-0 left-0;
+  }
+
+  .room-pins {
+    @apply bg-primary text-primary-content pointer-events-auto mx-3 origin-top rounded-t-none rounded-b-lg shadow-sm;
+  }
+
+  .room-pins__header {
+    @apply flex min-h-10 items-center gap-3 px-4;
+  }
+
+  .room-pins--expanded .room-pins__header {
+    @apply items-start pt-3;
+  }
+
+  .room-pins__expand {
+    @apply flex min-w-0 flex-1 items-center gap-3 text-left;
+  }
+
+  .room-pins__counter {
+    @apply shrink-0 py-2.5;
+  }
+
+  .room-pins__details {
+    @apply flex flex-col gap-3 px-4 pb-3;
+  }
+
+  .room-pins__label {
+    @apply text-[10px] font-bold tracking-widest uppercase opacity-80;
+  }
+
+  .room-pins__preview {
+    @apply min-w-0 flex-1 truncate text-sm;
+  }
+
+  .room-pins__message {
+    @apply text-primary-content text-sm leading-relaxed;
+
+    /* a pill draws its own background, so it keeps its own color */
+    :where(a, p, span, code):not(.link-content) {
+      color: inherit;
+    }
+  }
+
+  .room-pins__footer {
+    @apply flex items-center justify-between gap-3;
+  }
+
+  .room-pins__nav {
+    @apply flex items-center gap-1 text-sm;
+  }
+
+  body.keyboard-open .room {
+    @apply mb-0;
+  }
+
+  [data-fl-theme="clay"] .room {
+    @apply bg-surface;
+
+    .room__item:hover {
+      @apply bg-surface-less/50;
+    }
+  }
+}

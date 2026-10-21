@@ -1,0 +1,66 @@
+[data-fl-theme="flat"] {
+  &[data-theme="light"] {
+    --primary: #7161ff;
+    --primary-soft: #8e80ff;
+    --primary-bold: #5a48f0;
+    --primary-content: #eae7ff;
+
+    --secondary: #eb5e28;
+    --secondary-soft: #eb5e28;
+    --secondary-bold: #cf4f1d;
+    --secondary-content: #eae7ff;
+
+    --success: oklch(80.494% 0.16 154.45);
+    --success-content: oklch(16.098% 0.032 154.45);
+    --warning: #fd8d0b;
+    --warning-content: oklch(17.834% 0.03 95.005);
+    --error: oklch(71.785% 0.17 13.118);
+    --error-content: oklch(14.357% 0.034 13.118);
+
+    --backdrop: oklch(93.268% 0.016 262.751);
+    --surface: oklch(100% 0 0);
+    --surface-more: oklch(93.268% 0.016 262.751);
+    --surface-less: oklch(97.466% 0.011 259.822);
+
+    --content: oklch(41.886% 0.053 255.824);
+    --content-muted: color-mix(in oklab, var(--content) 68%, var(--surface));
+    --content-subtle: color-mix(in oklab, var(--content) 42%, var(--surface));
+
+    --line: color-mix(in oklab, var(--content) 20%, transparent);
+    --line-more: color-mix(in oklab, var(--content) 35%, transparent);
+    --line-less: color-mix(in oklab, var(--content) 10%, transparent);
+  }
+
+  &[data-theme="dark"],
+  & .primary-nav {
+    --primary: #7161ff;
+    --primary-soft: #5a48f0;
+    --primary-bold: #8e80ff;
+    --primary-content: #eae7ff;
+
+    --secondary: #eb5e28;
+    --secondary-soft: #eb5e28;
+    --secondary-bold: #f37a44;
+    --secondary-content: #eae7ff;
+
+    --success: oklch(78.452% 0.132 181.911);
+    --success-content: oklch(15.69% 0.026 181.911);
+    --warning: oklch(83.242% 0.139 82.95);
+    --warning-content: oklch(16.648% 0.027 82.95);
+    --error: oklch(71.785% 0.17 13.118);
+    --error-content: oklch(14.357% 0.034 13.118);
+
+    --backdrop: oklch(17.86% 0.034 265.754);
+    --surface: oklch(20.768% 0.039 265.754);
+    --surface-more: oklch(17.86% 0.034 265.754);
+    --surface-less: oklch(19.314% 0.037 265.754);
+
+    --content: oklch(75% 0.029 256.847);
+    --content-muted: color-mix(in oklab, var(--content) 70%, var(--surface));
+    --content-subtle: color-mix(in oklab, var(--content) 45%, var(--surface));
+
+    --line: color-mix(in oklab, var(--content) 16%, transparent);
+    --line-more: color-mix(in oklab, var(--content) 30%, transparent);
+    --line-less: color-mix(in oklab, var(--content) 8%, transparent);
+  }
+}

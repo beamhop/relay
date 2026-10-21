@@ -1,0 +1,83 @@
+@layer components {
+  .tip {
+    @apply relative;
+
+    &[data-tip]::before {
+      content: attr(data-tip);
+      @apply z-tooltip pointer-events-none absolute max-w-32 overflow-hidden rounded-xl bg-black px-2 py-1 text-xs text-ellipsis whitespace-nowrap text-white/90 opacity-0;
+      transition: opacity 0.15s ease;
+    }
+
+    /* themes that lift buttons on hover give the host a transform, which makes it
+       a stacking context and traps the tooltip's z-index inside it */
+    &[data-tip]:hover {
+      @apply z-tooltip;
+    }
+
+    &[data-tip]:hover::before {
+      @apply opacity-100;
+    }
+  }
+
+  .tip-top[data-tip]::before {
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-0.4rem);
+  }
+
+  .tip-left[data-tip]::before {
+    right: 100%;
+    top: 50%;
+    transform: translateY(-50%) translateX(-0.4rem);
+  }
+
+  .tip-right[data-tip]::before {
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%) translateX(0.4rem);
+  }
+
+  /* mobile hides hover tooltips */
+  .mobile .tip[data-tip]::before {
+    display: none !important;
+  }
+
+  /* the host tippy renders its popovers into; see getTippyTarget in Tippy.svelte */
+  .tippy-target {
+    @apply z-tooltip pointer-events-none fixed inset-0;
+  }
+
+  .tippy-target > * {
+    @apply pointer-events-auto;
+  }
+
+  .tippy-box {
+    @apply rounded-3xl;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .tippy-box[data-theme~="tooltip"] {
+    background-color: var(--content);
+    color: var(--surface);
+    border-radius: var(--radius-xl);
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+    box-shadow: var(--shadow);
+  }
+
+  .tippy-box[data-theme~="tooltip"][data-placement^="top"] > .tippy-arrow::before {
+    border-top-color: var(--content);
+  }
+
+  .tippy-box[data-theme~="tooltip"][data-placement^="bottom"] > .tippy-arrow::before {
+    border-bottom-color: var(--content);
+  }
+
+  .tippy-box[data-theme~="tooltip"][data-placement^="left"] > .tippy-arrow::before {
+    border-left-color: var(--content);
+  }
+
+  .tippy-box[data-theme~="tooltip"][data-placement^="right"] > .tippy-arrow::before {
+    border-right-color: var(--content);
+  }
+}

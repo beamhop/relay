@@ -1,0 +1,147 @@
+<script lang="ts">
+  import {writable} from "svelte/store"
+  import type {TrustedEvent} from "@welshman/util"
+  import {Comment} from "@welshman/domain"
+  import {isMobile, preventDefault} from "@lib/html"
+  import Paperclip from "@assets/icons/paperclip-2.svg?dataurl"
+  import Plane from "@assets/icons/plane-2.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import Spinner from "@lib/components/Spinner.svelte"
+  import EditorContent from "@app/features/editor/EditorContent.svelte"
+  import {publisher} from "@app/core/plugins"
+  import {writer} from "@app/core/domain"
+  import {DraftKey} from "@app/features/drafts"
+  import {makeEditor} from "@app/features/editor"
+  import {publishComment} from "@app/features/rooms"
+  import {loadSendDelay} from "@app/core/settings"
+  import {pushToast} from "@app/ui/toast"
+
+  type Values = {
+    content?: string | object
+  }
+
+  type Props = {
+    event: TrustedEvent
+    onCancel: () => void
+    onSubmit: () => void
+    parent?: TrustedEvent
+    url?: string
+    noun?: string
+  }
+
+  const {event, onCancel, onSubmit, parent, url, noun = "Comment"}: Props = $props()
+
+  const draftKey = new DraftKey<Values>(`comment:${event.id}:${parent?.id ?? ""}`)
+  const initialValues = draftKey.get()
+  const uploading = writable(false)
+
+  const selectFiles = () => editor.then(ed => ed.commands.selectFiles())
+
+  // A reply to a space event goes to that space, and any other goes out as a public comment.
+  const publishReply = async (content: string, tags: string[][]) => {
+    if (url) {
+      return publishComment({url, event, parent, content, tags})
+    }
+
+    return $publisher.publish({
+      ...(await writer(Comment)
+        .setContent(content)
+        .addTags(...tags)
+        .setRootFromEvent(event)
+        .setParentFromEvent(parent ?? event)
+        .render()),
+      delay: await loadSendDelay(),
+    })
+  }
+
+  const submit = async () => {
+    if ($uploading || loading) {
+      return
+    }
+
+    const ed = await editor
+    const content = ed.getText({blockSeparator: "\n"}).trim()
+
+    if (!content) {
+      return pushToast({theme: "error", message: "Please write something first."})
+    }
+
+    loading = true
+
+    try {
+      await publishReply(content, ed.storage.nostr.getEditorTags())
+
+      draftKey.clear()
+      onSubmit()
+    } catch (e) {
+      console.error(e)
+      pushToast({theme: "error", message: "Failed to send your reply."})
+    } finally {
+      loading = false
+    }
+  }
+
+  let loading = $state(false)
+  let content = $state(initialValues?.content ?? "")
+
+  const onChange = (json: object) => {
+    content = json
+  }
+
+  const empty = writable(true)
+
+  const editor = makeEditor({
+    url,
+    submit,
+    uploading,
+    onChange,
+    content,
+    empty,
+    placeholder: parent ? "Write a reply..." : `Write a ${noun.toLowerCase()}...`,
+  })
+
+  $effect(() => {
+    if ($empty) {
+      draftKey.clear()
+    } else {
+      draftKey.set({content})
+    }
+  })
+</script>
+
+<form
+  onsubmit={preventDefault(submit)}
+  class="border-line flex flex-col gap-2 rounded-2xl border border-solid p-3">
+  <div class="relative">
+    <div class="note-editor grow overflow-hidden">
+      <EditorContent autofocus={!isMobile} {editor} />
+    </div>
+    <Button
+      data-tip="Add an image"
+      class="tip tip-left absolute bottom-1 right-2"
+      onclick={selectFiles}
+      disabled={loading}>
+      {#if $uploading}
+        <Spinner size="xs" />
+      {:else}
+        <Icon icon={Paperclip} size={3} />
+      {/if}
+    </Button>
+  </div>
+  <div class="flex justify-end gap-2">
+    <Button class="button button-link" onclick={onCancel} disabled={loading}>Cancel</Button>
+    <Button type="submit" class="button button-primary button-sm" disabled={$uploading || loading}>
+      <Spinner size="sm" {loading}>
+        {#if !loading}
+          <Icon icon={Plane} size={4} />
+        {/if}
+        {#if parent}
+          Reply
+        {:else}
+          {noun}
+        {/if}
+      </Spinner>
+    </Button>
+  </div>
+</form>

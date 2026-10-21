@@ -1,6 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "files": { "ignore": ["node_modules", "dist", "build", ".svelte-kit", "*.lock", "LICENSE"] },
+  "files": {
+    "ignore": [
+      "node_modules",
+      "dist",
+      "build",
+      ".svelte-kit",
+      "*.lock",
+      "LICENSE",
+      "packages/team-client"
+    ]
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always" } },
   "linter": {

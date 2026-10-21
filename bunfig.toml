@@ -1,0 +1,14 @@
+[test]
+# packages/team-client is a Flotilla fork: its upstream tests use Playwright / node --test, not
+# bun test. Only the Beamhop-owned code (packages/team-client/src/beamhop) runs under bun test.
+pathIgnorePatterns = [
+  "packages/team-client/e2e/**",
+  "packages/team-client/server/**",
+  "packages/team-client/packages/**",
+  "packages/team-client/src/app/**",
+  "packages/team-client/src/lib/**",
+  "packages/team-client/src/routes/**",
+  "packages/team-client/node_modules/**",
+  "packages/team-client/build/**",
+  "packages/team-client/.svelte-kit/**",
+]

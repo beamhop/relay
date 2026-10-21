@@ -1,0 +1,205 @@
+@layer components {
+  .button {
+    @apply inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-2xl border-solid border-transparent text-center leading-none font-bold whitespace-nowrap select-none;
+    font-family: var(--font-heading);
+    font-size: 0.9rem;
+    height: 2.9rem;
+    border-width: var(--border-thin);
+    transition:
+      transform 0.15s ease,
+      box-shadow 0.15s ease,
+      background-color 0.15s ease,
+      color 0.15s ease,
+      border-color 0.15s ease;
+
+    &:disabled,
+    &[disabled],
+    &.button-disabled {
+      @apply pointer-events-none opacity-50;
+    }
+  }
+
+  /* primary — solid fill that darkens on hover (clay adds gradient + lift) */
+  .button-primary {
+    @apply bg-primary text-primary-content;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-sm);
+
+    &:hover {
+      @apply bg-primary-bold;
+    }
+  }
+
+  /* secondary — solid fill that darkens on hover */
+  .button-secondary {
+    @apply bg-secondary text-secondary-content;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-sm);
+
+    &:hover {
+      @apply bg-secondary-bold;
+    }
+  }
+
+  /* neutral — soft surface button */
+  .button-neutral {
+    @apply bg-surface text-content border-line;
+    box-shadow: var(--shadow-sm);
+
+    &:hover {
+      @apply border-primary text-primary;
+    }
+  }
+
+  /* error / danger */
+  .button-error {
+    @apply bg-error text-error-content;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ghost — no fill, no border, hover tint */
+  .button-ghost {
+    @apply text-content border-transparent bg-transparent;
+
+    &:hover {
+      @apply text-primary;
+      background: color-mix(in srgb, var(--primary) 10%, transparent);
+    }
+  }
+
+  /* link — looks like a link */
+  .button-link {
+    @apply text-primary border-transparent bg-transparent font-bold;
+    box-shadow: none;
+    height: auto;
+    padding: 0.35rem 0.5rem;
+
+    &:hover {
+      @apply underline;
+      text-underline-offset: 2px;
+    }
+  }
+
+  /* outline — border and text carry the color, fill arrives on hover. Stands
+     alone as a neutral outline, or pairs with a color class. */
+  .button-outline {
+    @apply text-content border-line bg-transparent;
+    box-shadow: var(--shadow-sm);
+
+    &:hover {
+      @apply border-primary text-primary;
+    }
+  }
+
+  .button-outline.button-primary {
+    @apply text-primary border-primary bg-transparent;
+
+    &:hover {
+      @apply bg-primary text-primary-content;
+    }
+  }
+
+  .button-outline.button-secondary {
+    @apply text-secondary border-secondary bg-transparent;
+
+    &:hover {
+      @apply bg-secondary text-secondary-content;
+    }
+  }
+
+  .button-outline.button-error {
+    @apply text-error border-error bg-transparent;
+
+    &:hover {
+      @apply bg-error text-error-content;
+    }
+  }
+
+  /* sizes — height is explicit (not derived from padding/line-height) so sm/xs
+     reliably change the button height even when the content is a fixed-size icon */
+  .button,
+  .button-md {
+    @apply h-10 rounded-2xl px-4;
+  }
+  .button-sm {
+    @apply h-8 gap-1 rounded-xl px-4 text-sm;
+  }
+  .button-xs {
+    @apply h-7 gap-1 rounded-xl px-2 text-xs;
+  }
+  /* for a button beside an .input/.input-editor in a flex row: stretch to the
+     row height instead of fixing one, since input height varies by theme */
+  .button-input {
+    @apply h-auto self-stretch;
+  }
+
+  /* shapes */
+  .button-block {
+    @apply w-full;
+  }
+  .button-circle {
+    @apply rounded-full;
+    padding: 0;
+    width: 2.5rem;
+    height: 2.5rem;
+    aspect-ratio: 1;
+  }
+  .button-square {
+    padding: 0;
+    width: 2.5rem;
+    height: 2.5rem;
+    aspect-ratio: 1;
+  }
+  .button-circle.button-sm,
+  .button-square.button-sm {
+    width: 2rem;
+    height: 2rem;
+  }
+  .button-circle.button-xs,
+  .button-square.button-xs {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+  .button-pill {
+    @apply rounded-full;
+  }
+
+  /* a theme rule outranks the outline variants above, hence the :not(.button-outline) */
+  [data-fl-theme="clay"] .button-primary:not(.button-outline),
+  [data-fl-theme="clay"] .button-secondary:not(.button-outline),
+  [data-fl-theme="clay"] .button-error:not(.button-outline) {
+    box-shadow: var(--shadow-sm), var(--shadow-inset-strong);
+  }
+
+  /* hover lift + bigger offset shadow; active press + smaller offset shadow */
+  [data-fl-theme="clay"] .button-primary:not(.button-outline):hover {
+    background: var(--primary-bold);
+    transform: translateY(-2px);
+    box-shadow:
+      6px 6px 0 rgba(var(--shadow-color), 0.3),
+      var(--shadow-inset-strong);
+  }
+  [data-fl-theme="clay"] .button-secondary:not(.button-outline):hover {
+    background: var(--secondary-bold);
+    transform: translateY(-2px);
+    box-shadow:
+      6px 6px 0 rgba(var(--shadow-color), 0.3),
+      var(--shadow-inset-strong);
+  }
+  [data-fl-theme="clay"] .button-neutral:hover,
+  [data-fl-theme="clay"] .button-outline:hover,
+  [data-fl-theme="clay"] .button-error:not(.button-outline):hover {
+    transform: translateY(-2px);
+  }
+  [data-fl-theme="clay"] .button-primary:not(.button-outline):active,
+  [data-fl-theme="clay"] .button-secondary:not(.button-outline):active,
+  [data-fl-theme="clay"] .button-neutral:active,
+  [data-fl-theme="clay"] .button-outline:active {
+    transform: translateY(2px);
+    box-shadow: 2px 2px 0 rgba(var(--shadow-color), 0.3);
+  }
+  [data-fl-theme="clay"] .button-error:not(.button-outline):active {
+    transform: translateY(2px);
+  }
+}

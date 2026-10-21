@@ -1,0 +1,210 @@
+<script lang="ts">
+  import type {TrustedEvent} from "@welshman/util"
+  import * as nip19 from "nostr-tools/nip19"
+  import {getIdOrAddress, tagSpec, tagValue, toNostrURI} from "@welshman/util"
+  import Bolt from "@assets/icons/bolt.svg?dataurl"
+  import Pen from "@assets/icons/pen.svg?dataurl"
+  import Reply from "@assets/icons/reply-2.svg?dataurl"
+  import ShareCircle from "@assets/icons/share-circle.svg?dataurl"
+  import Code2 from "@assets/icons/code-2.svg?dataurl"
+  import TrashBin2 from "@assets/icons/trash-bin-2.svg?dataurl"
+  import Danger from "@assets/icons/danger.svg?dataurl"
+  import GalleryWide from "@assets/icons/gallery-wide.svg?dataurl"
+  import SmileCircle from "@assets/icons/smile-circle.svg?dataurl"
+  import MenuDots from "@assets/icons/menu-dots.svg?dataurl"
+  import AltArrowDown from "@assets/icons/alt-arrow-down.svg?dataurl"
+  import AltArrowUp from "@assets/icons/alt-arrow-up.svg?dataurl"
+  import Pin from "@assets/icons/pin.svg?dataurl"
+  import NotesMinimalistic from "@assets/icons/notes-minimalistic.svg?dataurl"
+  import VolumeLoud from "@assets/icons/volume-loud.svg?dataurl"
+  import {slideAndFade} from "@lib/transition"
+  import Button from "@lib/components/Button.svelte"
+  import Link from "@lib/components/Link.svelte"
+  import Icon from "@lib/components/Icon.svelte"
+  import Modal from "@lib/components/Modal.svelte"
+  import ModalBody from "@lib/components/ModalBody.svelte"
+  import EmojiPicker from "@lib/components/EmojiPicker.svelte"
+  import ZapButton from "@app/components/ZapButton.svelte"
+  import BookmarkButton from "@app/components/BookmarkButton.svelte"
+  import EventInfo from "@app/components/EventInfo.svelte"
+  import Report from "@app/components/Report.svelte"
+  import PinboardSelect from "@app/components/PinboardSelect.svelte"
+  import EventAdminDeleteConfirm from "@app/components/EventAdminDeleteConfirm.svelte"
+  import EventDeleteConfirm from "@app/components/EventDeleteConfirm.svelte"
+  import ThreadCreate from "@app/components/ThreadCreate.svelte"
+  import {user} from "@app/core/app"
+  import {roomPinLists} from "@app/core/plugins"
+  import {deriveUserAdminDelete, deriveUserIsRoomAdmin} from "@app/features/rooms"
+  import {toggleRoomPin} from "@app/features/roomPins"
+  import {publishReaction} from "@app/features/reactions"
+  import {ENABLE_ZAPS} from "@app/core/env"
+  import {makeContentPath} from "@app/ui/routes"
+  import {shareEvent} from "@app/ui/share"
+  import {readAloud} from "@app/features/speech"
+  import {pushModal} from "@app/ui/modal"
+
+  type Props = {
+    url: string
+    event: TrustedEvent
+    reply: () => void
+    edit?: () => void
+  }
+
+  const {url, event, reply, edit}: Props = $props()
+
+  const h = tagValue(tagSpec("h"), event.tags) ?? ""
+  const path = makeContentPath(url, event.kind, getIdOrAddress(event))
+  const pinIds = $roomPinLists.pins(url, h).$
+  const userIsRoomAdmin = deriveUserIsRoomAdmin(url, h)
+  const adminDelete = deriveUserAdminDelete(url, event)
+  const isPinned = $derived($pinIds.includes(event.id))
+  const tile = "button h-auto flex-col gap-1.5 py-4 text-xs"
+
+  const onEmoji = (emoji: string) => {
+    history.back()
+    publishReaction(event, {content: emoji, tags: []}, {url})
+  }
+
+  const showEmojiPicker = () => pushModal(EmojiPicker, {onClick: onEmoji}, {replaceState: true})
+
+  const createThread = () =>
+    pushModal(
+      ThreadCreate,
+      {
+        url,
+        h,
+        initialValues: {content: toNostrURI(nip19.neventEncode({...event, relays: [url]}))},
+      },
+      {replaceState: true},
+    )
+
+  const sendReply = () => {
+    history.back()
+    reply()
+  }
+
+  const sendEdit = () => {
+    history.back()
+    edit?.()
+  }
+
+  const share = () => {
+    history.back()
+    shareEvent(url, "Message", event)
+  }
+
+  const read = () => {
+    history.back()
+    readAloud(event)
+  }
+
+  const showInfo = () => pushModal(EventInfo, {url, event}, {replaceState: true})
+
+  const addToLibrary = () => pushModal(PinboardSelect, {url, event}, {replaceState: true})
+
+  const report = () => pushModal(Report, {url, event}, {replaceState: true})
+
+  const showDelete = () => pushModal(EventDeleteConfirm, {url, event})
+
+  const showAdminDelete = () => pushModal(EventAdminDeleteConfirm, {url, noun: "Message", event})
+
+  const toggleMore = () => {
+    showMore = !showMore
+  }
+
+  const togglePin = () => {
+    history.back()
+    toggleRoomPin(url, h, event)
+  }
+
+  let showMore = $state(false)
+</script>
+
+<Modal label="Message actions">
+  <ModalBody>
+    <div class="grid gap-2 {ENABLE_ZAPS ? 'grid-cols-3' : 'grid-cols-2'}">
+      {#if ENABLE_ZAPS}
+        <ZapButton replaceState {url} {event} class="{tile} button-outline button-secondary">
+          <Icon size={6} icon={Bolt} />
+          Zap
+        </ZapButton>
+      {/if}
+      <Button class="{tile} button-outline button-primary" onclick={showEmojiPicker}>
+        <Icon size={6} icon={SmileCircle} />
+        React
+      </Button>
+      <Button class="{tile} button-neutral" onclick={sendReply}>
+        <Icon size={6} icon={Reply} />
+        Reply
+      </Button>
+    </div>
+    <div class="flex flex-col">
+      <Button class="button button-neutral w-full" onclick={toggleMore}>
+        <Icon size={4} icon={showMore ? AltArrowUp : AltArrowDown} />
+        {showMore ? "Fewer Options" : "More Options"}
+      </Button>
+      {#if showMore}
+        <div transition:slideAndFade class="flex flex-col gap-2 pt-2">
+          {#if edit}
+            <Button class="button button-neutral w-full" onclick={sendEdit}>
+              <Icon size={4} icon={Pen} />
+              Edit Message
+            </Button>
+          {/if}
+          <Button class="button button-neutral w-full" onclick={share}>
+            <Icon size={4} icon={ShareCircle} />
+            Share Message
+          </Button>
+          <Button class="button button-neutral w-full" onclick={addToLibrary}>
+            <Icon size={4} icon={GalleryWide} />
+            Add to Library
+          </Button>
+          <BookmarkButton {url} {event} class="button button-neutral w-full" />
+          <Button class="button button-neutral w-full" onclick={read}>
+            <Icon size={4} icon={VolumeLoud} />
+            Read Out Loud
+          </Button>
+          {#if h}
+            <Button class="button button-neutral w-full" onclick={createThread}>
+              <Icon size={4} icon={NotesMinimalistic} />
+              Create a Thread
+            </Button>
+          {/if}
+          {#if h && $userIsRoomAdmin}
+            <Button class="button button-neutral w-full" onclick={togglePin}>
+              <Icon size={4} icon={Pin} />
+              {isPinned ? "Unpin Message" : "Pin Message"}
+            </Button>
+          {/if}
+          {#if path}
+            <Link class="button button-neutral w-full" href={path}>
+              <Icon size={4} icon={MenuDots} />
+              View Details
+            </Link>
+          {/if}
+          <Button class="button button-neutral w-full" onclick={showInfo}>
+            <Icon size={4} icon={Code2} />
+            Message Info
+          </Button>
+          {#if event.pubkey === $user.pubkey}
+            <Button class="button button-neutral w-full text-error" onclick={showDelete}>
+              <Icon size={4} icon={TrashBin2} />
+              Delete Message
+            </Button>
+          {:else}
+            <Button class="button button-neutral w-full text-error" onclick={report}>
+              <Icon size={4} icon={Danger} />
+              Report Content
+            </Button>
+            {#if $adminDelete}
+              <Button class="button button-neutral w-full text-error" onclick={showAdminDelete}>
+                <Icon size={4} icon={TrashBin2} />
+                Delete Message
+              </Button>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </ModalBody>
+</Modal>

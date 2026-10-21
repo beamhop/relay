@@ -1,0 +1,209 @@
+<script lang="ts">
+  import cx from "classnames"
+  import {derived, readable} from "svelte/store"
+  import {now, uniq, displayList, formatTimestampAsTime, formatTimestampAsDate} from "@welshman/lib"
+  import type {TrustedEvent, EventContent} from "@welshman/util"
+  import {MESSAGE, THREAD, getCommentFiltersForParent, getIdOrAddress} from "@welshman/util"
+  import {Thread, getContentQuote} from "@welshman/domain"
+  import {isMobile} from "@lib/html"
+  import NotesMinimalistic from "@assets/icons/notes-minimalistic.svg?dataurl"
+  import Pen from "@assets/icons/pen.svg?dataurl"
+  import Reply from "@assets/icons/reply-2.svg?dataurl"
+  import ReplyAlt from "@assets/icons/reply.svg?dataurl"
+  import TapTarget from "@lib/components/TapTarget.svelte"
+  import Icon from "@lib/components/Icon.svelte"
+  import Link from "@lib/components/Link.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import MenuButton from "@lib/components/MenuButton.svelte"
+  import Tooltip from "@lib/components/Tooltip.svelte"
+  import PublicationFailure from "@app/components/PublicationFailure.svelte"
+  import {publishReaction, retractReaction} from "@app/features/reactions"
+  import {deriveDisplaysByPubkey} from "@app/features/social"
+  import ProfileDetail from "@app/components/ProfileDetail.svelte"
+  import ProfileCircle from "@app/components/ProfileCircle.svelte"
+  import ReactionSummary from "@app/components/ReactionSummary.svelte"
+  import RoomItemZapButton from "@app/components/RoomItemZapButton.svelte"
+  import RoomItemEmojiButton from "@app/components/RoomItemEmojiButton.svelte"
+  import RoomItemMenu from "@app/components/RoomItemMenu.svelte"
+  import RoomItemMenuMobile from "@app/components/RoomItemMenuMobile.svelte"
+  import RoomItemContent from "@app/components/RoomItemContent.svelte"
+  import {user} from "@app/core/app"
+  import {events, profiles, publisher} from "@app/core/plugins"
+  import {reader} from "@app/core/domain"
+  import {noPublications, publicationsByEventId} from "@app/core/publications"
+  import {CONTENT_KINDS} from "@app/features/content"
+  import {colorFor} from "@app/ui/theme"
+  import {ENABLE_ZAPS} from "@app/core/env"
+  import type {FeedContext} from "@app/features/feeds"
+  import {highlightedEvent, makeContentPath, makeThreadPath} from "@app/ui/routes"
+  import {pushModal} from "@app/ui/modal"
+
+  type Props = {
+    url: string
+    event: TrustedEvent
+    replyTo?: (event: TrustedEvent) => void
+    showPubkey?: boolean
+    context: FeedContext
+    canEdit: (event: TrustedEvent) => boolean
+    onEdit: (event: TrustedEvent) => void
+  }
+
+  const {
+    url,
+    event,
+    replyTo = undefined,
+    showPubkey = false,
+    context,
+    canEdit,
+    onEdit,
+  }: Props = $props()
+
+  const today = formatTimestampAsDate(now())
+  const profileDisplay = $profiles.display(event.pubkey, [url]).$
+  const publication = $derived(
+    $publisher.merge($publicationsByEventId.get(event.id) ?? noPublications),
+  )
+  const colorValue = colorFor(event.pubkey)
+
+  // A message that is nothing but a reference to content renders as the content it quotes.
+  const isQuoteOnly = event.content.trim().split(/\s/).length === 1
+  const quote = isQuoteOnly ? getContentQuote(event.content) : undefined
+  const innerEvent = quote
+    ? derived($events.one(quote.value, [url]).$, e =>
+        e && CONTENT_KINDS.includes(e.kind) ? e : undefined,
+      )
+    : readable(undefined)
+  const innerComments = $derived(
+    $innerEvent ? $events.forUrl(url, getCommentFiltersForParent([$innerEvent])).$ : readable([]),
+  )
+
+  const path = $derived(
+    $innerEvent && makeContentPath(url, $innerEvent.kind, getIdOrAddress($innerEvent)),
+  )
+
+  const threads = $events.forUrl(url, [{kinds: [THREAD], "#q": [event.id]}]).$
+
+  const commenterDisplays = $derived(
+    deriveDisplaysByPubkey(uniq($innerComments.map(e => e.pubkey)), url),
+  )
+
+  const reply = () => replyTo!(event)
+
+  const edit = canEdit(event) ? () => onEdit(event) : undefined
+
+  const onTap = () => pushModal(RoomItemMenuMobile, {url, event, reply, edit})
+
+  const openProfile = () => pushModal(ProfileDetail, {pubkey: event.pubkey, url})
+
+  const deleteReaction = (reaction: TrustedEvent) => retractReaction(reaction, {url})
+
+  const createReaction = (values: EventContent) => publishReaction(event, values, {url})
+</script>
+
+<TapTarget
+  data-event={event.id}
+  {onTap}
+  class={cx(
+    "room__item group relative flex w-full cursor-default flex-col px-2 py-0.5 text-left transition-colors",
+    {"mt-1.5": showPubkey, "highlight-target": $highlightedEvent === event.id},
+  )}>
+  <div class="flex w-full gap-3 overflow-auto">
+    {#if showPubkey}
+      <Button onclick={openProfile} class="flex items-start pt-1.5 justify-center w-8 shrink-0">
+        <ProfileCircle pubkey={event.pubkey} class="border border-solid border-line" size={8} />
+      </Button>
+    {:else}
+      <div class="w-8 shrink-0"></div>
+    {/if}
+    <div class="min-w-0 grow pr-1">
+      {#if showPubkey}
+        <div class="flex items-center gap-2">
+          <Button onclick={openProfile} class="text-sm font-bold" style="color: {colorValue}">
+            {$profileDisplay}
+          </Button>
+          <span class="text-xs opacity-50">
+            {#if formatTimestampAsDate(event.created_at) === today}
+              Today
+            {:else}
+              {formatTimestampAsDate(event.created_at)}
+            {/if}
+            at {formatTimestampAsTime(event.created_at)}
+          </span>
+        </div>
+      {/if}
+      <div class={cx({"mt-2": showPubkey && event.kind !== MESSAGE})}>
+        <RoomItemContent {url} event={$innerEvent ?? event} />
+        {#if publication}
+          <PublicationFailure showToastOnRetry {publication} class="mt-1 flex justify-end" />
+        {/if}
+      </div>
+    </div>
+  </div>
+  <div class="flex gap-2 ml-10 mt-1 pl-1">
+    <ReactionSummary
+      {url}
+      {event}
+      {context}
+      {deleteReaction}
+      {createReaction}
+      placement="right"
+      innerEvent={$innerEvent} />
+    {#each $threads as thread (thread.id)}
+      <Link
+        href={makeThreadPath(url, thread.id)}
+        class="button button-xs button-neutral gap-1 rounded-full">
+        <Icon icon={NotesMinimalistic} />
+        <span class="max-w-48 truncate">
+          {reader(Thread)(thread).title() || "Thread"}
+        </span>
+      </Link>
+    {/each}
+    {#if path && $innerComments.length > 0}
+      {@const pubkeys = $innerComments.map(e => e.pubkey)}
+      {@const isOwn = pubkeys.includes($user.pubkey)}
+      {@const info = displayList(pubkeys.map(pubkey => $commenterDisplays.get(pubkey) ?? ""))}
+      {@const tooltip = `${info} commented`}
+      <Tooltip content={isMobile ? "" : tooltip} placement="right" class="flex">
+        <Link
+          href={path}
+          class={cx("button button-xs gap-1 rounded-full", {
+            "button-neutral": !isOwn,
+            "button-primary": isOwn,
+          })}>
+          <Icon icon={ReplyAlt} />
+          <span>{$innerComments.length} comment{$innerComments.length === 1 ? "" : "s"}</span>
+        </Link>
+      </Tooltip>
+    {/if}
+  </div>
+  {#if !isMobile}
+    <div
+      class="room__item-actions join absolute right-2 top-0.5 opacity-0 transition-all focus-within:opacity-100 group-hover:opacity-100">
+      {#if ENABLE_ZAPS}
+        <RoomItemZapButton {url} {event} />
+      {/if}
+      <RoomItemEmojiButton {url} {event} />
+      {#if replyTo}
+        <Button
+          aria-label="Reply"
+          class="button button-xs button-neutral join-item"
+          onclick={reply}>
+          <Icon icon={Reply} size={4} />
+        </Button>
+      {/if}
+      {#if edit}
+        <Button aria-label="Edit" class="button button-xs button-neutral join-item" onclick={edit}>
+          <Icon icon={Pen} size={4} />
+        </Button>
+      {/if}
+      <MenuButton
+        component={RoomItemMenu}
+        componentProps={{url, event}}
+        placement="top"
+        strayMargin={50}
+        iconSize={4}
+        aria-label="More options"
+        class="button button-xs button-neutral join-item" />
+    </div>
+  {/if}
+</TapTarget>
