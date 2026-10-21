@@ -6,6 +6,16 @@
   "license": "AGPL-3.0-or-later",
   "description": "AI assistant: tools over actions/metrics, OpenAI-compatible LLM adapter",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^1.0.0",
+    "@beamhop/core": "workspace:*",
+    "ai": "^5.0.0",
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@beamhop/admin-api": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/testkit": "workspace:*"
+  }
 }
