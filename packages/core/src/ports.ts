@@ -286,6 +286,12 @@ export interface Notification {
   body: string;
   url?: string;
   relayId?: RelayId;
+  /**
+   * `ops`: operational (may be mirrored to public status pages).
+   * `safety`: abuse/moderation matters — admins only, never published.
+   * Absent is treated as `safety` by consumers that publish (fail closed).
+   */
+  category?: 'ops' | 'safety';
 }
 
 export interface Notifier {

@@ -11,6 +11,8 @@ export interface Connection {
   /** Privacy-preserving hashed IP (never the raw IP). */
   readonly ipHash: string;
   readonly userAgent?: string;
+  /** ISO 3166 country code from a trusted proxy header (e.g. CF `cf-ipcountry`), if any. */
+  readonly country?: string;
   readonly openedAt: number;
   /** Pubkeys authenticated via NIP-42 on this connection. */
   readonly authed: Set<string>;
@@ -32,6 +34,8 @@ export interface RouteContext {
   /** Public base URL of this virtual relay, e.g. https://relay.example.com */
   publicUrl: string;
   ipHash: string;
+  /** ISO 3166 country code from a trusted proxy header (e.g. CF `cf-ipcountry`), if any. */
+  country?: string;
 }
 
 /** Web-standard HTTP handler. Return null to pass to the next handler. */
