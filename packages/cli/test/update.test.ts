@@ -31,6 +31,12 @@ function releases(newBin: string, opts: { sha?: string; version?: string } = {})
   };
 }
 
+/** The fake release is unsigned: these tests use the developer override. */
+const DEV_ENV = (home = tmp('beamhop-home-')) => ({
+  HOME: home,
+  BEAMHOP_UPDATE_ALLOW_UNSIGNED: '1',
+});
+
 function install() {
   const dir = tmp();
   const bin = join(dir, 'beamhop');
@@ -52,7 +58,12 @@ describe('update and rollback', () => {
     const { bin } = install();
     const newBin = script('0.2.0');
     const io = new BufferIo();
-    const { ctx } = testContext({ io, fetch: releases(newBin) as never, execPath: bin });
+    const { ctx } = testContext({
+      io,
+      fetch: releases(newBin) as never,
+      execPath: bin,
+      env: DEV_ENV(),
+    });
     expect(
       await updateCommand(ctx as never, ['--manifest', 'https://dl.example/latest.json'], {}, deps),
     ).toBe(0);
@@ -76,6 +87,7 @@ describe('update and rollback', () => {
     const { ctx } = testContext({
       fetch: releases(script('0.2.0'), { sha: 'ff'.repeat(32) }) as never,
       execPath: bin,
+      env: DEV_ENV(),
     });
     await expect(
       updateCommand(ctx as never, ['--manifest', 'https://dl.example/latest.json'], {}, deps),
@@ -88,14 +100,18 @@ describe('update and rollback', () => {
   test('a new binary that fails its smoke test or health check is not installed', async () => {
     const { bin } = install();
     const wrong = script('0.1.5'); // reports the wrong version
-    const { ctx } = testContext({ fetch: releases(wrong) as never, execPath: bin });
+    const { ctx } = testContext({ fetch: releases(wrong) as never, execPath: bin, env: DEV_ENV() });
     await expect(
       updateCommand(ctx as never, ['--manifest', 'https://dl.example/latest.json'], {}, deps),
     ).rejects.toThrow('did not start correctly');
     expect(readFileSync(bin, 'utf8')).toBe(script('0.1.0'));
 
     const sick = script('0.2.0', false);
-    const { ctx: ctx2 } = testContext({ fetch: releases(sick) as never, execPath: bin });
+    const { ctx: ctx2 } = testContext({
+      fetch: releases(sick) as never,
+      execPath: bin,
+      env: DEV_ENV(),
+    });
     await expect(
       updateCommand(
         ctx2 as never,

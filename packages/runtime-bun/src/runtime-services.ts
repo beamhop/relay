@@ -11,11 +11,37 @@
  *   `node.countryHeader`), never derived from IPs.
  */
 import { statfsSync } from 'node:fs';
+import { availableParallelism, cpus, totalmem } from 'node:os';
 import type { BeamhopConfig } from '@beamhop/core';
 import type { AcmeManager, EffectiveTls } from './tls.ts';
 
 export const DISK_SERVICE = 'runtime.disk';
 export const TLS_SERVICE = 'runtime.tls';
+/** `{ stop(reason) }`: stop this server (in-app update restarts into the new binary). */
+export const PROCESS_SERVICE = 'runtime.process';
+/** Machine facts for the resource advisor (same shape as lifecycle `HostInfo`). */
+export const HOST_SERVICE = 'runtime.host';
+
+export interface ProcessControl {
+  /** Stop serving (drain connections, stop modules, close storage). */
+  stop(reason: string): Promise<void>;
+}
+
+export interface HostService {
+  cpus: number;
+  memoryBytes: number;
+  rssBytes(): number;
+  verifyWorkers: number;
+}
+
+export function hostService(verifyWorkers: number): HostService {
+  return {
+    cpus: Math.max(1, availableParallelism?.() ?? cpus().length),
+    memoryBytes: totalmem(),
+    rssBytes: () => process.memoryUsage().rss,
+    verifyWorkers,
+  };
+}
 
 export interface DiskUsage {
   free: number;

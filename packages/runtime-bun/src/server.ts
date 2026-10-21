@@ -35,9 +35,12 @@ import { optionalModuleSources } from './modules.ts';
 import { JsonLogger } from './ports.ts';
 import {
   DISK_SERVICE,
+  HOST_SERVICE,
+  PROCESS_SERVICE,
   TLS_SERVICE,
   countryFrom,
   diskService,
+  hostService,
   tlsService,
 } from './runtime-services.ts';
 import {
@@ -271,6 +274,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   kernel.provide('runtime', { name: 'bun', safe, dataDir: layout.root });
   if (sqlService) kernel.provide('storage.sql', sqlService);
   kernel.provide(DISK_SERVICE, diskService(layout.root));
+  kernel.provide(HOST_SERVICE, hostService(verifyPool?.size ?? 0));
   // Optional (enterprise) modules: hot-load/unload when `config.modules[id]` appears/disappears.
   if (opts.optionalModules !== false) {
     manageOptionalModules(
@@ -648,6 +652,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     })();
     return stopping;
   };
+  kernel.provide(PROCESS_SERVICE, { stop });
 
   return {
     kernel,

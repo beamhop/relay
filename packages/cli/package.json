@@ -11,6 +11,7 @@
     "@beamhop/admin-api": "workspace:*",
     "@beamhop/blobs": "workspace:*",
     "@beamhop/core": "workspace:*",
+    "@beamhop/lifecycle": "workspace:*",
     "@beamhop/runtime-bun": "workspace:*",
     "@beamhop/storage-sql": "workspace:*",
     "@noble/curves": "^1.9.7",

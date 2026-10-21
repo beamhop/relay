@@ -34,6 +34,7 @@ const SERVER_FLAGS = new Set([
   '--listen',
   '--safe',
   '--healthcheck',
+  '--verify-workers',
 ]);
 
 export const BUILTIN_COMMANDS = [

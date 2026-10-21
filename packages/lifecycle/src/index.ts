@@ -295,3 +295,6 @@ export function createLifecycleModule(opts: LifecycleOptions = {}): BeamhopModul
 }
 
 export const lifecycleModule = createLifecycleModule();
+
+// In-app updates, doctor and resource advisor (a separate module, `system`).
+export * from './system/index.ts';
