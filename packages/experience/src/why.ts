@@ -183,10 +183,7 @@ const REJECTION_OPTIONS: Record<string, { cause: string; options: WhyOption[]; f
     },
     'policy.content': {
       cause: 'The post had too many links, or a blocked link or phrase.',
-      options: [
-        { label: 'Change blocked words and links', screen: '/settings/filters' },
-        { label: 'Relax spam blocking', screen: '/settings/goals' },
-      ],
+      options: [{ label: 'Relax spam blocking', screen: '/settings/goals' }],
       fields: ['maxLinks'],
     },
     'policy.mute': {
@@ -291,7 +288,7 @@ export async function explainWhy(
       else if (line.source === 'goal' && line.goal)
         options.push({ label: `Move the ${line.goal} goal`, screen: '/settings/goals' });
       else if (line.source === 'tier')
-        options.push({ label: 'Change the tier', screen: '/people/tiers' });
+        options.push({ label: 'Change the tier', screen: '/people?tab=users' });
       options.push({ label: 'Override it in Advanced', screen: '/settings/advanced' });
       options.push({
         label: 'Try a different value on recent traffic first',
