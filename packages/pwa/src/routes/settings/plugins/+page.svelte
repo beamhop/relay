@@ -5,8 +5,10 @@
    * first; it arrives turned off), review its settings, then turn it on.
    * Per plugin: how often it runs, what it blocks, speed and errors; change
    * settings; remove. A safety-switch card explains plugins Beamhop turned off.
+   * With the assistant on, "Write a plugin" turns a description into a tested
+   * plugin that arrives turned off (§6.5.4).
    */
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { Component } from 'svelte';
   import Puzzle from '@lucide/svelte/icons/puzzle';
   import Filter from '@lucide/svelte/icons/filter';
@@ -16,9 +18,11 @@
   import BadgeCheck from '@lucide/svelte/icons/badge-check';
   import ShieldOff from '@lucide/svelte/icons/shield-off';
   import Plus from '@lucide/svelte/icons/plus';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
   import { app } from '$lib/stores/app.svelte';
   import { flow, query } from '$lib/stores/actions.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
+  import { toasts } from '$lib/stores/toasts.svelte';
   import type { PluginCatalogItem, PluginStatusRow } from '$lib/api/types';
   import { fieldsFromSchema } from '$lib/forms/json-schema';
   import { flatten, formDefaults, unflatten } from '$lib/forms/values';
@@ -29,6 +33,8 @@
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
+  import PluginWriter from '$lib/components/plugins/PluginWriter.svelte';
+  import { DeferredDiscard, aiMarked, markAi, writtenByAssistant } from '$lib/components/plugins/writer';
   import { m } from '$lib/paraglide/messages.js';
 
   const ICONS: Record<string, Component> = {
@@ -51,6 +57,39 @@
   let jsonError = $state<string | null>(null);
 
   const available = $derived(app.hasAction('plugins.catalog'));
+  const canWrite = $derived(app.hasAction('ai.generate-plugin'));
+  let writerOpen = $state(false);
+  let marked = $state(aiMarked());
+  /** Drafts discarded from the writer, removed once their undo window has passed. */
+  let discarding = $state<string[]>([]);
+  const DISCARD_MS = 8000;
+  const discarder = new DeferredDiscard(async (id) => {
+    discarding = discarding.filter((x) => x !== id);
+    const def = app.action('plugins.uninstall');
+    if (def) await app.api.run(def.id, { id }, def.scope).catch(() => undefined);
+    markAi(id, false);
+    marked = aiMarked();
+    void load();
+  }, DISCARD_MS);
+  onDestroy(() => discarder.flush());
+
+  function discardDraft(id: string, name: string) {
+    discarder.schedule(id);
+    discarding = [...discarding, id];
+    toasts.success(
+      m.plugin_writer_discarded({ name }),
+      async () => {
+        discarder.cancel(id);
+        discarding = discarding.filter((x) => x !== id);
+      },
+      Math.floor((Date.now() + DISCARD_MS) / 1000),
+    );
+  }
+
+  function writerChanged() {
+    marked = aiMarked();
+    void load();
+  }
 
   async function load() {
     const [cat, st] = await Promise.all([
@@ -68,7 +107,9 @@
   const rowOf = (id: string) => rows.find((r) => r.id === id);
   const installed = $derived.by(() => {
     const ids = new Set([...(items ?? []).filter((i) => i.installed).map((i) => i.id), ...rows.map((r) => r.id)]);
-    return [...ids].map((id) => ({ id, item: items?.find((i) => i.id === id), row: rowOf(id) }));
+    return [...ids]
+      .filter((id) => !discarding.includes(id))
+      .map((id) => ({ id, item: items?.find((i) => i.id === id), row: rowOf(id) }));
   });
   const catalog = $derived((items ?? []).filter((i) => !i.installed && !rowOf(i.id)));
   const tripped = $derived(rows.filter((r) => r.status === 'tripped' || r.tripped));
@@ -139,6 +180,20 @@
   {:else if items === null}
     <div class="space-y-2"><Skeleton class="h-20 w-full" /><Skeleton class="h-20 w-full" /></div>
   {:else}
+    {#if canWrite}
+      <button
+        type="button"
+        class="flex w-full items-start gap-3 rounded-xl border bg-primary/5 p-4 text-left hover:bg-primary/10"
+        onclick={() => (writerOpen = true)}
+        data-testid="plugin-write"
+      >
+        <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Sparkles class="size-4" /></span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-medium">{m.plugin_writer_entry()}</span>
+          <span class="mt-0.5 block text-xs text-muted-foreground">{m.plugin_writer_entry_hint()}</span>
+        </span>
+      </button>
+    {/if}
     {#each tripped as t (t.id)}
       <section class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" data-testid="plugin-safety" role="alert">
         <div class="flex items-start gap-3">
@@ -176,6 +231,9 @@
                   <div class="flex flex-wrap items-center gap-2">
                     <p class="text-sm font-medium">{p.item?.name ?? r?.name ?? p.id}</p>
                     {#if r}<Badge tone={statusTone(r.status)}>{statusLabel(r.status)}</Badge>{/if}
+                    {#if writtenByAssistant(p.id, r as { source?: unknown } | undefined, marked)}
+                      <span data-testid="plugin-ai-badge"><Badge tone="accent"><Sparkles class="size-3" />{m.plugin_writer_badge()}</Badge></span>
+                    {/if}
                   </div>
                   {#if p.item?.description}<p class="mt-0.5 text-xs text-muted-foreground">{p.item.description}</p>{/if}
                   {#if !on && r?.status !== 'tripped'}
@@ -281,3 +339,7 @@
     {/if}
   {/snippet}
 </Sheet>
+
+{#if canWrite}
+  <PluginWriter bind:open={writerOpen} onchanged={writerChanged} ondiscard={discardDraft} />
+{/if}
