@@ -14,7 +14,7 @@ import type { ActionDef } from './actions.ts';
 import type { AuthProvider, Principal } from './auth.ts';
 import { EventBus } from './bus.ts';
 import type { BeamhopConfig, EffectiveLimits, RelayConfig } from './config.ts';
-import type { Connection, RouteContext } from './connection.ts';
+import type { Connection, RequestGate, RequestGateContext, RouteContext } from './connection.ts';
 import { PolicyPipeline } from './policy.ts';
 import type { PolicyHooks } from './policy.ts';
 import type { Notification, Ports, RelayId, RuntimeName } from './ports.ts';
@@ -149,6 +149,11 @@ export interface Kernel {
   setNotifier(fn: (n: Notification) => Promise<void>): void;
   /** WebSocket handler (set by the relay module). */
   ws?: ConnectionHandler;
+  /**
+   * Opt-in request gates (network controls). Runtimes run them before dispatching
+   * HTTP requests and WebSocket upgrades (see {@link runRequestGates}). Empty by default.
+   */
+  readonly gates?: RequestGate[];
   isEnabled(moduleId: string): boolean;
   /** Typed service registry so modules can expose APIs to dependents (e.g. `admin.config`). */
   provide<T>(name: string, service: T): void;
@@ -240,6 +245,7 @@ export async function createKernel(opts: KernelOptions): Promise<Kernel> {
     cards: [],
     ui: [],
     playbooks: [],
+    gates: [],
     notify: (n) => notifier(n),
     setNotifier(fn) {
       notifier = fn;
@@ -295,6 +301,28 @@ export function dispatchHttp(
   executionCtx?: Parameters<Hono<KernelEnv>['fetch']>[2],
 ): Response | Promise<Response> {
   return kernel.http.fetch(req, { ...env, route }, executionCtx);
+}
+
+/**
+ * Runtime helper: run the kernel's request gates. Returns a Response when a gate
+ * stops the request. `clientIp` is a thunk so runtimes only resolve/expose the raw
+ * IP when at least one gate is registered.
+ */
+export async function runRequestGates(
+  kernel: Pick<Kernel, 'gates'>,
+  req: Request,
+  ctx: Omit<RequestGateContext, 'clientIp'> & { clientIp?: () => string | undefined },
+): Promise<Response | undefined> {
+  const gates = kernel.gates;
+  if (!gates || gates.length === 0) return undefined;
+  const ip = ctx.clientIp?.();
+  const gctx: RequestGateContext = { route: ctx.route, upgrade: ctx.upgrade };
+  if (ip) gctx.clientIp = ip;
+  for (const g of gates) {
+    const res = await g.check(req, gctx);
+    if (res) return res;
+  }
+  return undefined;
 }
 
 export function topoSort(modules: BeamhopModule[]): BeamhopModule[] {

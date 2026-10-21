@@ -18,6 +18,7 @@ import {
   dispatchHttp,
   parseConfig,
   resolveRelay,
+  runRequestGates,
   topoSort,
 } from '@beamhop/core';
 import type { Server } from 'bun';
@@ -313,8 +314,18 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       return json(selfCheck(req, cfg, meta, tlsDecision.mode, nonce));
     }
 
+    // Opt-in request gates (network controls); no-op and no raw IP exposure without gates.
+    const clientIp = () => meta.ip;
     const asset = assets.serve(req, url.pathname);
-    if (asset) return asset;
+    if (asset) {
+      if (!kernel.gates?.length) return asset;
+      const route: RouteContext = {
+        relayId: '',
+        publicUrl: `${meta.proto}://${meta.host}`,
+        ipHash: ports.crypto.hashIp(meta.ip),
+      };
+      return (await runRequestGates(kernel, req, { route, upgrade: false, clientIp })) ?? asset;
+    }
 
     const ipHash = ports.crypto.hashIp(meta.ip);
     const relay = resolveRelay(cfg, url, meta.host);
@@ -325,6 +336,8 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
           publicUrl: `${meta.proto}://${meta.host}`,
           ipHash,
         };
+        const denied = await runRequestGates(kernel, req, { route, upgrade: false, clientIp });
+        if (denied) return denied;
         return dispatchHttp(kernel, req, route);
       }
       return new Response('No relay is configured for this address.', { status: 404 });
@@ -336,6 +349,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       publicUrl: `${meta.proto}://${meta.host}${prefix}`,
       ipHash,
     };
+
+    const denied = await runRequestGates(kernel, req, {
+      route,
+      upgrade: isWsUpgrade(req),
+      clientIp,
+    });
+    if (denied) return denied;
 
     if (isWsUpgrade(req) && kernel.ws) {
       const conn = new BunConnection(
