@@ -6,7 +6,9 @@
   import LoaderCircle from '@lucide/svelte/icons/loader-circle';
   import X from '@lucide/svelte/icons/x';
   import { prefs } from '$lib/stores/prefs.svelte';
-  import type { ChecklistItem } from '$lib/checklist';
+  import Rocket from '@lucide/svelte/icons/rocket';
+  import { app } from '$lib/stores/app.svelte';
+  import { LAUNCH_ITEMS, type ChecklistItem } from '$lib/checklist';
   import { to } from '$lib/nav';
   import { nearestTab } from '$lib/screens';
   import { announceFallback } from '$lib/fallback';
@@ -80,6 +82,11 @@
             </span>
             {#if !item.done}<ChevronRight class="size-4 text-muted-foreground" />{/if}
           </a>
+          {#if LAUNCH_ITEMS.has(item.id) && app.hasAction('experience.launch-kit')}
+            <a href={to('/launch')} class="mb-2 ml-8 inline-flex items-center gap-1 text-xs text-primary" data-testid={`checklist-launch-${item.id}`}>
+              <Rocket class="size-3.5" />{m.launch_open()}
+            </a>
+          {/if}
         </li>
       {/each}
     </ul>

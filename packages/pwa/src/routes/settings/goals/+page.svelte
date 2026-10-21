@@ -5,6 +5,10 @@
    * limits. "What this changes" comes from `policy.explain-limits` (current
    * values) and the shared goals engine (values after the move). Saving goes
    * through propose → plain diff → apply → 5-minute undo.
+   *
+   * Advanced (§6.7): every exact value shows which goal produced it; values
+   * the admin overrode are marked "Changed by you" with a way back to the
+   * goal's value, and each slider counts its overridden values.
    */
   import { onMount } from 'svelte';
   import ArrowRight from '@lucide/svelte/icons/arrow-right';
@@ -18,6 +22,9 @@
   import Slider from '$lib/components/ui/slider.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
+  import Badge from '$lib/components/ui/badge.svelte';
+  import ItemLens from '$lib/components/ItemLens.svelte';
+  import { goalLines, overrideCounts, revertOverride, type GoalLine } from './overrides';
   import { m } from '$lib/paraglide/messages.js';
 
   type GoalKey = keyof Goals;
@@ -34,6 +41,7 @@
   let goals = $state<Goals | null>(null);
   let current = $state<LimitExplanation[]>([]);
   let focus = $state<GoalKey>('openness');
+  let advancedOpen = $state(false);
 
   async function load() {
     const r = await app.api.relayConfig();
@@ -107,6 +115,23 @@
   }
 
   const strip = (t: string) => t.split(' — ')[0] ?? t;
+
+  /** Exact values with where each one comes from (local goals engine, same as the server). */
+  const exact = $derived<GoalLine[]>(relay ? goalLines(relay, safeExplain) : []);
+  const overrides = $derived(overrideCounts(exact));
+  const goalTitle = (k: GoalKey) => GOALS.find((g) => g.key === k)?.title() ?? k;
+
+  async function revert(l: GoalLine) {
+    await configFlow.propose(
+      { merge: revertOverride(l.field), summary: m.goalov_revert_summary() },
+      {
+        relay: true,
+        onApplied: () => {
+          void load();
+        },
+      },
+    );
+  }
 </script>
 
 <svelte:head><title>{m.settings_goals_title()} · {m.app_name()}</title></svelte:head>
@@ -136,6 +161,11 @@
           <div class="flex justify-between text-[11px] text-muted-foreground">
             <span>{g.low()}</span><span>{g.high()}</span>
           </div>
+          {#if overrides[g.key]}
+            <a href="#exact-values" class="mt-2 inline-flex items-center gap-1 text-xs text-warning" data-testid="goal-overrides" onclick={() => (advancedOpen = true)}>
+              {overrides[g.key] === 1 ? m.goalov_count_one() : m.goalov_count({ count: overrides[g.key] ?? 0 })}
+            </a>
+          {/if}
           {#if focus === g.key && explainFor(g.key).length}
             <ul class="mt-3 space-y-1 border-t pt-3 text-xs text-muted-foreground" data-testid="goal-explain">
               {#each explainFor(g.key) as l (l.field)}
@@ -183,4 +213,30 @@
       </div>
     </aside>
   </div>
+
+  <details id="exact-values" class="mt-6 scroll-mt-20 rounded-xl border p-4" bind:open={advancedOpen} data-testid="goal-exact">
+    <summary class="cursor-pointer text-sm font-medium">{m.goalov_advanced_title()}</summary>
+    <p class="mt-2 text-xs text-muted-foreground">{m.goalov_advanced_hint()}</p>
+    <ul class="mt-3 divide-y text-sm">
+      {#each exact as l (l.field)}
+        <li class="py-2.5" data-testid="exact-row" data-field={l.field} data-source={l.source}>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="min-w-0 flex-1">{l.text}</span>
+            {#if l.source === 'override'}<Badge tone="warn">{m.goalov_changed()}</Badge>{/if}
+          </div>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            {#if l.source === 'goal' && l.goal}{m.goalov_from_goal({ goal: goalTitle(l.goal) })}
+            {:else if l.source === 'override' && l.goalText}{m.goalov_goal_would({ text: l.goalText })}
+            {:else if l.source === 'tier'}{m.goalov_from_tier()}
+            {:else if l.source === 'setting'}{m.goalov_from_setting()}
+            {:else}{m.goalov_fixed()}{/if}
+          </p>
+          {#if l.source === 'override' && l.revertible}
+            <Button size="sm" variant="secondary" class="mt-2" disabled={configFlow.busy} onclick={() => revert(l)} data-testid="goal-revert">{m.goalov_revert()}</Button>
+          {/if}
+          <ItemLens lines={[l.technical, `source: ${l.source}${l.fromGoal ? ` (goals.${l.fromGoal})` : ''}`]} />
+        </li>
+      {/each}
+    </ul>
+  </details>
 {/if}

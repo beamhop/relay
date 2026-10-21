@@ -32,6 +32,14 @@ export interface LiveRelay {
   bytesPerSecond: number;
   blobUploadsPerMinute: number;
   errorsPerMinute: number;
+  /** errors / (accepted + rejected + REQs) over the last minute; 0 when idle. */
+  errorRate: number;
+  /** Posts stored for this relay and their approximate database size (refreshed every 60 s). */
+  storageEvents: number | null;
+  storageBytes: number | null;
+  /** Uploaded files and their total size for this relay (refreshed every 10 min). */
+  blobFiles: number | null;
+  blobBytes: number | null;
 }
 
 export interface LiveSnapshot {
@@ -79,6 +87,8 @@ interface EngineLike {
 }
 
 export const SLOW_EVERY_SECONDS = 60;
+/** How often per-relay blob usage is re-counted from the blob index. */
+export const BLOB_SCAN_SECONDS = 600;
 
 export class InsightsRuntime implements InsightsService {
   readonly registry: MetricsRegistry;
@@ -92,6 +102,8 @@ export class InsightsRuntime implements InsightsService {
   private storage: StoreStats | null = null;
   private storageAt = 0;
   private disk: { freeBytes: number; totalBytes: number } | null = null;
+  private relayStorage = new Map<RelayId, StoreStats>();
+  private blobUsage = new Map<RelayId, { at: number; files: number; bytes: number }>();
 
   constructor(
     readonly kernel: Kernel,
@@ -179,11 +191,21 @@ export class InsightsRuntime implements InsightsService {
       r.set(METRICS.storageBytes, { relay: NODE }, total.bytes);
       for (const id of relays) {
         const s = await k.ports.events.stats(id);
+        this.relayStorage.set(id, s);
         r.set(METRICS.storageEvents, { relay: id }, s.events);
         r.set(METRICS.storageBytes, { relay: id }, s.bytes);
       }
     } catch (err) {
       k.bus.emit('error', { source: 'insights.storage', message: String(err) });
+    }
+    try {
+      for (const id of relays) {
+        const b = await this.blobStats(id);
+        r.set(METRICS.blobStorageBytes, { relay: id }, b.bytes);
+        r.set(METRICS.blobStorageFiles, { relay: id }, b.files);
+      }
+    } catch (err) {
+      k.bus.emit('error', { source: 'insights.blobs', message: String(err) });
     }
     this.disk = await readDisk(k, this.opts.disk);
     if (this.disk) {
@@ -199,6 +221,27 @@ export class InsightsRuntime implements InsightsService {
       k.bus.emit('error', { source: 'insights.health', message: String(err) });
     }
     await this.analyticsStore?.flush(this.now());
+  }
+
+  /** Files and bytes uploaded to a relay (blob index scan, cached 10 min, capped at 100k rows). */
+  async blobStats(relayId: RelayId): Promise<{ files: number; bytes: number }> {
+    const now = this.now();
+    const hit = this.blobUsage.get(relayId);
+    if (hit && now - hit.at < BLOB_SCAN_SECONDS) return hit;
+    let files = 0;
+    let bytes = 0;
+    let cursor: string | undefined;
+    do {
+      const page = await this.kernel.ports.blobIndex.list(relayId, { cursor, limit: 500 });
+      for (const o of page.items) {
+        files++;
+        bytes += o.size;
+      }
+      cursor = page.cursor;
+    } while (cursor && files < 100_000);
+    const out = { at: now, files, bytes };
+    this.blobUsage.set(relayId, out);
+    return out;
   }
 
   score(relayId: RelayId | null): Promise<HealthReport> {
@@ -220,6 +263,11 @@ export class InsightsRuntime implements InsightsService {
       const accepted = r.rate(METRICS.eventsAccepted, m);
       const rejected = r.rate(METRICS.eventsRejected, m);
       const sk = r.recentSketch(METRICS.eventLatency, m);
+      const reqs = r.rate(METRICS.reqServed, m);
+      const errs = r.rate(METRICS.errors, m);
+      const handled = accepted + rejected + reqs;
+      const st = this.relayStorage.get(id);
+      const blobs = this.blobUsage.get(id);
       return {
         relayId: id,
         connections: r.gauge(METRICS.connections, m) ?? 0,
@@ -232,7 +280,12 @@ export class InsightsRuntime implements InsightsService {
         p95Ms: round(sk.quantile(0.95)),
         bytesPerSecond: round(r.rate(METRICS.bytesIn, m)),
         blobUploadsPerMinute: round(r.rate(METRICS.blobUploads, m) * 60),
-        errorsPerMinute: round(r.rate(METRICS.errors, m) * 60),
+        errorsPerMinute: round(errs * 60),
+        errorRate: handled > 0 ? Math.round((errs / handled) * 10000) / 10000 : 0,
+        storageEvents: st?.events ?? null,
+        storageBytes: st?.bytes ?? null,
+        blobFiles: blobs?.files ?? null,
+        blobBytes: blobs?.bytes ?? null,
       };
     });
     return {

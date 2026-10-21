@@ -616,11 +616,11 @@ Everything to share your relay: addresses, a QR code, a draft announcement and t
 
 ### My time this week
 
-How many minutes you spent managing your relay this week. Only you can see this, and it never leaves your server.
+How many minutes you spent managing your relay this week, how many things you got done, and roughly how much time suggestions saved you. Only you can see this, and it never leaves your server.
 
 - **id:** `experience.my-stats` · **CLI:** `beamhop experience my-stats` · **scope:** node · **permission:** `relay.read`
 - read-only
-- *Technical:* Sessions from admin.action + experience.ping (10-minute gap), per ISO week.
+- *Technical:* Sessions from admin.action + experience.ping (10-minute gap), per ISO week, in DocStore experience.admin-time (no network). minutesSaved = approved suggestions (admin.action experience.approve-card) × 3.
 
 ### I’m here
 
@@ -694,15 +694,15 @@ Checks your relay from the outside the way people will use it: connect, post, re
 
 ### Why?
 
-Explains a refused post, a limit, a health score or a suggestion in plain words, with what you can do about it.
+Explains a refused post, a limit, a health score, a suggestion, an alert, a number on a chart or why someone is blocked — in plain words, with what you can do about it.
 
 - **id:** `experience.why` · **CLI:** `beamhop experience why` · **scope:** relay · **permission:** `relay.read`
 - read-only
-- *Technical:* rejected-event: in-memory ring of event.rejected/event.held; limit: policy.explainLimits; health: kernel.health; card: inbox.
+- *Technical:* rejected-event: in-memory ring of event.rejected/event.held; limit: policy.explainLimits; health: kernel.health; card: inbox; alert: alerts.engine active/history; metric: built-in table + insights.live() + alerts baselines; block: policy bans/mutes + kernel.access chain + tier.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `(input)` | section or section or section or section |  |  |
+| `(input)` | section or section or section or section or section or section or section |  |  |
 
 ## groups
 

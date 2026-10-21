@@ -23,6 +23,7 @@
   import Badge from '$lib/components/ui/badge.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
   import PullToRefresh from '$lib/components/PullToRefresh.svelte';
+  import InsightsLink from '$lib/components/home/InsightsLink.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
   interface Admin {
@@ -94,6 +95,7 @@
 
 <div class="mb-3 flex items-center justify-between">
   <h1 class="text-xl font-semibold tracking-tight">{m.nav_people()}</h1>
+  <InsightsLink section="community" />
 </div>
 <Segmented
   label={m.nav_people()}

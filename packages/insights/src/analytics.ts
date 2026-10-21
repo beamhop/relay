@@ -103,23 +103,102 @@ export function clientName(event: NostrEvent): string | undefined {
 
 const COUNTRY = /^[A-Z]{2}$/;
 
+/** Plain names for common event kinds (technical kind numbers stay in `kind`). */
+export const KIND_NAMES: Record<number, string> = {
+  0: 'Profiles',
+  1: 'Posts',
+  3: 'Follow lists',
+  4: 'Direct messages (old style)',
+  5: 'Deletions',
+  6: 'Reposts',
+  7: 'Reactions',
+  8: 'Badges awarded',
+  9: 'Group chat messages',
+  11: 'Group posts',
+  13: 'Sealed messages',
+  14: 'Private messages',
+  16: 'Reposts',
+  20: 'Pictures',
+  21: 'Videos',
+  22: 'Short videos',
+  40: 'Channel created',
+  41: 'Channel updated',
+  42: 'Channel messages',
+  1059: 'Private messages (wrapped)',
+  1063: 'File info',
+  1068: 'Polls',
+  1111: 'Comments',
+  1222: 'Voice messages',
+  1984: 'Reports',
+  1985: 'Labels',
+  9734: 'Tip requests',
+  9735: 'Tip receipts',
+  9802: 'Highlights',
+  10000: 'Mute lists',
+  10002: 'Relay lists',
+  10050: 'Message relay lists',
+  10063: 'Media server lists',
+  13194: 'Wallet info',
+  22242: 'Sign-ins',
+  24133: 'Remote signing',
+  24242: 'Upload permissions',
+  27235: 'Web sign-ins',
+  30000: 'People lists',
+  30003: 'Bookmark sets',
+  30008: 'Profile badges',
+  30009: 'Badge definitions',
+  30023: 'Articles',
+  30024: 'Article drafts',
+  30078: 'App data',
+  30311: 'Live events',
+  30315: 'Statuses',
+  30402: 'Listings',
+  31922: 'Calendar events',
+  31923: 'Calendar events',
+  31989: 'App recommendations',
+  31990: 'App info',
+  34550: 'Communities',
+};
+
+/** Plain name for an event kind ("Posts", "Reactions"; ranges for unknown ones). */
+export function kindName(kind: number): string {
+  const known = KIND_NAMES[kind];
+  if (known) return known;
+  if (kind >= 20000 && kind < 30000) return 'Short-lived messages';
+  if (kind >= 10000 && kind < 20000) return 'Settings and lists';
+  if (kind >= 30000 && kind < 40000) return 'Editable items';
+  return 'Other';
+}
+
 export interface AnalyticsReport {
   relayId: RelayId;
   activeUsers: { daily: number; weekly: number; monthly: number };
   /** Daily active users for the last `days` days, oldest first. */
   dailyActive: Array<{ day: string; users: number; newUsers: number; events: number }>;
-  topKinds: Array<{ kind: number; count: number }>;
+  /** `name` is plain ("Posts"); `kind` is the technical number. */
+  topKinds: Array<{ kind: number; name: string; count: number }>;
   topClients: Array<{ name: string; count: number }>;
   topUserAgents: Array<{ name: string; count: number }>;
   countries: Array<{ country: string; count: number }>;
   cohorts: Array<{ weekStart: string; size: number; retained: number[] }>;
   storageByUser: Array<{ pubkey: string; bytes: number; files: number }>;
+  /** All uploaded files on this relay (not only the top users). */
+  storageTotal: { bytes: number; files: number; users: number };
+  /**
+   * Where the country counts come from: only a 2-letter country code from the
+   * hosting runtime's header (e.g. cf-ipcountry). IP addresses are never read
+   * or stored for analytics.
+   */
+  geoSource: 'runtime-header' | 'off';
 }
 
 export class Analytics {
   private days = new Map<string, DayState>();
   private cohorts = new Map<RelayId, RelayCohorts>();
-  private storageCache = new Map<RelayId, { at: number; rows: AnalyticsReport['storageByUser'] }>();
+  private storageCache = new Map<
+    RelayId,
+    { at: number; rows: AnalyticsReport['storageByUser']; total: AnalyticsReport['storageTotal'] }
+  >();
   private pending: Promise<unknown>[] = [];
 
   constructor(
@@ -387,12 +466,21 @@ export class Analytics {
       scanned += page.items.length;
       cursor = page.cursor;
     } while (cursor && scanned < 100_000);
-    const rows = [...by]
-      .map(([pubkey, v]) => ({ pubkey, ...v }))
-      .sort((a, b) => b.bytes - a.bytes)
-      .slice(0, 100);
-    this.storageCache.set(relayId, { at: now, rows });
+    const all = [...by].map(([pubkey, v]) => ({ pubkey, ...v }));
+    const total = { bytes: 0, files: 0, users: all.length };
+    for (const r of all) {
+      total.bytes += r.bytes;
+      total.files += r.files;
+    }
+    const rows = all.sort((a, b) => b.bytes - a.bytes).slice(0, 100);
+    this.storageCache.set(relayId, { at: now, rows, total });
     return rows.slice(0, limit);
+  }
+
+  /** Totals of the last {@link storageByUser} scan (scans when there is none yet). */
+  async storageTotal(relayId: RelayId, now: number): Promise<AnalyticsReport['storageTotal']> {
+    if (!this.storageCache.get(relayId)) await this.storageByUser(relayId, now);
+    return this.storageCache.get(relayId)?.total ?? { bytes: 0, files: 0, users: 0 };
   }
 
   async report(
@@ -452,7 +540,11 @@ export class Analytics {
       relayId,
       activeUsers: { daily: union(1), weekly: union(7), monthly: union(30) },
       dailyActive: series,
-      topKinds: top(kinds).map(([k, count]) => ({ kind: Number(k), count })),
+      topKinds: top(kinds).map(([k, count]) => ({
+        kind: Number(k),
+        name: kindName(Number(k)),
+        count,
+      })),
       topClients: top(clients).map(([name, count]) => ({ name, count })),
       topUserAgents: top(agents).map(([name, count]) => ({ name, count })),
       countries: this.opts.geo
@@ -460,6 +552,8 @@ export class Analytics {
         : [],
       cohorts,
       storageByUser: await this.storageByUser(relayId, now),
+      storageTotal: await this.storageTotal(relayId, now),
+      geoSource: this.opts.geo ? 'runtime-header' : 'off',
     };
   }
 }

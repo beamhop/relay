@@ -17,7 +17,9 @@ describe('screens', () => {
       tab: '/settings',
     });
     expect(resolveScreen('/people/admins').href).toBe('/people?tab=team');
-    expect(resolveScreen('/home/launch-kit').href).toBe('/');
+    expect(resolveScreen('/home/launch-kit').href).toBe('/launch');
+    expect(resolveScreen('/home/insights').href).toBe('/insights');
+    expect(resolveScreen('/insights').href).toBe('/insights');
     expect(resolveScreen('/activity/moderation').href).toBe('/activity?tab=queue');
     expect(resolveScreen('/settings/goals').fallback).toBe(false);
     expect(resolveScreen('/activity?tab=bin').href).toBe('/activity?tab=bin');

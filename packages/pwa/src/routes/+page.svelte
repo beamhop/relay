@@ -24,6 +24,9 @@
   import SparkTile from '$lib/components/home/SparkTile.svelte';
   import AttentionStack from '$lib/components/home/AttentionStack.svelte';
   import SetupChecklist from '$lib/components/home/SetupChecklist.svelte';
+  import MyWeek from '$lib/components/home/MyWeek.svelte';
+  import WhyButton from '$lib/components/WhyButton.svelte';
+  import { to } from '$lib/nav';
   import PullToRefresh from '$lib/components/PullToRefresh.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
@@ -36,7 +39,7 @@
   let error = $state<unknown>(null);
   let items = $state<ChecklistItem[]>([]);
   let storage = $state<number | null>(null);
-  let tile = $state<{ title: string; points: number[]; unit: string; help: string } | null>(null);
+  let tile = $state<{ title: string; points: number[]; unit: string; help: string; section: string } | null>(null);
   let tileOpen = $state(false);
 
   async function load() {
@@ -129,8 +132,8 @@
     !health ? '' : health.status === 'ok' ? m.health_ok() : health.status === 'warn' ? m.health_warn() : m.health_critical(),
   );
 
-  function openTile(title: string, points: number[], unit: string, help: string) {
-    tile = { title, points, unit, help };
+  function openTile(title: string, points: number[], unit: string, help: string, section = 'live') {
+    tile = { title, points, unit, help, section };
     tileOpen = true;
   }
 </script>
@@ -147,7 +150,10 @@
       {#if health}
         <HealthRing score={health.score} status={health.status} label={m.health_label({ score: health.score })} />
         <div class="min-w-0 flex-1">
-          <h1 id="health-title" class="text-lg font-semibold">{statusText}</h1>
+          <div class="flex items-baseline justify-between gap-2">
+            <h1 id="health-title" class="text-lg font-semibold">{statusText}</h1>
+            <WhyButton subject={{ subject: 'health' }} />
+          </div>
           <p class="mt-0.5 text-sm text-muted-foreground">{health.message}</p>
           <ul class="mt-3 flex flex-wrap gap-x-3 gap-y-1.5" aria-label={m.health_subsystems()}>
             {#each health.subsystems as s (s.subsystem)}
@@ -173,13 +179,20 @@
       <Skeleton class="h-36 w-full" />
     {/if}
 
-    <section aria-label={m.home_tiles()} class="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <section aria-label={m.home_tiles()}>
+    {#if app.hasAction('insights.overview')}
+      <div class="mb-2 flex justify-end">
+        <a href={to('/insights')} class="text-xs text-muted-foreground underline-offset-2 hover:underline" data-testid="home-insights-link">{m.insights_open_detail()}</a>
+      </div>
+    {/if}
+    <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
       <SparkTile
         testid="tile-connections"
         label={m.tile_connections()}
         value={(insights?.connections ?? last(live.connections))?.toString() ?? '—'}
         points={insights?.series.connections ?? live.connections}
         onclick={() => openTile(m.tile_connections(), insights?.series.connections ?? live.connections, '', m.tile_connections_help())}
+        why={{ subject: 'metric', metric: 'connections', ...(insights ? { value: insights.connections } : {}) }}
       />
       <SparkTile
         testid="tile-events"
@@ -187,6 +200,7 @@
         value={insights ? String(insights.eventsPerSecond) : live.connected ? String(last(live.eventsPerSec) ?? 0) : '—'}
         points={insights?.series.events ?? live.eventsPerSec}
         onclick={() => openTile(m.tile_events(), insights?.series.events ?? live.eventsPerSec, '/s', m.tile_events_help())}
+        why={{ subject: 'metric', metric: 'events.accepted', ...(insights ? { value: insights.eventsPerSecond } : {}) }}
       />
       <SparkTile
         testid="tile-errors"
@@ -194,14 +208,17 @@
         value={insights ? String(insights.errorsPerMinute) : live.connected ? String(live.errors.reduce((a, b) => a + b, 0)) : '—'}
         points={insights?.series.errors ?? live.errors}
         onclick={() => openTile(m.tile_errors(), insights?.series.errors ?? live.errors, '', m.tile_errors_help())}
+        why={{ subject: 'metric', metric: 'errors', ...(insights ? { value: insights.errorsPerMinute } : {}) }}
       />
       <SparkTile
         testid="tile-storage"
         label={m.tile_storage()}
         value={insights?.storageBytes != null ? formatBytes(insights.storageBytes) : storage === null ? '—' : formatBytes(storage + (last(live.storageBytes) ?? 0))}
         points={live.storageBytes}
-        onclick={() => openTile(m.tile_storage(), live.storageBytes, 'B', m.tile_storage_help())}
+        onclick={() => openTile(m.tile_storage(), live.storageBytes, 'B', m.tile_storage_help(), 'storage')}
+        why={{ subject: 'metric', metric: insights?.storageBytes != null ? 'db.size' : 'blobs.bytes', ...(insights?.storageBytes != null ? { value: insights.storageBytes } : storage !== null ? { value: storage } : {}) }}
       />
+    </div>
     </section>
 
     <SetupChecklist
@@ -211,6 +228,8 @@
         if (def && item.action) void flow.start(def, item.action.input, { onDone: () => loadChecklist() });
       }}
     />
+
+    <MyWeek />
   </div>
 </PullToRefresh>
 
@@ -228,6 +247,9 @@
       <p class="mt-2 text-xs text-muted-foreground">{m.tile_window()}</p>
     {:else}
       <p class="text-sm text-muted-foreground">{m.tile_no_data()}</p>
+    {/if}
+    {#if app.hasAction('insights.overview')}
+      <a href={to(`/insights#${tile.section}`)} class="mt-3 inline-block text-sm text-primary" data-testid="tile-open-insights">{m.insights_open_detail()} →</a>
     {/if}
   {/if}
 </Sheet>

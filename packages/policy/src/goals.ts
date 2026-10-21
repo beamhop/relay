@@ -340,6 +340,11 @@ export interface LimitExplanation {
   source: LimitSource;
   /** Goal that produced the value (when source = goal). */
   goal?: GoalName;
+  /**
+   * When the value is not the goal's (source = override/setting/tier): the goal
+   * that would otherwise produce it, and the value it would produce.
+   */
+  goalWouldSet?: { goal: GoalName; value: number | number[] | null };
 }
 
 const GOAL_LABEL: Record<GoalName, string> = {
@@ -359,6 +364,7 @@ const SOURCE_TEXT: Record<Exclude<LimitSource, 'goal'>, string> = {
 /** Plain-language + technical explanation for every effective value. */
 export function explainLimits(relay: RelayConfig, tier?: string): LimitExplanation[] {
   const { limits, sources } = derive(relay, tier);
+  const fromGoals = limitsFromGoals(relay.goals);
   const lines: LimitExplanation[] = [];
   const why = (src: LimitSource, goal?: GoalName) =>
     src === 'goal' && goal
@@ -373,7 +379,9 @@ export function explainLimits(relay: RelayConfig, tier?: string): LimitExplanati
       text: `${m.plain(value)} — ${why(src, m.goal)}`,
       technical: `${field} = ${value}; ${m.technical}; goals.${m.goal} = ${relay.goals[m.goal]}`,
       source: src,
-      ...(src === 'goal' ? { goal: m.goal } : {}),
+      ...(src === 'goal'
+        ? { goal: m.goal }
+        : { goalWouldSet: { goal: m.goal, value: fromGoals[field] } }),
     });
   }
   const retSrc = sources.defaultRetentionDays ?? 'goal';
@@ -387,7 +395,11 @@ export function explainLimits(relay: RelayConfig, tier?: string): LimitExplanati
     } — ${why(retSrc, 'storage')}`,
     technical: `defaultRetentionDays = ${limits.defaultRetentionDays ?? '∞'}; per-kind rules in retention[] still apply`,
     source: retSrc,
-    ...(retSrc === 'goal' ? { goal: 'storage' as const } : {}),
+    ...(retSrc === 'goal'
+      ? { goal: 'storage' as const }
+      : {
+          goalWouldSet: { goal: 'storage' as const, value: fromGoals.defaultRetentionDays ?? null },
+        }),
   });
   lines.push({
     field: 'maxCreatedAtPastSeconds',
@@ -429,4 +441,37 @@ export function explainLimits(relay: RelayConfig, tier?: string): LimitExplanati
     });
   }
   return lines;
+}
+
+/** A value the admin overrode in Advanced, next to what its goal would set. */
+export interface GoalOverride {
+  field: keyof LimitsOverride;
+  goal: GoalName;
+  /** Effective (overridden) value. */
+  value: number | number[] | null;
+  /** What the goal would set without the override. */
+  goalValue: number | number[] | null;
+}
+
+/**
+ * Advanced overrides (`relay.limits`) of goal-driven values: which goal each
+ * one replaced and what that goal would set. Removing `limits.<field>` goes
+ * back to the goal's value.
+ */
+export function goalOverrides(relay: RelayConfig, tier?: string): GoalOverride[] {
+  return explainLimits(relay, tier)
+    .filter((l) => l.source === 'override' && l.goalWouldSet)
+    .map((l) => ({
+      field: l.field as keyof LimitsOverride,
+      goal: l.goalWouldSet!.goal,
+      value: l.value,
+      goalValue: l.goalWouldSet!.value,
+    }));
+}
+
+/** Number of overridden values per goal (for "N values changed by you"). */
+export function overridesByGoal(relay: RelayConfig): Partial<Record<GoalName, number>> {
+  const out: Partial<Record<GoalName, number>> = {};
+  for (const o of goalOverrides(relay)) out[o.goal] = (out[o.goal] ?? 0) + 1;
+  return out;
 }

@@ -16,6 +16,12 @@ export const GAP_SECONDS = 10 * 60;
 export const SESSION_CREDIT_SECONDS = 60;
 /** Target: under 10 minutes a week. */
 export const WEEKLY_GOAL_SECONDS = 10 * 60;
+/**
+ * Rough minutes an approved suggestion saves compared with doing it by hand
+ * (noticing the problem, finding the right screen, deciding, applying).
+ */
+export const MINUTES_SAVED_PER_SUGGESTION = 3;
+export const APPROVE_ACTION = 'experience.approve-card';
 const KEEP_WEEKS = 12;
 
 export interface WeekRecord {
@@ -23,11 +29,24 @@ export interface WeekRecord {
   seconds: number;
   sessions: number;
   actions: number;
+  /** Suggestions approved (Home cards). Absent in records written before it existed. */
+  approvals?: number;
   lastAt: number;
 }
 
 export interface MyStats {
-  thisWeek: { weekStart: number; minutes: number; sessions: number; actions: number };
+  thisWeek: {
+    weekStart: number;
+    minutes: number;
+    sessions: number;
+    actions: number;
+    /** Changes made this week (same as `actions`; plain name for the app). */
+    tasksDone: number;
+    /** Suggestions approved this week. */
+    suggestionsApproved: number;
+    /** Estimated minutes saved by approving suggestions instead of doing it by hand. */
+    minutesSaved: number;
+  };
   previousWeeks: Array<{ weekStart: number; minutes: number }>;
   goalMinutes: number;
   onTrack: boolean;
@@ -54,13 +73,18 @@ export class AdminTimeTracker {
   attach(): () => void {
     return this.kernel.bus.on('admin.action', (e) => {
       if (!isHuman(e.principalId)) return;
-      void this.record(e.principalId, 'action').catch((err) =>
+      void this.record(e.principalId, 'action', undefined, e.actionId).catch((err) =>
         this.kernel.bus.emit('error', { source: 'experience.admin-time', message: String(err) }),
       );
     });
   }
 
-  record(principalId: string, kind: 'action' | 'ping', at = this.kernel.ports.clock.now()) {
+  record(
+    principalId: string,
+    kind: 'action' | 'ping',
+    at = this.kernel.ports.clock.now(),
+    actionId?: string,
+  ) {
     return this.queue.run(async () => {
       if (!isHuman(principalId)) return;
       const docs = this.kernel.ports.docs;
@@ -86,6 +110,8 @@ export class AdminTimeTracker {
         rec.seconds += SESSION_CREDIT_SECONDS;
       }
       if (kind === 'action') rec.actions++;
+      if (kind === 'action' && actionId === APPROVE_ACTION)
+        rec.approvals = (rec.approvals ?? 0) + 1;
       rec.lastAt = Math.max(rec.lastAt, at);
       await docs.put(COL.adminTime, key, rec);
       // Forget old weeks.
@@ -121,12 +147,16 @@ export class AdminTimeTracker {
     });
     const goalMinutes = WEEKLY_GOAL_SECONDS / 60;
     const onTrack = (cur?.seconds ?? 0) <= WEEKLY_GOAL_SECONDS;
+    const approvals = cur?.approvals ?? 0;
     return {
       thisWeek: {
         weekStart: ws,
         minutes: thisMinutes,
         sessions: cur?.sessions ?? 0,
         actions: cur?.actions ?? 0,
+        tasksDone: cur?.actions ?? 0,
+        suggestionsApproved: approvals,
+        minutesSaved: approvals * MINUTES_SAVED_PER_SUGGESTION,
       },
       previousWeeks,
       goalMinutes,

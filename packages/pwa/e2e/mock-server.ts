@@ -15,6 +15,7 @@ import { ConfigSchema, RelaySchema } from '@beamhop/core';
 import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { homeActions } from './mocks/home.ts';
 
 type Relay = z.infer<typeof RelaySchema>;
 type Diff = {
@@ -1268,6 +1269,7 @@ function moreActions(): Action[] {
 }
 
 ACTIONS.push(...moreActions());
+ACTIONS.push(...homeActions(() => S).filter((a) => !ACTIONS.some((x) => x.id === a.id)));
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')

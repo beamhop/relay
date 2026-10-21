@@ -13,8 +13,9 @@ export type Tab = (typeof TABS)[number];
 /** Screens that live elsewhere in this app (or under another name). */
 const ALIASES: Record<string, string> = {
   '/home': '/',
-  '/home/launch-kit': '/',
-  '/insights': '/',
+  '/home/launch-kit': '/launch',
+  '/home/insights': '/insights',
+  '/launch-kit': '/launch',
   '/people/admins': '/people?tab=team',
   '/people/team': '/people?tab=team',
   '/people/users': '/people?tab=users',
@@ -59,6 +60,8 @@ export const SETTINGS_SECTIONS = [
 /** Fixed screens (besides the tabs). */
 const FIXED = new Set([
   '/help',
+  '/insights',
+  '/launch',
   '/settings/goals',
   '/settings/company',
   '/settings/history',
