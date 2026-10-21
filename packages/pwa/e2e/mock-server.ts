@@ -15,6 +15,7 @@ import { ConfigSchema, RelaySchema } from '@beamhop/core';
 import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { registerPeopleMocks } from './mocks/people.ts';
 
 type Relay = z.infer<typeof RelaySchema>;
 type Diff = {
@@ -1268,6 +1269,7 @@ function moreActions(): Action[] {
 }
 
 ACTIONS.push(...moreActions());
+registerPeopleMocks(ACTIONS, () => S);
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')
@@ -1438,6 +1440,37 @@ app.all('/api/v1/*', async (c) => {
   }
   if (path === '/actions') return c.json({ actions: catalog(relayScoped ? 'relay' : null) });
   if (path === '/assistant' && method === 'POST') return assistant(body);
+
+  // POST /actions/{id}/bulk: run a bulk-capable action per input, one undo for all.
+  const bulkAct = path.match(/^\/actions\/([^/]+)\/bulk$/);
+  if (bulkAct && method === 'POST') {
+    const def = ACTIONS.find((a) => a.id === bulkAct[1]);
+    if (!def) return fail(404, 'unknown_action', 'That action does not exist');
+    if (!def.bulk) return fail(400, 'not_bulk', 'This action cannot be run for many items at once');
+    const undos: Array<() => void> = [];
+    const results = ((body.inputs as unknown[]) ?? []).map((raw) => {
+      const p = def.input.safeParse(raw);
+      if (!p.success) return { ok: false, error: { code: 'invalid_input', message: 'Not valid' } };
+      try {
+        const r = def.run(p.data as Record<string, unknown>);
+        S.log.push({ id: def.id, input: p.data });
+        if (r.undo) undos.push(r.undo);
+        return { ok: true, output: r.output, summary: r.summary };
+      } catch (err) {
+        return { ok: false, error: { code: 'action_failed', message: (err as Error).message } };
+      }
+    });
+    const done = results.filter((r) => r.ok).length;
+    const out: Record<string, unknown> = { results, summary: `${def.title}: ${done} done` };
+    if (undos.length) {
+      const t = token();
+      S.undo.set(t, () => {
+        for (const u of undos.reverse()) u();
+      });
+      out.undo = { token: t, expiresAt: now() + 300 };
+    }
+    return c.json(out);
+  }
 
   const act = path.match(/^\/actions\/([^/]+)(\/preview)?$/);
   if (act && method === 'POST') {

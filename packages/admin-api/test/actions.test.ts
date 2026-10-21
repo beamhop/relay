@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { defineAction, defineModule } from '@beamhop/core';
 import { z } from 'zod';
-import { NODE, RELAY, addMember, bootClaimed, call, makeKey } from './helpers.ts';
+import { NODE, RELAY, addMember, bootClaimed, call, makeKey, nostrLogin } from './helpers.ts';
 
 describe('RBAC', () => {
   test('unauthenticated, wrong role, wrong relay and token scopes are denied', async () => {
@@ -173,6 +173,78 @@ describe('RBAC', () => {
       (await run('admins.invite', { pubkey: makeKey().pk, role: 'owner', relayId: 'main' })).status,
     ).toBe(400);
     expect((await run('admins.invite', { pubkey: 'not-a-key', role: 'admin' })).status).toBe(400);
+  });
+
+  test('second owner: warning preview, owner-only, last owner stays protected', async () => {
+    const env = await bootClaimed();
+    const run = (id: string, input: unknown, token = env.ownerToken) =>
+      call(env.kernel, 'POST', `${NODE}/actions/${id}`, { token, body: { input } });
+    const second = makeKey();
+
+    const pv = await call(env.kernel, 'POST', `${NODE}/actions/admins.invite/preview`, {
+      token: env.ownerToken,
+      body: { input: { pubkey: second.pk, role: 'owner', displayName: 'Deniz' } },
+    });
+    expect(pv.json.diff.map((d: { text: string }) => d.text)).toEqual([
+      'Deniz will become an owner on all relays',
+      'They will be able to do everything you can, including removing you',
+    ]);
+
+    // Admins (no admins.manage) and API tokens cannot add owners.
+    const admin = await addMember(env, 'admin', undefined, 'Bob');
+    expect(
+      (await run('admins.invite', { pubkey: second.pk, role: 'owner' }, admin.token)).status,
+    ).toBe(403);
+    const tok = await run('tokens.create', { name: 'ops', expiresInDays: 1 });
+    const viaToken = await run(
+      'admins.invite',
+      { pubkey: second.pk, role: 'owner' },
+      tok.json.output.token,
+    );
+    expect(viaToken.status).toBe(403);
+    expect(
+      (await run('admins.set-role', { id: admin.key.pk, role: 'owner' }, tok.json.output.token))
+        .status,
+    ).toBe(403);
+
+    const status0 = await run('admins.recovery-status', {});
+    expect(status0.json.output).toMatchObject({ owner: true, recoveryCodesLeft: 10, passkeys: 0 });
+    expect(status0.json.output.owners.map((o: { displayName: string }) => o.displayName)).toEqual([
+      'Ayşe',
+    ]);
+    const adminView = await run('admins.recovery-status', {}, admin.token);
+    expect(adminView.json.output.owner).toBe(false);
+    expect(adminView.json.output.recoveryCodesLeft).toBeNull();
+    const tl = await run('tokens.list', {});
+    expect(tl.json.output.tokens[0]).toMatchObject({ name: 'ops', adminName: 'Ayşe' });
+    expect(JSON.stringify(tl.json.output)).not.toContain('hash');
+
+    // The owner adds a second owner; now the first one may step down.
+    const added = await run('admins.invite', {
+      pubkey: second.pk,
+      role: 'owner',
+      displayName: 'Deniz',
+    });
+    expect(added.status).toBe(200);
+    const list = await run('admins.list', {});
+    expect(
+      list.json.output.admins.filter(
+        (a: { roles: Record<string, string> }) => a.roles['*'] === 'owner',
+      ),
+    ).toHaveLength(2);
+    const stepDown = await run('admins.set-role', { id: env.owner.pk, role: 'admin' });
+    expect(stepDown.status).toBe(200);
+    // Deniz is now the last owner and cannot be removed or demoted.
+    const rmLast = await run('admins.remove', { id: second.pk });
+    expect(rmLast.status).toBe(403); // the former owner is an admin now
+    const deniz = await nostrLogin(env, second);
+    const tokenD = deniz.json.token as string;
+    expect((await run('admins.remove', { id: second.pk }, tokenD)).json.error.code).toBe(
+      'last_owner',
+    );
+    expect(
+      (await run('admins.set-role', { id: second.pk, role: 'viewer' }, tokenD)).json.error.code,
+    ).toBe('last_owner');
   });
 });
 

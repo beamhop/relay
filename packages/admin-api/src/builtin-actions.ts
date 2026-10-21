@@ -7,6 +7,7 @@
 import {
   type ActionContext,
   type ActionDef,
+  type DiffLine,
   type Kernel,
   type Permission,
   ROLE_PERMISSIONS,
@@ -75,6 +76,20 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
       );
   };
 
+  /** Only a signed-in owner (not an API token) may make someone else an owner (§6.11). */
+  const assertCanMakeOwner = async (ctx: ActionContext) => {
+    if (ctx.principal.via === 'token')
+      throw new HttpError(403, 'forbidden', 'API tokens cannot add owners');
+    if (!isOwner(await dir.get(ctx.principal.id)))
+      throw new HttpError(403, 'forbidden', 'Only an owner can add another owner');
+  };
+
+  const OWNER_WARNING = {
+    kind: 'warning' as const,
+    text: 'They will be able to do everything you can, including removing you',
+    technical: 'role owner = all permissions incl. admins.manage, node.manage',
+  };
+
   const invite = defineAction({
     id: 'admins.invite',
     title: 'Invite an admin',
@@ -98,18 +113,21 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
       const who =
         input.displayName ??
         (input.pubkey ? input.pubkey.slice(0, 16) : 'The person with the invite code');
-      return [
+      const lines: DiffLine[] = [
         {
           kind: 'add',
           text: `${who} will become ${ROLE_LABEL[input.role]} ${where(kernel, input.relayId)}`,
           technical: `roles[${input.relayId ?? '*'}] = ${input.role}`,
         },
       ];
+      if (input.role === 'owner') lines.push(OWNER_WARNING);
+      return lines;
     },
     async run(input, ctx) {
       assertRelay(kernel, input.relayId);
       if (input.role === 'owner' && input.relayId)
         throw new HttpError(400, 'bad_request', 'Owners always manage all relays');
+      if (input.role === 'owner') await assertCanMakeOwner(ctx);
       const roles = { [input.relayId ?? '*']: input.role } as AdminRecord['roles'];
       if (input.pubkey) {
         const pk = parsePubkey(input.pubkey);
@@ -166,20 +184,23 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
       const rec = await dir.get(input.id);
       const name = displayNameOf(rec, input.id);
       const before = rec?.roles[input.relayId ?? '*'] ?? 'none';
-      return [
+      const lines: DiffLine[] = [
         {
           kind: 'change',
           text: `${name}: ${before} → ${input.role} ${where(kernel, input.relayId)}`,
           technical: `roles[${input.relayId ?? '*'}]: ${before} → ${input.role}`,
         },
       ];
+      if (input.role === 'owner' && before !== 'owner') lines.push(OWNER_WARNING);
+      return lines;
     },
-    async run(input) {
+    async run(input, ctx) {
       assertRelay(kernel, input.relayId);
       const rec = await dir.get(input.id);
       if (!rec) throw new HttpError(404, 'not_found', 'That person is not on the team');
       if (input.role === 'owner' && input.relayId)
         throw new HttpError(400, 'bad_request', 'Owners always manage all relays');
+      if (input.role === 'owner' && !isOwner(rec)) await assertCanMakeOwner(ctx);
       const scope = input.relayId ?? '*';
       const roles = { ...rec.roles };
       if (input.role === 'none') delete roles[scope];
@@ -293,6 +314,40 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
     },
   });
 
+  const recoveryStatus = defineAction({
+    id: 'admins.recovery-status',
+    title: 'Check how you would get back in',
+    description:
+      'Shows whether this relay can be recovered if an owner loses their key: recovery codes, a second owner and passkeys.',
+    technical:
+      'Counts remaining hashed recovery codes, principals with roles["*"] = owner, and WebAuthn credentials bound to the caller.',
+    scope: 'node',
+    permission: 'relay.read',
+    readOnly: true,
+    keywords: ['recovery', 'second owner', 'lost key', 'security'],
+    input: z.object({}),
+    async run(_input, ctx) {
+      const all = await dir.list();
+      const me = all.find((a) => a.id === ctx.principal.id);
+      const owners = all
+        .filter(isOwner)
+        .map((a) => ({ id: a.id, pubkey: a.pubkey, displayName: displayNameOf(a, a.id) }));
+      const passkeys = (
+        await kernel.ports.docs.list<{ adminId: string }>(COL.passkeys, { limit: 1000 })
+      ).items.filter((i) => i.value.adminId === ctx.principal.id).length;
+      const owner = isOwner(me);
+      return {
+        output: {
+          owner,
+          owners,
+          recoveryCodesLeft: owner ? await dir.recoveryCodesLeft() : null,
+          passkeys,
+        },
+        summary: `${owners.length} owner${owners.length === 1 ? '' : 's'}`,
+      };
+    },
+  });
+
   const tokenCreate = defineAction({
     id: 'tokens.create',
     title: 'Create an API token',
@@ -399,6 +454,8 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
     id: 'tokens.list',
     title: 'Show API tokens',
     description: 'Your API tokens (owners see everyone’s).',
+    technical:
+      'Token metadata only (id, name, scopes, createdAt, expiresAt, lastUsedAt); secrets are never returned.',
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,
@@ -406,7 +463,10 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
     async run(_input, ctx) {
       const all = permissionsFor(ctx.principal, null).has('admins.manage');
       const owner = ctx.principal.via === 'token' ? undefined : ctx.principal.id;
-      const items = await tokens.list(all ? undefined : (owner ?? '\u0000'));
+      const listed = await tokens.list(all ? undefined : (owner ?? '\u0000'));
+      const items = await Promise.all(
+        listed.map(async (t) => ({ ...t, adminName: await nameOf(t.adminId) })),
+      );
       return { output: { tokens: items }, summary: `Listed ${items.length} API tokens` };
     },
   });
@@ -486,6 +546,7 @@ export function builtinActions(kernel: Kernel, dir: Directory, tokens: TokenServ
     remove,
     list,
     recoveryCodes,
+    recoveryStatus,
     tokenCreate,
     tokenRevoke,
     tokenList,
