@@ -20,6 +20,8 @@ export interface RetentionProvider {
   id: string;
   /** Days to keep this author's events on this relay, or undefined to abstain. */
   retentionDays(relayId: RelayId, pubkey: string): Promise<number | undefined>;
+  /** Shortest period this provider can answer (lets the lifecycle sweep start there). */
+  minDays?(relayId: RelayId): Promise<number | undefined>;
 }
 
 export interface RetentionProvidersLike {
@@ -38,6 +40,13 @@ export function groupRetention(rt: Rt): RetentionProvider {
         if (mine.has(m.group)) days = Math.max(days ?? 0, m.days);
       }
       return days ?? cfg.defaultDays;
+    },
+    async minDays() {
+      const cfg = rt.settings().retention;
+      const all = [cfg.defaultDays, ...cfg.groups.map((g) => g.days)].filter(
+        (d): d is number => typeof d === 'number',
+      );
+      return all.length ? Math.min(...all) : undefined;
     },
   };
 }

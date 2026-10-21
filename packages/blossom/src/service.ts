@@ -416,6 +416,17 @@ export class BlossomService {
     }
   }
 
+  /** Is this relay's ownership row frozen by a legal hold? Errors count as held. */
+  async ownershipHeld(o: { relayId: RelayId; sha256: string; pubkey: string }): Promise<boolean> {
+    const holds = this.kernel.use<LegalHoldsLike>(HOLDS_SERVICE);
+    if (!holds || (typeof holds.active === 'function' && !holds.active())) return false;
+    try {
+      return await holds.isHeld(o.relayId, { sha256: o.sha256, pubkey: o.pubkey });
+    } catch {
+      return true;
+    }
+  }
+
   /** Delete bytes when no relay owns the blob any more (and no legal hold freezes them). */
   async collect(sha256: string, owner?: { relayId: RelayId; pubkey: string }): Promise<boolean> {
     if ((await this.ports.blobIndex.refCount(sha256)) > 0) return false;
@@ -447,6 +458,12 @@ export class BlossomService {
       if (batch.length === 0) break;
       let progressed = false;
       for (const o of batch) {
+        // Legal hold (§12.7): a held ownership is not expired; check again tomorrow.
+        if (await this.ownershipHeld(o)) {
+          await this.ports.blobIndex.addOwner({ ...o, expiresAt: now + 86_400 });
+          progressed = true;
+          continue;
+        }
         const r = await this.removeOwnership(o.relayId, o.sha256, o.pubkey, 'expired');
         if (r.removed) {
           progressed = true;
