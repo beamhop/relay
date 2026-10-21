@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { makeEvent, makeKey } from '@beamhop/testkit';
 import { memoryPorts } from '@beamhop/testkit';
 import {
+  BEAMHOP_VERSION,
   PolicyPipeline,
   addressOf,
   createKernel,
@@ -90,5 +91,15 @@ describe('config + routing + kernel', () => {
     expect(order).toEqual(['a', 'b']);
     expect(k.isEnabled('a')).toBe(true);
     expect(k.isEnabled('enterprise')).toBe(false);
+  });
+});
+
+describe('version', () => {
+  test('BEAMHOP_VERSION comes from the root package.json', async () => {
+    const root = (await import('../../../package.json', { with: { type: 'json' } })).default as {
+      version: string;
+    };
+    expect(root.version).toBe('0.1.0-alpha.0');
+    expect(BEAMHOP_VERSION).toBe(root.version);
   });
 });

@@ -3,6 +3,7 @@
  * OpenTelemetry OTLP/HTTP JSON metrics exporter (fetch-based, Workers-safe).
  * Sends cumulative sums, gauges and summaries to `{endpoint}/v1/metrics`.
  */
+import { BEAMHOP_VERSION } from '@beamhop/core';
 import type { CounterView, GaugeView, Labels, SummaryView } from './metrics.ts';
 import { promName } from './metrics.ts';
 
@@ -79,7 +80,7 @@ export function buildOtlpPayload(input: OtlpInput): unknown {
     resourceMetrics: [
       {
         resource: { attributes: attrs(input.resource) },
-        scopeMetrics: [{ scope: { name: 'beamhop.insights', version: '0.0.0' }, metrics }],
+        scopeMetrics: [{ scope: { name: 'beamhop.insights', version: BEAMHOP_VERSION }, metrics }],
       },
     ],
   };

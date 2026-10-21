@@ -3,7 +3,7 @@
  * Relay engine module configuration (`config.modules.relay`). Per-relay limits
  * come from `kernel.limits()`; these are node-level engine knobs.
  */
-import { technical } from '@beamhop/core';
+import { BEAMHOP_VERSION, technical } from '@beamhop/core';
 import { z } from 'zod';
 
 export const RelayModuleConfigSchema = z
@@ -86,7 +86,7 @@ export const RelayModuleConfigSchema = z
       'NIP-62: up to this many deleted ids are collected (query before vanish) for the event.deleted bus event; `count` carries the total.',
     ),
     software: z.string().default('https://github.com/beamhop/beamhop'),
-    version: z.string().default('0.0.0'),
+    version: z.string().default(BEAMHOP_VERSION),
   })
   .prefault({});
 

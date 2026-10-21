@@ -11,3 +11,4 @@ export * from './actions.ts';
 export * from './bus.ts';
 export * from './modules.ts';
 export * from './router.ts';
+export * from './version.ts';

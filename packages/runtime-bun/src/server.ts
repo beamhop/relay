@@ -8,6 +8,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import {
+  BEAMHOP_VERSION,
   type BeamhopConfig,
   type BeamhopModule,
   type Kernel,
@@ -49,7 +50,8 @@ import {
   decideTls,
 } from './tls.ts';
 
-export const VERSION = '0.0.0';
+/** Release version (root package.json, or the build-time `__BEAMHOP_VERSION__` define). */
+export const VERSION = BEAMHOP_VERSION;
 export const SELF_CHECK_PATH = '/.well-known/beamhop/self-check';
 export const HEALTH_PATH = '/healthz';
 export const ADMIN_MOUNT = '/admin';

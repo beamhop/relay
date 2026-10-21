@@ -13,7 +13,15 @@
  * at /app when `modules.team.enabled`; `--team <dir>` overrides the path).
  * Cross-compiling downloads the target Bun runtime on first use.
  */
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
 const PKG = resolve(import.meta.dir, '..');
@@ -87,6 +95,16 @@ export function generateEntry(
   return { entry, assets: files.length, teamAssets: teamFiles.length };
 }
 
+/** Release version baked into the binary: BEAMHOP_VERSION env, else the root package.json. */
+export function releaseVersion(): string {
+  const env = process.env.BEAMHOP_VERSION;
+  if (env) return env;
+  const pkg = JSON.parse(readFileSync(resolve(PKG, '../../package.json'), 'utf8')) as {
+    version?: string;
+  };
+  return pkg.version ?? '0.0.0';
+}
+
 async function compile(entry: string, target: string, outfile: string): Promise<void> {
   const proc = Bun.spawn(
     [
@@ -95,6 +113,7 @@ async function compile(entry: string, target: string, outfile: string): Promise<
       '--compile',
       '--minify',
       '--sourcemap',
+      `--define=__BEAMHOP_VERSION__=${JSON.stringify(releaseVersion())}`,
       `--target=bun-${target}`,
       entry,
       '--outfile',
