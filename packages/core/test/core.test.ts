@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { makeEvent, makeKey } from '@beamhop/testkit';
 import { memoryPorts } from '@beamhop/testkit';
+import { z } from 'zod';
 import {
   BEAMHOP_VERSION,
   PolicyPipeline,
@@ -91,6 +92,23 @@ describe('config + routing + kernel', () => {
     expect(order).toEqual(['a', 'b']);
     expect(k.isEnabled('a')).toBe(true);
     expect(k.isEnabled('enterprise')).toBe(false);
+  });
+
+  test('moduleSchemas() exposes registered module config schemas', async () => {
+    const schema = z.object({ size: z.number().default(3) }).prefault({});
+    const k = await createKernel({
+      runtime: 'test',
+      ports: memoryPorts(),
+      config: parseConfig({}),
+      modules: [
+        { id: 'with', configSchema: schema, register() {} },
+        { id: 'without', register() {} },
+      ],
+    });
+    const all = k.moduleSchemas?.() ?? {};
+    expect(Object.keys(all)).toEqual(['with']);
+    expect(all.with).toBe(schema);
+    expect(k.moduleConfig<{ size: number }>('with')?.size).toBe(3);
   });
 });
 

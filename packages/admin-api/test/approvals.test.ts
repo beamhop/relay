@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from 'bun:test';
-import { defineAction, defineModule } from '@beamhop/core';
+import { type ActionResult, defineAction, defineModule } from '@beamhop/core';
 import { z } from 'zod';
 import { NODE, bootClaimed, call } from './helpers.ts';
 
@@ -31,7 +31,7 @@ const gated = defineModule({
         async preview(input) {
           return [{ kind: 'info', text: `approval ${input._approvalId ?? 'none'}` }];
         },
-        async run(input) {
+        async run(input): Promise<ActionResult> {
           const id = input._approvalId;
           if (!id)
             return { output: { status: 'approval-required', requestId: 'r1' }, summary: 'asked' };

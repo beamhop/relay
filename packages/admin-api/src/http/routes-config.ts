@@ -42,13 +42,34 @@ function revisionInfo(r: ConfigRevision) {
   return { ...info, changes: patch.length };
 }
 
-let cachedSchemas: { node: unknown; relay: unknown } | null = null;
-function jsonSchemas() {
-  cachedSchemas ??= {
-    node: toJsonSchemaWithNotes(ConfigSchema),
-    relay: toJsonSchemaWithNotes(RelaySchema),
-  };
-  return cachedSchemas;
+const schemaCache = new WeakMap<object, { node: unknown; relay: unknown }>();
+/**
+ * Node + relay JSON Schemas. The node schema also describes `modules.<id>` for every
+ * loaded module that declares a `configSchema` (other module sections stay free-form).
+ */
+function jsonSchemas(deps: Deps) {
+  let cached = schemaCache.get(deps.kernel);
+  if (!cached) {
+    const node = toJsonSchemaWithNotes(ConfigSchema);
+    const props = (node.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const modules = props.modules;
+    const moduleSchemas = deps.kernel.moduleSchemas?.() ?? {};
+    if (modules && Object.keys(moduleSchemas).length) {
+      const known: Record<string, unknown> = {};
+      for (const [id, schema] of Object.entries(moduleSchemas)) {
+        try {
+          const { $schema: _s, ...rest } = toJsonSchemaWithNotes(schema);
+          known[id] = rest;
+        } catch {
+          known[id] = {};
+        }
+      }
+      modules.properties = known;
+    }
+    cached = { node, relay: toJsonSchemaWithNotes(RelaySchema) };
+    schemaCache.set(deps.kernel, cached);
+  }
+  return cached;
 }
 
 export function configRoutes(api: Api, deps: Deps): void {
@@ -99,7 +120,7 @@ export function configRoutes(api: Api, deps: Deps): void {
       tags,
       summary: 'JSON Schema of the settings (for forms and help)',
     },
-    (c, { relayId }) => c.json(relayId ? jsonSchemas().relay : jsonSchemas().node),
+    (c, { relayId }) => c.json(relayId ? jsonSchemas(deps).relay : jsonSchemas(deps).node),
   );
 
   op(
