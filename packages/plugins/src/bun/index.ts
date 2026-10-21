@@ -18,7 +18,12 @@ import { BunPluginLoader } from './loader.ts';
 
 export { BunPluginLoader, pluginPackageName } from './loader.ts';
 export { BunPluginInstaller } from './installer.ts';
-export { WorkerSandbox } from './sandbox.ts';
+export {
+  WorkerSandbox,
+  DEFAULT_WORKER_URL,
+  sandboxWorkerUrl,
+  setSandboxWorkerUrl,
+} from './sandbox.ts';
 export { createBunAuthoring, rewriteImports, bunRun, type RunCommand } from './authoring.ts';
 
 export interface BunPluginHostOptions
