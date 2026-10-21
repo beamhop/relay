@@ -184,6 +184,15 @@ function readPersisted(conn: Connection): PersistedConnState | null {
   return { v: 1, subs: clean(v.subs), negs: clean(v.negs) };
 }
 
+/** Cheap test for an EVENT frame (prefetching its signature check). */
+const EVENT_FRAME = /^\s*\[\s*"EVENT"/;
+
+/** A queued frame parsed early (see `RelayEngine.prefetch`). */
+interface Prefetched {
+  parsed: ReturnType<typeof parseClientMessage>;
+  sig?: Promise<boolean | null>;
+}
+
 export class RelayEngine implements ConnectionHandler {
   readonly nodeId: string;
   private conns = new Map<string, ConnState>();
@@ -369,13 +378,18 @@ export class RelayEngine implements ConnectionHandler {
     }
     if (st.closed) return;
     if (st.pending >= this.cfg.maxPendingMessages) {
-      this.send(st, ['NOTICE', reason('rate-limited', 'too many messages in flight, slow down')]);
+      this.refuseOverflow(st, raw);
       return;
     }
+    // A connection with messages already waiting: start the signature check of an
+    // EVENT now, so it overlaps the messages ahead of it (answers keep their order).
+    const pre = st.pending > 0 ? this.prefetch(raw) : undefined;
     st.pending++;
     const start = this.kernel.ports.clock.nowMs();
     const state = st;
-    const run = st.chain.then(() => (state.closed ? undefined : this.dispatch(state, raw, start)));
+    const run = st.chain.then(() =>
+      state.closed ? undefined : this.dispatch(state, raw, start, pre),
+    );
     st.chain = run
       .then(noop, (err) => this.fail(state, 'message', err))
       .finally(() => {
@@ -387,6 +401,40 @@ export class RelayEngine implements ConnectionHandler {
     } catch {
       // already reported via fail()
     }
+  }
+
+  /**
+   * Answer a frame refused because the connection has too many messages waiting.
+   * NIP-01 clients wait for an answer to each EVENT/REQ, so they get the matching
+   * refusal (`OK false`, `CLOSED`, `NEG-ERR`); only frames without an id get a NOTICE.
+   */
+  private refuseOverflow(st: ConnState, raw: string): void {
+    const why = reason('rate-limited', 'too many messages waiting, slow down');
+    let msg: unknown;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      msg = null;
+    }
+    if (Array.isArray(msg)) {
+      const [type, a] = msg as [unknown, unknown];
+      if ((type === 'EVENT' || type === 'AUTH') && a && typeof a === 'object') {
+        const id = (a as { id?: unknown }).id;
+        if (typeof id === 'string') {
+          this.send(st, ['OK', id, false, why]);
+          return;
+        }
+      }
+      if ((type === 'REQ' || type === 'COUNT') && typeof a === 'string') {
+        this.send(st, ['CLOSED', a, why]);
+        return;
+      }
+      if (type === 'NEG-OPEN' && typeof a === 'string') {
+        this.send(st, ['NEG-ERR', a, why]);
+        return;
+      }
+    }
+    this.send(st, ['NOTICE', why]);
   }
 
   // ───────────────────────── connection lifecycle ─────────────────────────
@@ -623,12 +671,31 @@ export class RelayEngine implements ConnectionHandler {
     return ctx;
   }
 
-  private async dispatch(st: ConnState, raw: string, start: number): Promise<Detached | undefined> {
+  /**
+   * Parse a queued frame early and, for an EVENT with a valid shape, start its
+   * signature check on the verifier threads. Only when a verifier is configured.
+   */
+  private prefetch(raw: string): Prefetched | undefined {
+    if (!this.kernel.ports.verifier || raw.length > this.cfg.maxMessageBytes) return undefined;
+    if (!EVENT_FRAME.test(raw)) return undefined;
+    const parsed = parseClientMessage(raw);
+    if (!parsed.ok || parsed.message[0] !== 'EVENT') return { parsed };
+    const shape = validateEventShape(parsed.message[1]);
+    if (!shape.ok || shape.event.kind === AUTH_KIND) return { parsed };
+    return { parsed, sig: this.checkSig(shape.event) };
+  }
+
+  private async dispatch(
+    st: ConnState,
+    raw: string,
+    start: number,
+    pre?: Prefetched,
+  ): Promise<Detached | undefined> {
     if (raw.length > this.cfg.maxMessageBytes) {
       this.send(st, ['NOTICE', reason('invalid', 'message is too large')]);
       return;
     }
-    const parsed = parseClientMessage(raw);
+    const parsed = pre?.parsed ?? parseClientMessage(raw);
     if (!parsed.ok) {
       this.send(st, ['NOTICE', parsed.reason]);
       return;
@@ -636,7 +703,7 @@ export class RelayEngine implements ConnectionHandler {
     const msg = parsed.message;
     switch (msg[0]) {
       case 'EVENT':
-        await this.onEvent(st, msg[1], start);
+        await this.onEvent(st, msg[1], start, pre?.sig);
         return;
       case 'REQ':
         return this.onReq(st, msg[1], msg.slice(2), start);
@@ -726,7 +793,12 @@ export class RelayEngine implements ConnectionHandler {
     });
   }
 
-  private async onEvent(st: ConnState, input: unknown, start: number): Promise<void> {
+  private async onEvent(
+    st: ConnState,
+    input: unknown,
+    start: number,
+    presig?: Promise<boolean | null>,
+  ): Promise<void> {
     const rawId =
       typeof input === 'object' &&
       input !== null &&
@@ -777,7 +849,7 @@ export class RelayEngine implements ConnectionHandler {
       this.rejectEvent(st, event, 'invalid', 'event id does not match its content');
       return;
     }
-    const sig = await this.checkSig(event);
+    const sig = await (presig ?? this.checkSig(event));
     if (sig !== true) {
       this.rejectEvent(
         st,

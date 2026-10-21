@@ -308,9 +308,36 @@ describe('limits', () => {
     const p1 = h.send(c, ['COUNT', 'a', {}]);
     const p2 = h.send(c, ['COUNT', 'b', {}]);
     await Promise.all([p1, p2]);
-    const types = c.take().map((f) => f[0]);
-    expect(types).toContain('NOTICE');
-    expect(types).toContain('COUNT');
+    const frames = c.take();
+    expect(frames.map((f) => f[0])).toContain('COUNT');
+    expect(frames).toContainEqual([
+      'CLOSED',
+      'b',
+      'rate-limited: too many messages waiting, slow down',
+    ]);
+  });
+
+  test('overflowing EVENTs get OK false, REQs CLOSED, garbage a NOTICE', async () => {
+    const h = await setup({ relayModule: { maxPendingMessages: 1 } });
+    const c = await h.connect();
+    c.take();
+    const k = makeKey();
+    const e1 = h.event(k);
+    const e2 = h.event(k, { content: 'second' });
+    await Promise.all([
+      h.send(c, ['EVENT', e1]),
+      h.send(c, ['EVENT', e2]),
+      h.send(c, ['REQ', 'r', {}]),
+      h.send(c, ['NEG-OPEN', 'n', {}, '']),
+      h.engine.handle(c, 'not json'),
+    ]);
+    const frames = c.take();
+    const why = 'rate-limited: too many messages waiting, slow down';
+    expect(frames).toContainEqual(['OK', e1.id, true, '']);
+    expect(frames).toContainEqual(['OK', e2.id, false, why]);
+    expect(frames).toContainEqual(['CLOSED', 'r', why]);
+    expect(frames).toContainEqual(['NEG-ERR', 'n', why]);
+    expect(frames).toContainEqual(['NOTICE', why]);
   });
 });
 
