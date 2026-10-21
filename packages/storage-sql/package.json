@@ -5,7 +5,24 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "description": "Drizzle-based EventStore/BlobIndex/DocStore/TimeSeries for bun:sqlite, D1, Postgres",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema/sqlite": "./src/schema/sqlite.ts",
+    "./schema/pg": "./src/schema/pg.ts",
+    "./d1-shim": "./src/d1-shim.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate --config drizzle.sqlite.config.ts && drizzle-kit generate --config drizzle.pg.config.ts && bun scripts/embed-migrations.ts",
+    "db:embed": "bun scripts/embed-migrations.ts",
+    "bench": "bun bench/ingest.ts"
+  },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@beamhop/testkit": "workspace:*",
+    "drizzle-kit": "^0.31.11"
+  }
 }

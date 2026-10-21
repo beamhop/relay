@@ -6,7 +6,7 @@
  *   eventStoreContract('sqlite', async () => new SqliteEventStore(':memory:'));
  */
 import { describe, expect, test } from 'bun:test';
-import type { BlobIndex, BlobStore, DocStore, EventStore } from '@beamhop/core';
+import type { BlobIndex, BlobStore, DocStore, EventStore, TimeSeriesStore } from '@beamhop/core';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { makeEvent, makeKey } from './fixtures.ts';
@@ -227,6 +227,51 @@ export function docStoreContract(name: string, make: () => Promise<DocStore>): v
       expect(await s.cas('c', 'new', null, { n: 0 })).toBe(true);
       expect(await s.delete('c', 'a1')).toBe(true);
       expect(await s.get('c', 'a1')).toBeNull();
+    });
+  });
+}
+
+export function timeSeriesContract(name: string, make: () => Promise<TimeSeriesStore>): void {
+  describe(`TimeSeriesStore contract: ${name}`, () => {
+    test('record, bucketed aggregation, label filter, prune', async () => {
+      const s = await make();
+      await s.init();
+      const a = { relay: 'r1', kind: 'note' };
+      const b = { relay: 'r2', kind: 'note' };
+      await s.record([
+        { metric: 'events', labels: a, t: 100, v: 1 },
+        { metric: 'events', labels: a, t: 110, v: 3 },
+        { metric: 'events', labels: b, t: 115, v: 10 },
+        { metric: 'events', labels: a, t: 160, v: 5 },
+        { metric: 'other', labels: a, t: 120, v: 99 },
+      ]);
+      const q = { metric: 'events', from: 0, to: 1000, stepSeconds: 60 };
+      expect(await s.range({ ...q, agg: 'sum' })).toEqual([
+        { t: 60, v: 14 },
+        { t: 120, v: 5 },
+      ]);
+      expect(await s.range({ ...q, agg: 'max' })).toEqual([
+        { t: 60, v: 10 },
+        { t: 120, v: 5 },
+      ]);
+      expect(await s.range({ ...q, agg: 'min', labels: { relay: 'r1' } })).toEqual([
+        { t: 60, v: 1 },
+        { t: 120, v: 5 },
+      ]);
+      expect(await s.range({ ...q, agg: 'avg', labels: { relay: 'r1' } })).toEqual([
+        { t: 60, v: 2 },
+        { t: 120, v: 5 },
+      ]);
+      expect(await s.range({ ...q, agg: 'last', labels: { relay: 'r1', kind: 'note' } })).toEqual([
+        { t: 60, v: 3 },
+        { t: 120, v: 5 },
+      ]);
+      expect(await s.range({ ...q, from: 150, agg: 'sum' })).toEqual([{ t: 120, v: 5 }]);
+      expect(await s.prune(115)).toBe(2);
+      expect(await s.range({ ...q, agg: 'sum' })).toEqual([
+        { t: 60, v: 10 },
+        { t: 120, v: 5 },
+      ]);
     });
   });
 }
