@@ -258,6 +258,59 @@ describe('live channel (SSE)', () => {
   });
 });
 
+describe('live channel: insights ticks', () => {
+  test('insights.onLive snapshots stream as insights.tick, filtered per principal', async () => {
+    const listeners = new Set<(s: unknown) => void>();
+    const fakeInsights = defineModule({
+      id: 'fake-insights',
+      register(k) {
+        k.provide('insights', {
+          onLive(fn: (s: unknown) => void) {
+            listeners.add(fn);
+            return () => listeners.delete(fn);
+          },
+        });
+      },
+    });
+    const env = await bootClaimed([fakeInsights]);
+    const teamMod = await addMember(env, 'moderator', 'team');
+    const open = (url: string, token: string) =>
+      env.kernel.http.request(url, { headers: { authorization: `Bearer ${token}` } });
+    const ownerRes = await open(`${NODE}/live`, env.ownerToken);
+    const modRes = await open(`${RELAY('team')}/live`, teamMod.token);
+    const onlyRejects = await open(`${NODE}/live?events=event.rejected`, env.ownerToken);
+    const ownerP = readEvents(ownerRes, 2);
+    const modP = readEvents(modRes, 2);
+    const rejP = readEvents(onlyRejects, 2, 300);
+    await Promise.resolve();
+    expect(listeners.size).toBe(2);
+    for (const fn of listeners)
+      fn({
+        at: 1,
+        relays: [
+          { relayId: 'main', connections: 3 },
+          { relayId: 'team', connections: 1 },
+        ],
+        storage: { events: 10, bytes: 100 },
+        disk: { freeBytes: 1, totalBytes: 2 },
+      });
+    const owner = await ownerP;
+    const mod = await modP;
+    expect(owner[0]).toContain('insights.tick');
+    const ownerTick = owner.find((e) => e.includes('event: insights.tick'))!;
+    const data = (e: string) => JSON.parse(e.slice(e.indexOf('data: ') + 6));
+    expect(data(ownerTick).relays).toHaveLength(2);
+    expect(data(ownerTick).disk).toEqual({ freeBytes: 1, totalBytes: 2 });
+    const modTick = data(mod.find((e) => e.includes('event: insights.tick'))!);
+    expect(modTick.relays.map((r: { relayId: string }) => r.relayId)).toEqual(['team']);
+    expect(modTick.storage).toBeNull();
+    expect(modTick.disk).toBeNull();
+    const rej = await rejP;
+    expect(rej.some((e) => e.includes('event: insights.tick'))).toBe(false);
+    expect(listeners.size).toBe(0);
+  });
+});
+
 describe('aggregates', () => {
   test('health score, batched cards, ui manifest, playbooks', async () => {
     const env = await bootClaimed([
