@@ -30,6 +30,10 @@ export const AiModuleConfigSchema = z
       .max(50)
       .default(12)
       .describe('How many lookups the assistant may do for one question'),
+    maxTools: technical(
+      z.number().int().min(0).max(200).default(12),
+      'Action tools offered per question, picked by matching words; find_tools reaches the rest. Built-in tools are always offered.',
+    ).describe('How many lookups to show the assistant up front (small models need fewer)'),
     maxTokensPerRequest: technical(
       z.number().int().min(500).default(24_000),
       'Budget across all rounds: provider-reported usage when available, else ~4 chars per token.',

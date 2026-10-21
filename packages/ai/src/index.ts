@@ -42,6 +42,7 @@ export * from './errors.ts';
 export * from './labels.ts';
 export * from './llm.ts';
 export * from './plugin-gen.ts';
+export * from './routing.ts';
 export { AssistantBody } from './routes.ts';
 export * from './safety.ts';
 export * from './settings.ts';

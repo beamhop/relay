@@ -13,6 +13,7 @@ import type { ChatMessage, Kernel, Principal, RelayId, ToolSpec } from '@beamhop
 import type { AiModuleConfig } from './config.ts';
 import type { ErrorRing } from './errors.ts';
 import { type AiLLM, type ChatUsage, parseArgs } from './llm.ts';
+import { FIND_TOOLS, findToolsTool, rankTools } from './routing.ts';
 import {
   Budget,
   TimeoutError,
@@ -108,7 +109,7 @@ export function systemPrompt(opts: {
     lens === 'technical'
       ? '- The admin asked for technical details: include NIP numbers, event kinds, config paths and raw values.'
       : '- Avoid jargon (say "reports", not "kind 1984"). Give technical details (NIPs, kinds, config paths) only when asked.',
-    '- Use the tools to look things up instead of guessing. If you could not find something, say so.',
+    '- Use the tools to look things up instead of guessing. If none of your tools fits, call find_tools with a few words first. If you still could not find something, say so.',
     '- You can NEVER change anything yourself. You have no tool that applies changes.',
     proposalsAllowed
       ? '- When the admin asks for a change, call the matching propose_* tool. That only creates a suggestion card with a preview; the admin decides. Say "I prepared a suggestion — review it and tap Approve", never that it was applied, done or changed.'
@@ -177,6 +178,23 @@ export async function runAssistant(
   const proposalsAllowed = settings.maxProposals > 0 && hasChangeIntent(adminWords);
   const tools = toolsFor(kernel, principal, relayId, { proposals: proposalsAllowed });
   const byName = new Map(tools.map((t) => [t.spec.name, t]));
+  // Offer the built-ins plus the best-matching actions; find_tools unlocks the rest (routing.ts).
+  const actionTools = tools.filter((t) => t.actionId);
+  const query = [...adminWords, req.context?.screen ?? ''].join(' ');
+  const offeredNames = new Set([
+    ...tools.filter((t) => !t.actionId).map((t) => t.spec.name),
+    ...rankTools(actionTools, query, settings.maxTools).map((t) => t.spec.name),
+  ]);
+  if (actionTools.length > settings.maxTools) {
+    const find = findToolsTool(
+      () => actionTools,
+      (names) => {
+        for (const n of names) offeredNames.add(n);
+      },
+    );
+    byName.set(FIND_TOOLS, find);
+    offeredNames.add(FIND_TOOLS);
+  }
   const env: ToolEnv = {
     kernel,
     principal,
@@ -196,7 +214,7 @@ export async function runAssistant(
     { role: 'user', content: contextMessage(req, relayId, settings.maxToolResultChars) },
   ];
 
-  emit({ type: 'meta', sessionId, tools: tools.map((t) => t.spec.name), proposalsAllowed });
+  emit({ type: 'meta', sessionId, tools: [...offeredNames], proposalsAllowed });
 
   const proposals: Proposal[] = [];
   const calls: ToolCallRecord[] = [];
@@ -216,7 +234,9 @@ export async function runAssistant(
         break;
       }
       const lastRound = rounds >= settings.maxRounds - 1 || calls.length >= settings.maxToolCalls;
-      const offered = lastRound ? [] : tools.map((t) => t.spec);
+      const offered = lastRound
+        ? []
+        : [...offeredNames].map((n) => byName.get(n)?.spec).filter((s) => s !== undefined);
       const promptTokens = promptSize(messages, offered);
       if (budget.used + promptTokens + settings.maxOutputTokens > budget.limit) {
         stopped = 'budget';

@@ -30,6 +30,8 @@ export interface ConfigServiceLike {
   getLastKnownGood?(): Promise<BeamhopConfig | null | undefined> | BeamhopConfig | null | undefined;
   /** Record the boot file as a new revision ("file wins on boot"). */
   adoptBootConfig?(config: BeamhopConfig, meta: { source: 'file'; path: string }): unknown;
+  /** Latest saved revision (what the admin app last applied). */
+  current?(): Promise<{ revision: number; config: BeamhopConfig }>;
   /** Mark the running config as known-good after a healthy boot. */
   markKnownGood?(config: BeamhopConfig): unknown;
 }

@@ -211,6 +211,22 @@ function stripPrefix(req: Request, url: URL, prefix: string): Request {
   return new Request(next, req);
 }
 
+/** Copy the values at `paths` from `from` into `into` (env/flag overrides beat saved settings). */
+function withPaths(into: Record<string, unknown>, from: unknown, paths: string[][]) {
+  for (const path of paths) {
+    let src: unknown = from;
+    for (const k of path) src = (src as Record<string, unknown> | undefined)?.[k];
+    if (src === undefined) continue;
+    let dst = into;
+    for (const k of path.slice(0, -1)) {
+      if (!dst[k] || typeof dst[k] !== 'object') dst[k] = {};
+      dst = dst[k] as Record<string, unknown>;
+    }
+    dst[path[path.length - 1] as string] = structuredClone(src);
+  }
+  return into;
+}
+
 function safeConfig(cfg: BeamhopConfig): BeamhopConfig {
   return { ...cfg, plugins: cfg.plugins.map((p) => ({ ...p, enabled: false })) };
 }
@@ -303,6 +319,29 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       await svc?.adoptBootConfig?.(bootConfig, { source: 'file', path: opts.bootFile });
     } catch (err) {
       logger.log('error', 'could not record config file as a new revision', { err });
+    }
+  } else {
+    // No settings file: what the app saved last is the source of truth after a restart.
+    // This boot's node section (listen, data dir) and env/flag overrides still win.
+    const saved = await kernel
+      .use<ConfigServiceLike>('admin.config')
+      ?.current?.()
+      .catch((err: unknown) => {
+        logger.log('error', 'saved settings could not be read', { err });
+        return undefined;
+      });
+    if (saved && saved.revision > 1) {
+      const raw = withPaths(
+        { ...structuredClone(saved.config), node: bootConfig.node },
+        bootConfig,
+        opts.overridePaths ?? [],
+      );
+      try {
+        await kernel.applyConfig(withDataDirDefaults(parseConfig(raw), layout));
+        logger.log('info', 'saved settings restored', { revision: saved.revision });
+      } catch (err) {
+        logger.log('error', 'saved settings could not be applied; using boot settings', { err });
+      }
     }
   }
   if (opts.bootFile) {

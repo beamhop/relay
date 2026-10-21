@@ -4,10 +4,15 @@
  * `ai` module (its actions appear), turning it off unloads it again. No restart.
  */
 import { describe, expect, test } from 'bun:test';
-import { type Logger, createKernel } from '@beamhop/core';
+import { type Logger, type Principal, createKernel } from '@beamhop/core';
 import { memoryPorts } from '@beamhop/testkit';
-import { bunRuntimeModule, loadModules, manageFollowingModules } from '../src/index.ts';
-import { testConfig } from './helpers.ts';
+import {
+  bunRuntimeModule,
+  loadModules,
+  manageFollowingModules,
+  startServer,
+} from '../src/index.ts';
+import { canBind, testConfig } from './helpers.ts';
 
 const quiet: Logger = {
   log() {},
@@ -39,5 +44,46 @@ describe('modules that follow a setting', () => {
     await kernel.applyConfig({ ...kernel.config(), ai: { ...kernel.config().ai, enabled: false } });
     expect(kernel.isEnabled('ai')).toBe(false);
     expect(aiActions()).toHaveLength(0);
+  });
+});
+
+interface ConfigSvc {
+  propose(i: { merge: unknown }, p: Principal): Promise<{ id: string }>;
+  commit(id: string, p: Principal): Promise<unknown>;
+}
+
+const owner = { id: 'owner', roles: { '*': 'owner' }, via: 'token' } as Principal;
+const d = canBind() ? describe : describe.skip;
+
+d('without a settings file', () => {
+  test('settings saved in the app survive a restart (and load the assistant)', async () => {
+    const ports = memoryPorts();
+    const boot = async () => {
+      const config = testConfig();
+      return startServer({
+        config,
+        modules: await loadModules(config, quiet),
+        ports,
+        logger: quiet,
+        hostname: '127.0.0.1',
+        port: 0,
+        print: () => {},
+        shutdownTimeoutMs: 500,
+      });
+    };
+    const first = await boot();
+    const svc = first.kernel.use<ConfigSvc>('admin.config')!;
+    const p = await svc.propose({ merge: { ai: { enabled: true, model: 'qwen3' } } }, owner);
+    await svc.commit(p.id, owner);
+    expect(first.kernel.isEnabled('ai')).toBe(true);
+    await first.stop();
+
+    const second = await boot();
+    try {
+      expect(second.kernel.config().ai).toMatchObject({ enabled: true, model: 'qwen3' });
+      expect(second.kernel.isEnabled('ai')).toBe(true);
+    } finally {
+      await second.stop();
+    }
   });
 });
