@@ -869,6 +869,19 @@ Permanently erases the person’s private key after a waiting period. Their old 
 | `reason` | string |  |  |
 | `approvalId` | string |  | Approved request id (when the approval gate does not wrap this action) |
 
+### Show company-managed keys
+
+Whose keys the company holds, and which are waiting to be destroyed.
+
+- **id:** `keyvault.list-keys` · **CLI:** `beamhop keyvault list-keys` · **scope:** node · **permission:** `compliance.read`
+- read-only
+- *Technical:* keyvault.keys records (subjectId, pubkey, status, destroyAfter); never the wrapped secret.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `status` | `active` \| `pending-destroy` \| `destroyed` |  |  |
+| `limit` | number | `200` |  |
+
 ### Sign a person out of all apps
 
 Disconnects every app that signs through the company bunker for this person.

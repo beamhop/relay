@@ -106,6 +106,9 @@ export function resolveScreen(
     return { href: withQuery(path), fallback: false, tab: '/settings' };
   if (path.startsWith('/m/') && modules.includes(path.slice(2)))
     return { href: withQuery(path), fallback: false, tab: nearestTab(path) };
+  // Module screens named by their own path (`/settings/compliance`, `/approvals/<id>`).
+  if (modules.some((p) => path === p || path.startsWith(`${p}/`)))
+    return { href: withQuery(`/m${path}`), fallback: false, tab: nearestTab(path) };
   const tab = nearestTab(path);
   return { href: tab, fallback: true, tab };
 }

@@ -655,6 +655,62 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     }),
 
     defineAction({
+      id: 'enterprise.directory-status',
+      title: 'Show company directory status',
+      description:
+        'Which sign-in providers are connected, how many people use each, and when the directory last synced.',
+      technical:
+        'modules.enterprise-identity.idps[] + enterprise.bindings counts per idp; SCIM token presence (enterprise.secrets); Google Directory API last sync (enterprise.sync google-last:<idp>).',
+      scope: 'node',
+      permission: 'relay.read',
+      readOnly: true,
+      input: z.object({}),
+      keywords: ['sso', 'directory', 'sync', 'scim', 'providers'],
+      async run() {
+        const cfg = identity.cfg();
+        const bindings = await store.list();
+        const providers = [];
+        for (const idp of cfg.idps) {
+          const scim = idp.type === 'google' ? null : await scimTokenInfo(kernel, idp.id);
+          providers.push({
+            id: idp.id,
+            type: idp.type,
+            name: idpName(idp).replace(/^“|”$/g, ''),
+            people: bindings.filter((b) => b.idp === idp.id && b.status !== 'deleted').length,
+            provisioning:
+              idp.type === 'google'
+                ? cfg.google.directorySync.enabled && cfg.google.directorySync.idp === idp.id
+                  ? 'google'
+                  : 'none'
+                : scim
+                  ? 'scim'
+                  : 'none',
+            ...(scim ? { scimTokenLast4: scim.last4 } : {}),
+          });
+        }
+        const sync = cfg.google.directorySync;
+        const last = await kernel.ports.docs.get<{ at: number; report: unknown }>(
+          COL.sync,
+          `google-last:${sync.idp}`,
+        );
+        return {
+          output: {
+            providers,
+            directorySync: {
+              enabled: sync.enabled,
+              configured: google.configured(),
+              idp: sync.idp,
+              intervalMinutes: sync.intervalMinutes,
+              lastRunAt: last?.at ?? null,
+              lastReport: last?.report ?? null,
+            },
+          },
+          summary: `${providers.length} sign-in provider${providers.length === 1 ? '' : 's'}`,
+        };
+      },
+    }),
+
+    defineAction({
       id: 'enterprise.list-key-destructions',
       title: 'Show scheduled key destruction',
       description: 'Company-held keys of people who left, and when they are destroyed.',
