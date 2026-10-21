@@ -19,6 +19,7 @@
     "@beamhop/blobs": "workspace:*",
     "@beamhop/blossom": "workspace:*",
     "@beamhop/core": "workspace:*",
+    "@beamhop/plugins": "workspace:*",
     "@beamhop/policy": "workspace:*",
     "@beamhop/relay": "workspace:*",
     "@beamhop/storage-sql": "workspace:*",

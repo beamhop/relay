@@ -5,6 +5,7 @@
  * static import map. Pure function; the CLI (`cli.ts`) supplies file resolution.
  */
 import { type BeamhopConfig, parseConfig } from '@beamhop/core';
+import { BUILTIN_PLUGINS } from '@beamhop/plugins';
 
 /** Feature packages bundled by default. Missing ones are skipped with a warning. */
 export const DEFAULT_BUILTINS = [
@@ -13,6 +14,12 @@ export const DEFAULT_BUILTINS = [
   '@beamhop/blossom',
   '@beamhop/admin-api',
 ] as const;
+
+/** Package of the bundled plugin host (`createBundledPluginHost`). */
+export const PLUGINS_PACKAGE = '@beamhop/plugins';
+
+/** Plugin ids shipped inside `@beamhop/plugins` (no npm package to bundle). */
+export const BUILTIN_PLUGIN_IDS: readonly string[] = Object.keys(BUILTIN_PLUGINS);
 
 /**
  * Plugin id → npm package. Scoped or path-like ids are used as-is;
@@ -36,6 +43,8 @@ export interface ImportMapInput {
   runtimeSpecifier: string;
   /** Inline the config into the bundle (default true). */
   inlineConfig?: boolean;
+  /** Ids served by the plugin host's built-ins (default: `BUILTIN_PLUGINS` keys). */
+  builtinPlugins?: readonly string[];
 }
 
 export interface ImportMapResult {
@@ -46,6 +55,10 @@ export interface ImportMapResult {
   skipped: string[];
   /** Enabled plugins that could not be resolved (build must fail). */
   missing: Array<{ id: string; pkg: string }>;
+  /** Enabled built-in plugins (served by the plugin host, not imported separately). */
+  builtinPlugins: string[];
+  /** `@beamhop/plugins` specifier when the plugin host is bundled. */
+  pluginHost: string | null;
 }
 
 const str = (s: string) => JSON.stringify(s);
@@ -61,10 +74,18 @@ export function generateImportMap(input: ImportMapInput): ImportMapResult {
   }
   const plugins: ImportMapResult['plugins'] = [];
   const missing: ImportMapResult['missing'] = [];
+  const builtinPlugins: string[] = [];
+  const builtinIds = new Set(input.builtinPlugins ?? BUILTIN_PLUGIN_IDS);
+  const pluginHost = input.resolve(PLUGINS_PACKAGE);
   const seen = new Set<string>();
   for (const p of config.plugins) {
     if (!p.enabled || seen.has(p.id)) continue;
     seen.add(p.id);
+    // Built-in plugins live inside @beamhop/plugins: nothing to import for them.
+    if (builtinIds.has(p.id) && pluginHost) {
+      builtinPlugins.push(p.id);
+      continue;
+    }
     const pkg = pluginPackageName(p.id);
     const specifier = input.resolve(pkg);
     if (specifier) plugins.push({ id: p.id, pkg, specifier });
@@ -77,6 +98,7 @@ export function generateImportMap(input: ImportMapInput): ImportMapResult {
     '// Static import map: plugins are compiled into the Worker, never loaded at runtime.',
     `import { createCloudflareRuntime } from ${str(input.runtimeSpecifier)};`,
   ];
+  if (pluginHost) lines.push(`import { createBundledPluginHost } from ${str(pluginHost)};`);
   builtins.forEach((b, i) => {
     lines.push(`import * as builtin${i} from ${str(b.specifier)};`);
   });
@@ -88,6 +110,12 @@ export function generateImportMap(input: ImportMapInput): ImportMapResult {
     `const config: unknown = ${input.inlineConfig === false ? 'undefined' : JSON.stringify(input.config ?? {})};`,
   );
   lines.push('');
+  lines.push('const plugins = {');
+  plugins.forEach((p, i) => {
+    lines.push(`  ${str(p.id)}: plugin${i},`);
+  });
+  lines.push('};');
+  lines.push('');
   lines.push('const runtime = createCloudflareRuntime({');
   lines.push('  config,');
   lines.push('  builtins: {');
@@ -95,15 +123,25 @@ export function generateImportMap(input: ImportMapInput): ImportMapResult {
     lines.push(`    ${str(b.pkg)}: builtin${i},`);
   });
   lines.push('  },');
-  lines.push('  plugins: {');
-  plugins.forEach((p, i) => {
-    lines.push(`    ${str(p.id)}: plugin${i},`);
-  });
-  lines.push('  },');
+  if (pluginHost) {
+    // The plugin host loads enabled plugins (bundled ones + built-ins), with the
+    // plugin admin actions, circuit breaker and stats.
+    lines.push('  modules: [createBundledPluginHost(plugins)],');
+  } else {
+    lines.push('  plugins,');
+  }
   lines.push('});');
   lines.push('');
   lines.push('export default runtime.worker;');
   lines.push('export class RelayRoom extends runtime.RelayRoom {}');
   lines.push('');
-  return { code: lines.join('\n'), builtins, plugins, skipped, missing };
+  return {
+    code: lines.join('\n'),
+    builtins,
+    plugins,
+    skipped,
+    missing,
+    builtinPlugins,
+    pluginHost,
+  };
 }

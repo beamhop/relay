@@ -71,6 +71,8 @@ if (result.missing.length > 0) {
 }
 mkdirSync(dirname(outFile), { recursive: true });
 writeFileSync(outFile, result.code);
+if (!result.pluginHost)
+  console.warn('[beamhop] @beamhop/plugins not installed; plugins load without the plugin host');
 console.log(
-  `[beamhop] wrote ${relative(process.cwd(), outFile)}: ${result.builtins.length} built-ins, ${result.plugins.length} plugins`,
+  `[beamhop] wrote ${relative(process.cwd(), outFile)}: ${result.builtins.length} built-ins, ${result.plugins.length} plugins${result.builtinPlugins.length ? ` (+${result.builtinPlugins.length} built-in)` : ''}`,
 );
