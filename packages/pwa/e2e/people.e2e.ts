@@ -71,7 +71,8 @@ test.describe('People', () => {
     await page.getByTestId('toast-undo').first().click();
     await expect(page.getByTestId('toast').last()).toContainText('Undone for everyone');
     log = await serverLog(page);
-    expect(log.log.filter((l) => l.id === 'undo')).toHaveLength(3);
+    // One bulk request, one undo token for all three.
+    expect(log.log.filter((l) => l.id === 'undo')).toHaveLength(1);
   });
 
   test('blocked people get "Why?"; rows have a technical lens; notes in the sheet', async ({

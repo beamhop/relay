@@ -28,6 +28,8 @@
   import KeyRound from '@lucide/svelte/icons/key-round';
   import Code from '@lucide/svelte/icons/code';
   import Clock from '@lucide/svelte/icons/clock';
+  import Rocket from '@lucide/svelte/icons/rocket';
+  import HeartPulse from '@lucide/svelte/icons/heart-pulse';
   import Star from '@lucide/svelte/icons/star';
   import Compass from '@lucide/svelte/icons/compass';
   import ChartLine from '@lucide/svelte/icons/chart-line';
@@ -97,14 +99,17 @@
     page('/activity?tab=queue', m.activity_tab_queue(), Shield, ['moderation', 'reports', 'queue']),
     page('/people', m.nav_people(), Users, ['users', 'people', 'members']),
     page('/media', m.nav_media(), Image, ['files', 'media', 'uploads']),
+    page('/insights', m.insights_title(), ChartLine, ['insights', 'stats', 'trends', 'growth']),
+    page('/launch', m.launch_title(), Rocket, ['launch', 'share', 'invite', 'announce']),
     page('/settings', m.nav_settings(), Settings, ['settings', 'config']),
     page('/settings/goals', m.settings_goals_title(), Gauge, ['goals', 'limits']),
     page('/settings/backups', m.palette_page_backups(), Database, ['backups']),
     page('/settings/alerts', m.palette_page_alerts(), Bell, ['alerts', 'notifications']),
     page('/settings/plugins', m.settings_plugins_title(), Puzzle, ['plugins', 'extensions']),
     page('/settings/security', m.security_title(), KeyRound, ['security', 'passkey', 'recovery']),
-    ...(companyOn ? [page('/settings/company', m.company_title(), Building2, ['sso', 'company', 'scim'])] : []),
+    ...(companyOn ? [page('/settings/company', m.company_title(), Building2, ['sso', 'company', 'sign-in'])] : []),
     page('/settings/history', m.history_title(), History, ['history', 'revisions', 'undo']),
+    page('/settings/system', m.system_title(), HeartPulse, ['updates', 'upgrade', 'health', 'doctor', 'version']),
     page('/help', m.help_title(), LifeBuoy, ['help', 'guide']),
   ]);
 

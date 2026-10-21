@@ -16,7 +16,14 @@ export interface InstalledRecord {
   permissions: PluginPermission[];
   source: 'builtin' | 'catalog' | 'npm' | 'file';
   installedAt: number;
+  /** Source plugins: who wrote it (`ai` = the assistant's plugin writer). */
+  author?: 'ai';
+  /** Source plugins: the code as installed (lets "remove" be undone). */
+  code?: string;
 }
+
+/** Where a plugin came from, as shown to the admin (`ai` = written by the assistant). */
+export type PluginSource = 'builtin' | 'catalog' | 'npm' | 'file' | 'ai';
 
 export interface LoadRequest {
   id: string;

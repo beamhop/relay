@@ -8,6 +8,8 @@
   import Image from '@lucide/svelte/icons/image';
   import Settings from '@lucide/svelte/icons/settings';
   import { local, to } from '$lib/nav';
+  import { nearestTab } from '$lib/screens';
+  import { app } from '$lib/stores/app.svelte';
   import { cn } from '$lib/utils';
   import { m } from '$lib/paraglide/messages.js';
   import { haptic } from '$lib/haptics';
@@ -23,7 +25,7 @@
   ]);
 
   const current = $derived(local(page.url.pathname));
-  const active = (href: string) => (href === '/' ? current === '/' : current.startsWith(href));
+  const active = (href: string) => (href === '/' ? current === '/' : nearestTab(current, app.uiRoutes) === href);
 </script>
 
 {#if variant === 'bar'}

@@ -230,9 +230,9 @@ export function testCounts(o: GeneratePluginOutput): { passed: number; failed: n
 // ───────── "Written by the assistant" marker ─────────
 
 /**
- * `plugins.status` rows do not say where a plugin came from (backend gap), so
- * the app remembers which plugins the assistant wrote, keyed by plugin id.
- * A row with `source: 'ai'` / `origin: 'ai'` is recognised too.
+ * `plugins.status` rows say `source: 'ai'` for plugins the assistant wrote,
+ * but older servers and plugins written before that field existed do not,
+ * so the app also remembers which plugins the assistant wrote, keyed by id.
  */
 export const AI_MARK_KEY = 'beamhop.plugins.ai';
 

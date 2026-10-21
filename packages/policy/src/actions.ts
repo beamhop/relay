@@ -636,6 +636,7 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     scope: 'relay',
     permission: 'users.write',
     keywords: ['tier', 'plan', 'upgrade', 'limits'],
+    bulk: true,
     input: z.object({ pubkey: Pubkey, tier: z.string().nullable() }),
     async preview(input, ctx) {
       const relay = relayOf(rt, ctx);

@@ -134,6 +134,11 @@ describe('tiers', () => {
     expect(await svc.resolveTier('main', k.pk)).toBe('plus');
   });
 
+  test('changing plans works for many people at once (bulk)', async () => {
+    const { kernel } = await setup({ tiers });
+    expect(kernel.actions.get('users.set-tier')?.bulk).toBe(true);
+  });
+
   test('unknown tiers are refused', async () => {
     const { act } = await setup({ tiers });
     await expect(act('users.set-tier', { pubkey: makeKey().pk, tier: 'gold' })).rejects.toThrow(

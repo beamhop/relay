@@ -27,7 +27,11 @@ import {
   ADVANCED,
   SIMPLE,
   fieldsFor,
+  groupRefs,
   hasNetworkSchema,
+  initialValues,
+  outboundFields,
+  outboundLens,
   patchFor,
 } from '../src/lib/modules/enterprise-network/network.ts';
 import {
@@ -256,8 +260,61 @@ describe('network access settings', () => {
     expect(simple.length).toBeLessThanOrEqual(7);
     expect(simple.map((f) => f.label)).toContain('Networks that can use Main');
     expect(simple.map((f) => f.path.join('.'))).toContain('node.trustProxy');
+    expect(simple.map((f) => f.label)).toContain('Blocked networks');
     const advanced = fieldsFor(schema, ADVANCED, relays, 'main');
     expect(advanced.map((f) => f.label)).toContain('Networks that can use Ops');
+    expect(advanced.map((f) => f.label)).toEqual(
+      expect.arrayContaining(['Networks blocked from Main', 'Networks blocked from Ops']),
+    );
+    expect(advanced.find((f) => f.label === 'Networks blocked from Ops')?.technical).toContain(
+      'denylist.relays["ops"]',
+    );
+  });
+
+  it('team groups: switch maps to outbound.default, empty group list = same as all groups', () => {
+    const doc = {
+      modules: {
+        'enterprise-network': { outbound: { default: null, groups: { old: ['wss://x.example'] } } },
+      },
+    };
+    const groups = groupRefs(doc, [{ id: 'eng', name: 'Engineering' }]);
+    expect(groups.map((g) => g.id)).toEqual(['eng', 'old']);
+    const fields = outboundFields(schema, groups);
+    expect(fields.map((f) => f.label)).toEqual([
+      'Keep group messages on your company’s relays',
+      'Other relays every group may also post to',
+      'Other relays “Engineering” may also post to',
+      'Other relays “old” may also post to',
+    ]);
+    expect(fields[2]!.technical).toContain('NIP-29');
+    const values = initialValues(doc, fields);
+    expect(values['modules__enterprise-network__outbound__limit']).toBe(false);
+    // Untouched: nothing to save.
+    expect(patchFor(doc, fields, values)).toEqual([]);
+    // Switch on with one partner relay for eng; emptying "old" removes it.
+    values['modules__enterprise-network__outbound__limit'] = true;
+    values['modules__enterprise-network__outbound__groups__eng'] = ['wss://partner.example'];
+    values['modules__enterprise-network__outbound__groups__old'] = [];
+    expect(patchFor(doc, fields, values)).toEqual([
+      { op: 'add', path: '/modules/enterprise-network/outbound/default', value: [] },
+      {
+        op: 'add',
+        path: '/modules/enterprise-network/outbound/groups/eng',
+        value: ['wss://partner.example'],
+      },
+      { op: 'remove', path: '/modules/enterprise-network/outbound/groups/old' },
+    ]);
+    // Switch off again → back to no limit (null).
+    const limited = {
+      modules: { 'enterprise-network': { outbound: { default: [], groups: {} } } },
+    };
+    const v2 = initialValues(limited, fields);
+    expect(v2['modules__enterprise-network__outbound__limit']).toBe(true);
+    v2['modules__enterprise-network__outbound__limit'] = false;
+    expect(patchFor(limited, fields, v2)).toEqual([
+      { op: 'add', path: '/modules/enterprise-network/outbound/default', value: null },
+    ]);
+    expect(outboundLens(limited)[0]).toBe('outbound.default = []');
   });
 
   it('patches only what changed, creating the module section when absent', () => {

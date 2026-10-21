@@ -5,6 +5,7 @@
  * screens this app has; anything unknown lands on the nearest tab, and the
  * caller tells the admin with a toast instead of showing a dead end.
  */
+import type { UiRoute } from './api/types.ts';
 
 /** The five tabs (§6.1). */
 export const TABS = ['/', '/activity', '/people', '/media', '/settings'] as const;
@@ -90,9 +91,22 @@ export interface ResolvedScreen {
   tab: Tab;
 }
 
-/** The tab a path belongs to (first segment), Home when nothing matches. */
-export function nearestTab(path: string): Tab {
-  const seg = `/${path.replace(/^\/+/, '').split(/[/?#]/)[0] ?? ''}`;
+/**
+ * The tab a path belongs to, Home when nothing matches. Module screens (`/m/...`
+ * or their own path) belong to the tab their `/ui` placement names, e.g. an
+ * `activity-section` screen at `/x/<id>` highlights Activity; otherwise the
+ * first path segment decides.
+ */
+export function nearestTab(
+  path: string,
+  routes: ReadonlyArray<Pick<UiRoute, 'path' | 'placement'>> = [],
+): Tab {
+  const clean = `/${path.replace(/^\/+/, '').split(/[?#]/)[0] ?? ''}`;
+  const own = clean.startsWith('/m/') ? clean.slice(2) : clean;
+  const mod = routes.find((r) => own === r.path || own.startsWith(`${r.path}/`));
+  const placed = mod && `/${mod.placement.replace(/-section$/, '')}`;
+  if (placed && (TABS as readonly string[]).includes(placed)) return placed as Tab;
+  const seg = `/${own.slice(1).split('/')[0] ?? ''}`;
   return (TABS as readonly string[]).includes(seg) ? (seg as Tab) : '/';
 }
 

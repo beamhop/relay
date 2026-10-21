@@ -4,6 +4,7 @@
   import LoaderCircle from '@lucide/svelte/icons/loader-circle';
   import { flow } from '$lib/stores/actions.svelte';
   import { fieldsFromSchema } from '$lib/forms/json-schema';
+  import { visibleFields, withHiddenInputs } from './action-fields';
   import { flatten, formDefaults, unflatten } from '$lib/forms/values';
   import { prefs } from '$lib/stores/prefs.svelte';
   import { names } from '$lib/stores/names.svelte';
@@ -24,7 +25,7 @@
   });
 
   const cur = $derived(flow.current);
-  const fields = $derived(cur ? fieldsFromSchema(cur.action.inputSchema ?? {}) : []);
+  const fields = $derived(cur ? visibleFields(fieldsFromSchema(cur.action.inputSchema ?? {})) : []);
   const formId = $derived(cur ? `action-${cur.action.id}` : 'action');
 </script>
 
@@ -57,7 +58,7 @@
           id={formId}
           {fields}
           initial={{ ...formDefaults(fields), ...flatten(cur.input, fields) }}
-          onsubmit={(v) => flow.preview(unflatten(v, fields))}
+          onsubmit={(v) => flow.preview(withHiddenInputs(unflatten(v, fields), cur?.input))}
         />
       {/key}
     {:else if cur.phase === 'running'}
