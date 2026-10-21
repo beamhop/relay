@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Beamhop with optional Postgres, MinIO (S3 blobs) and Litestream (SQLite backups).
+#
+#   docker compose -f deploy/compose.yaml up -d                          # SQLite + files on disk
+#   docker compose -f deploy/compose.yaml --profile postgres up -d       # + Postgres
+#   docker compose -f deploy/compose.yaml --profile s3 up -d             # + MinIO for media
+#   docker compose -f deploy/compose.yaml --profile backup up -d         # + Litestream replication
+#
+# Settings come from a `.env` file next to this one (see variables below) and/or
+# ./beamhop.yaml mounted at /data/beamhop.yaml.
+#
+# Postgres: BEAMHOP_STORAGE_DRIVER=postgres
+#           BEAMHOP_STORAGE_URL=postgres://beamhop:beamhop@postgres:5432/beamhop
+# MinIO:    BEAMHOP_BLOB_DRIVER=s3 BEAMHOP_BLOB_ENDPOINT=http://minio:9000 BEAMHOP_BLOB_BUCKET=beamhop
+# TLS:      behind your own proxy keep the defaults and set BEAMHOP_TRUST_PROXY=true;
+#           for built-in certificates set BEAMHOP_TLS_MODE=acme and publish 443:3334 + 80:3380.
+
+name: beamhop
+
+services:
+  beamhop:
+    image: ghcr.io/beamhop/beamhop:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${BEAMHOP_PORT:-3334}:3334"
+    volumes:
+      - beamhop-data:/data
+    environment:
+      BEAMHOP_DOMAIN: ${BEAMHOP_DOMAIN:-}
+      BEAMHOP_NODE__TRUST_PROXY: ${BEAMHOP_TRUST_PROXY:-false}
+      BEAMHOP_NODE__TLS__MODE: ${BEAMHOP_TLS_MODE:-proxy}
+      BEAMHOP_NODE__TLS__EMAIL: ${BEAMHOP_TLS_EMAIL:-}
+      BEAMHOP_ACME_HTTP_PORT: ${BEAMHOP_ACME_HTTP_PORT:-3380}
+      BEAMHOP_STORAGE__DRIVER: ${BEAMHOP_STORAGE_DRIVER:-sqlite}
+      BEAMHOP_STORAGE__URL: ${BEAMHOP_STORAGE_URL:-}
+      BEAMHOP_BLOB_STORAGE__DRIVER: ${BEAMHOP_BLOB_DRIVER:-fs}
+      BEAMHOP_BLOB_STORAGE__ENDPOINT: ${BEAMHOP_BLOB_ENDPOINT:-}
+      BEAMHOP_BLOB_STORAGE__BUCKET: ${BEAMHOP_BLOB_BUCKET:-}
+      BEAMHOP_BLOB_STORAGE__REGION: ${BEAMHOP_BLOB_REGION:-us-east-1}
+      BEAMHOP_BLOB_STORAGE__ACCESS_KEY_ID: ${BEAMHOP_BLOB_ACCESS_KEY_ID:-}
+      BEAMHOP_BLOB_STORAGE__SECRET_ACCESS_KEY: ${BEAMHOP_BLOB_SECRET_ACCESS_KEY:-}
+    stop_grace_period: 20s
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: [postgres]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: beamhop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-beamhop}
+      POSTGRES_DB: beamhop
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U beamhop"]
+      interval: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: [s3, backup]
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-beamhop}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-please}
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: [s3, backup]
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do sleep 1; done;
+      mc mb --ignore-existing local/beamhop local/beamhop-backups"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-beamhop}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-please}
+
+  litestream:
+    image: litestream/litestream:0.3.13
+    profiles: [backup]
+    restart: unless-stopped
+    user: "65532:65532"
+    command: replicate -config /etc/litestream.yml
+    depends_on: [beamhop]
+    volumes:
+      - beamhop-data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    environment:
+      LITESTREAM_BUCKET: ${LITESTREAM_BUCKET:-beamhop-backups}
+      LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-http://minio:9000}
+      LITESTREAM_REGION: ${LITESTREAM_REGION:-us-east-1}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-beamhop}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-change-me-please}
+
+volumes:
+  beamhop-data:
+  postgres-data:
+  minio-data:

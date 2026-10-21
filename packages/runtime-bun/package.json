@@ -6,6 +6,33 @@
   "license": "AGPL-3.0-or-later",
   "description": "Bun runtime: server, WebSocket, adapters wiring, TLS/ACME, single binary",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "bin": { "beamhop-server": "./src/main.ts" },
+  "scripts": {
+    "start": "bun src/main.ts",
+    "build": "bun scripts/build.ts",
+    "build:host": "bun scripts/build.ts --host"
+  },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@beamhop/testkit": "workspace:*",
+    "@beamhop/storage-sql": "workspace:*",
+    "@beamhop/blobs": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/relay": "workspace:*",
+    "@beamhop/blossom": "workspace:*",
+    "@beamhop/admin-api": "workspace:*",
+    "@beamhop/insights": "workspace:*",
+    "@beamhop/alerts": "workspace:*",
+    "@beamhop/lifecycle": "workspace:*",
+    "@beamhop/experience": "workspace:*",
+    "@beamhop/public-web": "workspace:*",
+    "@beamhop/media": "workspace:*",
+    "@beamhop/ai": "workspace:*",
+    "@beamhop/plugins": "workspace:*",
+    "@beamhop/enterprise-identity": "workspace:*",
+    "@beamhop/enterprise-keyvault": "workspace:*",
+    "@beamhop/enterprise-compliance": "workspace:*",
+    "acme-client": "^5.4.0",
+    "hono": "^4.13.13"
+  }
 }
