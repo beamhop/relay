@@ -54,6 +54,23 @@ describe('RelayRoom hibernation', () => {
     expect(got).toEqual([['EVENT', 'notes', ev]]);
   });
 
+  test('Connection.country comes from cf-ipcountry and survives hibernation', async () => {
+    const ctx = setup();
+    const res = await ctx.runtime.worker.fetch(
+      upgradeRequest('https://alpha.example/', { 'cf-ipcountry': 'jp' }),
+      ctx.env,
+    );
+    expect(res.headers.get('x-upgraded')).toBe('1');
+    const name = ctx.ns.requests.at(-1)?.name as string;
+    const room = ctx.ns.instance(name);
+    const conn = [...room.core.conns.values()][0] as HibernatableConnection;
+    expect(conn.country).toBe('JP');
+    ctx.ns.hibernate(name);
+    const woke = ctx.ns.instance(name);
+    await woke.core.ready;
+    expect(([...woke.core.conns.values()][0] as HibernatableConnection).country).toBe('JP');
+  });
+
   test('large state spills to storage and is restored', async () => {
     const ctx = setup();
     const a = await connect(ctx);
@@ -90,6 +107,30 @@ describe('RelayRoom hibernation', () => {
     await a.room.core.flush();
     const att = a.ws.deserializeAttachment() as { state: string };
     expect(att.state).toContain('s1');
+  });
+
+  test('CLOSE persists state so hibernation does not resurrect the subscription', async () => {
+    const ctx = setup();
+    const a = await connect(ctx);
+    await a.room.webSocketMessage(a.ws, JSON.stringify(['REQ', 'gone', { kinds: [1] }]));
+    await tick();
+    await a.room.core.flush();
+    expect((a.ws.deserializeAttachment() as { state: string }).state).toContain('gone');
+
+    // The message-level flush runs before the handler's async CLOSE work lands.
+    await a.room.webSocketMessage(a.ws, JSON.stringify(['CLOSE', 'gone']));
+    await a.room.core.flush();
+    await tick();
+    // The state write itself marked the connection dirty (no frame was sent).
+    await a.room.core.flush();
+    expect((a.ws.deserializeAttachment() as { state: string }).state).not.toContain('gone');
+
+    ctx.ns.hibernate(a.name);
+    const woke = ctx.ns.instance(a.name);
+    await woke.core.ready;
+    const conn = [...woke.core.conns.values()][0] as HibernatableConnection;
+    const subs = (conn.state.get('test-relay') as { subs: Map<string, unknown> }).subs;
+    expect([...subs.keys()]).toEqual([]);
   });
 
   test('cross-shard fan-out delivers events to the other shard', async () => {

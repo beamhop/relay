@@ -8,6 +8,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import {
+  BEAMHOP_VERSION,
   type BeamhopConfig,
   type BeamhopModule,
   type Kernel,
@@ -27,12 +28,20 @@ import { type DataLayout, ensureDataDir, parseListen, withDataDirDefaults } from
 import { BunConnection, type WsData } from './connection.ts';
 import { JsonLogger } from './ports.ts';
 import {
+  DISK_SERVICE,
+  TLS_SERVICE,
+  countryFrom,
+  diskService,
+  tlsService,
+} from './runtime-services.ts';
+import {
   type ClaimCode,
   type ConfigServiceLike,
   lastKnownGood,
   obtainClaimCode,
 } from './services.ts';
 import { type StorageLoaders, createDefaultPorts } from './storage.ts';
+import { createTeamApp } from './team.ts';
 import {
   type AcmeBackend,
   AcmeManager,
@@ -42,7 +51,8 @@ import {
   decideTls,
 } from './tls.ts';
 
-export const VERSION = '0.0.0';
+/** Release version (root package.json, or the build-time `__BEAMHOP_VERSION__` define). */
+export const VERSION = BEAMHOP_VERSION;
 export const SELF_CHECK_PATH = '/.well-known/beamhop/self-check';
 export const HEALTH_PATH = '/healthz';
 export const ADMIN_MOUNT = '/admin';
@@ -84,6 +94,8 @@ export interface StartServerOptions {
   };
   /** Admin PWA on disk (dev); embedded assets take precedence. */
   pwaDir?: string;
+  /** Team app build on disk (dev); embedded assets take precedence. Served at /app when `modules.team.enabled`. */
+  teamDir?: string;
   /** Unmatched hosts are still dispatched (with `relayId: ''`) for these node-scope prefixes. */
   nodeScopePrefixes?: string[];
   shutdownTimeoutMs?: number;
@@ -212,6 +224,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   // Runtime facts for modules (lifecycle: safe mode, data dir, SQL snapshots).
   kernel.provide('runtime', { name: 'bun', safe, dataDir: layout.root });
   if (sqlService) kernel.provide('storage.sql', sqlService);
+  kernel.provide(DISK_SERVICE, diskService(layout.root));
 
   if (safe) {
     const lkg = await lastKnownGood(kernel);
@@ -279,9 +292,17 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     }
   }
   logger.log('info', 'TLS mode decided', { mode: tlsDecision.mode, reason: tlsDecision.reason });
+  kernel.provide(
+    TLS_SERVICE,
+    tlsService(
+      () => tlsDecision.mode,
+      () => acme,
+    ),
+  );
 
   // ── HTTP / WS ──
   const assets: AssetServer = createAssetServer({ mount: ADMIN_MOUNT, dir: opts.pwaDir });
+  const teamApp = createTeamApp(kernel, { dir: opts.teamDir });
   const nodeScope = opts.nodeScopePrefixes ?? [`${ADMIN_MOUNT}/`, '/api/'];
   const conns = new Set<BunConnection>();
   const startedAt = ports.clock.nowMs();
@@ -333,13 +354,23 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     }
 
     const ipHash = ports.crypto.hashIp(meta.ip);
+    const country = countryFrom(req, cfg);
     const relay = resolveRelay(cfg, url, meta.host);
+    const team = await teamApp.serve(
+      req,
+      url.pathname,
+      relay
+        ? { relayId: relay.id, publicUrl: `${meta.proto}://${meta.host}${relay.pathPrefix ?? ''}` }
+        : {},
+    );
+    if (team) return team;
     if (!relay) {
       if (nodeScope.some((p) => url.pathname.startsWith(p))) {
         const route: RouteContext = {
           relayId: '',
           publicUrl: `${meta.proto}://${meta.host}`,
           ipHash,
+          ...(country ? { country } : {}),
         };
         const denied = await runRequestGates(kernel, req, { route, upgrade: false, clientIp });
         if (denied) return denied;
@@ -353,6 +384,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       relayId: relay.id,
       publicUrl: `${meta.proto}://${meta.host}${prefix}`,
       ipHash,
+      ...(country ? { country } : {}),
     };
 
     const denied = await runRequestGates(kernel, req, {
@@ -370,6 +402,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         ports.clock.now(),
         ports.crypto.randomHex(16),
         req.headers.get('user-agent') ?? undefined,
+        country,
       );
       if (server.upgrade(req, { data: { conn } })) return undefined;
       return new Response('WebSocket upgrade failed', { status: 400 });

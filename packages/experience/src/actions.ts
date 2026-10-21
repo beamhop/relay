@@ -109,6 +109,8 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,
+    // Filtered per principal: open to admins of any relay (admin-api `mayRun`).
+    anyRelay: true,
     keywords: ['home', 'cards', 'suggestions', 'attention', 'inbox'],
     input: z.object({ relayId: z.string().optional().describe('Only this relay') }),
     async run(input, ctx) {
@@ -341,6 +343,8 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,
+    // Filtered per principal: open to admins of any relay (admin-api `mayRun`).
+    anyRelay: true,
     keywords: ['setup', 'checklist', 'onboarding', 'first week'],
     input: z.object({}),
     async run() {
@@ -517,6 +521,8 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,
+    // Filtered per principal: open to admins of any relay (admin-api `mayRun`).
+    anyRelay: true,
     input: z.object({}),
     async run(_input, ctx) {
       await deps.time.record(ctx.principal.id, 'ping');
@@ -533,6 +539,8 @@ export function createActions(deps: ActionDeps): ActionDef[] {
     scope: 'node',
     permission: 'relay.read',
     readOnly: true,
+    // Filtered per principal: open to admins of any relay (admin-api `mayRun`).
+    anyRelay: true,
     keywords: ['stats', 'time', 'minutes'],
     input: z.object({}),
     async run(_input, ctx) {

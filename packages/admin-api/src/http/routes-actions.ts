@@ -8,6 +8,7 @@ import {
   type ActionContext,
   type ActionDef,
   type DiffLine,
+  type Kernel,
   type Principal,
   type RelayId,
   can,
@@ -31,10 +32,27 @@ export function inputJsonSchema(def: ActionDef): unknown {
   return s;
 }
 
+/**
+ * May `principal` run `def` here? Node-scoped read-only actions marked
+ * `anyRelay` (output filtered per principal) are also open to admins who hold
+ * the permission on any configured relay.
+ */
+export function mayRun(
+  kernel: Kernel,
+  def: ActionDef,
+  principal: Principal,
+  relayId: RelayId | null,
+): boolean {
+  if (can(principal, def.permission, relayId)) return true;
+  if (relayId !== null || def.scope !== 'node' || !def.anyRelay || !def.readOnly) return false;
+  return kernel.config().relays.some((r) => can(principal, def.permission, r.id));
+}
+
 export function catalogEntry(
   def: ActionDef,
   principal: Principal | undefined,
   relayId: RelayId | null,
+  kernel?: Kernel,
 ) {
   return {
     id: def.id,
@@ -52,7 +70,11 @@ export function catalogEntry(
     shortcut: def.shortcut,
     cli: `beamhop ${def.id.split('.').join(' ')}`,
     inputSchema: inputJsonSchema(def),
-    allowed: principal ? can(principal, def.permission, relayId) : false,
+    allowed: principal
+      ? kernel
+        ? mayRun(kernel, def, principal, relayId)
+        : can(principal, def.permission, relayId)
+      : false,
   };
 }
 
@@ -76,8 +98,13 @@ function findAction(deps: Deps, id: string, relayId: RelayId | null): ActionDef 
   return def;
 }
 
-function checkPermission(def: ActionDef, principal: Principal, relayId: RelayId | null) {
-  if (!can(principal, def.permission, relayId))
+function checkPermission(
+  kernel: Kernel,
+  def: ActionDef,
+  principal: Principal,
+  relayId: RelayId | null,
+) {
+  if (!mayRun(kernel, def, principal, relayId))
     throw new HttpError(
       403,
       'forbidden',
@@ -112,7 +139,7 @@ export async function runAction(
   relayId: RelayId | null,
   reason?: string,
 ): Promise<RunOutcome> {
-  checkPermission(def, principal, relayId);
+  checkPermission(deps.kernel, def, principal, relayId);
   const input = parseWith(def.input, rawInput ?? {});
   const bus = deps.kernel.bus;
   let result: Awaited<ReturnType<ActionDef['run']>>;
@@ -165,7 +192,7 @@ export async function previewAction(
   principal: Principal,
   relayId: RelayId | null,
 ): Promise<DiffLine[]> {
-  checkPermission(def, principal, relayId);
+  checkPermission(deps.kernel, def, principal, relayId);
   const input = parseWith(def.input, rawInput ?? {});
   if (def.readOnly) return [];
   if (!def.preview) return [{ kind: 'info', text: def.title, technical: def.technical }];
@@ -184,7 +211,7 @@ async function undoToken(deps: Deps, token: string, principal: Principal): Promi
   const undoOne = async (actionId: string, payload: unknown, summary: string) => {
     const def = deps.kernel.actions.get(actionId);
     if (!def?.undo) throw new HttpError(410, 'undo_expired', 'This can no longer be undone');
-    checkPermission(def, principal, entry.relayId);
+    checkPermission(deps.kernel, def, principal, entry.relayId);
     await def.undo(payload, context(deps, principal, entry.relayId));
     deps.kernel.bus.emit('admin.action', {
       relayId: entry.relayId,
@@ -201,7 +228,7 @@ async function undoToken(deps: Deps, token: string, principal: Principal): Promi
       const child = await deps.undo.peek(t);
       if (child?.actionId) {
         const def = deps.kernel.actions.get(child.actionId);
-        if (def) checkPermission(def, principal, child.relayId);
+        if (def) checkPermission(deps.kernel, def, principal, child.relayId);
         children.push({ t, child });
       }
     }
@@ -215,7 +242,7 @@ async function undoToken(deps: Deps, token: string, principal: Principal): Promi
     return entry.summary;
   }
   const def = deps.kernel.actions.get(entry.actionId ?? '');
-  if (def) checkPermission(def, principal, entry.relayId);
+  if (def) checkPermission(deps.kernel, def, principal, entry.relayId);
   if (!(await deps.undo.take(token)))
     throw new HttpError(410, 'undo_expired', 'This can no longer be undone');
   await undoOne(entry.actionId!, entry.payload, entry.summary);
@@ -247,7 +274,9 @@ export function actionRoutes(api: Api, deps: Deps): void {
     },
     (c, { relayId, principal }) => {
       const defs = kernel.actions.list().filter((d) => !relayId || d.scope === 'relay');
-      return c.json({ actions: defs.map((d) => catalogEntry(d, principal, relayId ?? null)) });
+      return c.json({
+        actions: defs.map((d) => catalogEntry(d, principal, relayId ?? null, kernel)),
+      });
     },
   );
 
@@ -312,7 +341,7 @@ export function actionRoutes(api: Api, deps: Deps): void {
       if (!def.bulk)
         throw new HttpError(400, 'not_bulk', 'This action cannot be run for many items at once');
       const principal = requirePrincipal(c);
-      checkPermission(def, principal, relayId);
+      checkPermission(deps.kernel, def, principal, relayId);
       const results: Array<{ ok: boolean; output?: unknown; summary?: string; error?: unknown }> =
         [];
       const tokens: string[] = [];

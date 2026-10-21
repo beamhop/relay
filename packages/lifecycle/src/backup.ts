@@ -12,12 +12,23 @@
  *   db/pg_dump.sql           extra plain pg_dump when the binary is on PATH (manual restore)
  *   ports/events/<relay>.ndjson  fallback when no SQL access (memory stores): events only
  *   blobs/manifest.ndjson    one blob ownership per line (sha256 + owner + size + type)
- *   config/config.json       current config revision ({ revision, config })
+ *   config/config.json       current config revision ({ revision, config }); secrets
+ *                            masked unless the archive is encrypted or
+ *                            `backups.includeSecrets` is on
+ *
+ * With `ports.keyWrapper` (key vault) the whole archive is AES-256-GCM
+ * encrypted with a wrapped data key in a header (see backup-crypto.ts).
  *
  * The catalog lives in DocStore `lifecycle.backups` (`b-…` keys) and the status
  * of the latest run in `lifecycle.backups/last` (read by insights health).
  */
 import type { BeamhopConfig, BlobOwnership, BlobStore, DiffLine, NostrEvent } from '@beamhop/core';
+import {
+  decryptArchive,
+  encryptArchive,
+  isEncryptedArchive,
+  maskSecrets,
+} from './backup-crypto.ts';
 import type { LifecycleRuntime } from './runtime.ts';
 import { COL, SCHEDULE_SECONDS } from './settings.ts';
 import {
@@ -32,6 +43,8 @@ import {
 import { type TarEntry, gunzip, gzip, readAll, tarPack, tarUnpack } from './tar.ts';
 
 export const ARCHIVE_TYPE = 'application/vnd.beamhop.backup+gzip';
+/** Archive sealed with AES-256-GCM (data key wrapped by `ports.keyWrapper`). */
+export const ARCHIVE_TYPE_ENCRYPTED = 'application/vnd.beamhop.backup+gzip+aesgcm';
 export const ARCHIVE_FORMAT = 'beamhop-backup';
 
 export type DbFormat = 'sqlite' | 'ndjson' | 'ports';
@@ -52,6 +65,8 @@ export interface ArchiveManifest {
   events: Record<string, number>;
   blobs: { owners: number; unique: number; bytesCopied: number };
   config: { revision?: number };
+  /** Whether config secrets are kept in config/config.json (absent in older archives). */
+  secrets?: 'included' | 'masked';
   migrations: string[];
 }
 
@@ -69,6 +84,10 @@ export interface BackupRecord {
   docs?: number;
   blobs: number;
   configRevision?: number;
+  /** Sealed with the key service (`ports.keyWrapper`). */
+  encrypted?: boolean;
+  /** Config secrets kept or masked in the archive. */
+  secrets?: 'included' | 'masked';
   durationMs: number;
 }
 
@@ -221,7 +240,10 @@ export class BackupService {
       do {
         const page = await target.list({ cursor, limit: 1000 });
         for (const m of page.items)
-          if (m.type === ARCHIVE_TYPE && !known.has(m.sha256))
+          if (
+            (m.type === ARCHIVE_TYPE || m.type === ARCHIVE_TYPE_ENCRYPTED) &&
+            !known.has(m.sha256)
+          )
             unknownArchives.push({ sha256: m.sha256, size: m.size });
         cursor = page.cursor;
       } while (cursor);
@@ -256,9 +278,10 @@ export class BackupService {
     try {
       const target = await this.target();
       if (!target) throw new Error('No backup storage is configured');
-      const { bytes, manifest } = await this.buildArchive(target);
+      const { bytes, manifest, encrypted } = await this.buildArchive(target);
       const sha256 = await this.ports.crypto.sha256Hex(bytes);
-      await target.put({ sha256, size: bytes.length, type: ARCHIVE_TYPE }, bytes);
+      const type = encrypted ? ARCHIVE_TYPE_ENCRYPTED : ARCHIVE_TYPE;
+      await target.put({ sha256, size: bytes.length, type }, bytes);
       const location = `${this.targetUri() ?? target.kind}/${sha256}`;
       const record: BackupRecord = {
         id: manifest.id,
@@ -276,6 +299,8 @@ export class BackupService {
         ...(manifest.config.revision !== undefined
           ? { configRevision: manifest.config.revision }
           : {}),
+        ...(encrypted ? { encrypted: true } : {}),
+        ...(manifest.secrets ? { secrets: manifest.secrets } : {}),
         durationMs: this.ports.clock.nowMs() - started,
       };
       await this.ports.docs.put(COL.backups, record.id, record);
@@ -347,7 +372,7 @@ export class BackupService {
 
   async buildArchive(
     target?: BlobStore | null,
-  ): Promise<{ bytes: Uint8Array; manifest: ArchiveManifest }> {
+  ): Promise<{ bytes: Uint8Array; manifest: ArchiveManifest; encrypted: boolean }> {
     const now = this.ports.clock.now();
     const id = `b-${String(this.ports.clock.nowMs()).padStart(15, '0')}-${this.ports.crypto.randomHex(3)}`;
     const settings = this.rt.settings().backups;
@@ -430,7 +455,11 @@ export class BackupService {
     const current = (await cfgSvc?.current?.().catch(() => undefined)) ?? {
       config: this.config(),
     };
-    add('config/config.json', json(current));
+    // Secrets stay only inside an encrypted archive or when explicitly opted in.
+    const wrapper = this.ports.keyWrapper;
+    const secrets: 'included' | 'masked' =
+      wrapper || settings.includeSecrets ? 'included' : 'masked';
+    add('config/config.json', json(secrets === 'included' ? current : maskSecrets(current)));
 
     const files: ArchiveManifest['files'] = [];
     for (const e of entries)
@@ -453,10 +482,18 @@ export class BackupService {
       events,
       blobs: { owners: owners.length, unique: unique.length, bytesCopied },
       config: 'revision' in current ? { revision: current.revision } : {},
+      secrets,
       migrations,
     };
     const tar = tarPack([{ name: 'manifest.json', data: json(manifest), mtime: now }, ...entries]);
-    return { bytes: await gzip(tar), manifest };
+    const gz = await gzip(tar);
+    if (!wrapper) return { bytes: gz, manifest, encrypted: false };
+    return { bytes: await encryptArchive(gz, wrapper), manifest, encrypted: true };
+  }
+
+  /** The gzip'd tar inside stored archive bytes (decrypting sealed archives). */
+  private async plainArchive(bytes: Uint8Array): Promise<Uint8Array> {
+    return isEncryptedArchive(bytes) ? decryptArchive(bytes, this.ports.keyWrapper) : bytes;
   }
 
   // ── verify / load ──
@@ -470,7 +507,8 @@ export class BackupService {
     }
     let files: Map<string, Uint8Array>;
     try {
-      files = new Map(tarUnpack(await gunzip(bytes)).map((e) => [e.name, e.data]));
+      const plain = await this.plainArchive(bytes);
+      files = new Map(tarUnpack(await gunzip(plain)).map((e) => [e.name, e.data]));
     } catch (err) {
       return { ok: false, problems: [...problems, `archive is unreadable: ${String(err)}`] };
     }
@@ -531,7 +569,8 @@ export class BackupService {
     const v = await this.verifyBytes(bytes, sha256);
     if (!v.ok || !v.manifest)
       throw new Error(`Backup failed its integrity check: ${v.problems.join('; ')}`);
-    const files = new Map(tarUnpack(await gunzip(bytes)).map((e) => [e.name, e.data]));
+    const plain = await this.plainArchive(bytes);
+    const files = new Map(tarUnpack(await gunzip(plain)).map((e) => [e.name, e.data]));
     return { manifest: v.manifest, files };
   }
 

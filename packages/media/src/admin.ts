@@ -17,7 +17,7 @@ import { MATCHES, type MatchRecord, type MediaService, mediaKind, scanGated } fr
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/, 'must be 64 lowercase hex characters');
 
 const INSTALL_SHARP =
-  'sharp (optional dependency of @beamhop/media) could not be loaded. Install it next to the server (`bun add sharp`) or use a build that bundles it. ffmpeg on PATH enables video transcoding.';
+  'sharp (optional dependency of @beamhop/media) could not be loaded. From source: `bun add sharp`. Single binary: use the release archive that ships node_modules/ next to `beamhop` (scripts/build.ts --with-sharp), or point BEAMHOP_SHARP_PATH at a node_modules containing sharp. The Docker image includes it. ffmpeg on PATH enables video transcoding.';
 
 function relaysFor(kernel: Kernel, relayId: string | null): RelayConfig[] {
   const all = kernel.config().relays.filter((r) => r.blossom.enabled);

@@ -42,6 +42,7 @@ import { type RelayModuleConfig, RelayModuleConfigSchema } from './config.ts';
 import { type Audience, type RelayExtension, allAudiences } from './extensions.ts';
 import { GIFT_WRAP_KINDS, giftWrapExtension } from './giftwrap.ts';
 import type { GroupsConfig } from './groups.ts';
+import { archiveHeld, deletionTargets, holdsOf, queryAll } from './holds.ts';
 import { type IndexedSub, SubscriptionIndex } from './subindex.ts';
 import { Negentropy, NegentropyStorageVector } from './vendor/negentropy.ts';
 
@@ -379,6 +380,7 @@ export class RelayEngine implements ConnectionHandler {
       connId: conn.id,
       ipHash: conn.ipHash,
       ...(conn.userAgent !== undefined ? { userAgent: conn.userAgent } : {}),
+      ...(conn.country !== undefined ? { country: conn.country } : {}),
     });
     this.send(st, ['AUTH', conn.challenge]);
   }
@@ -868,6 +870,12 @@ export class RelayEngine implements ConnectionHandler {
     }
     this.ok(st, event.id, true, '');
     if (event.kind === DELETION_KIND) {
+      // Legal hold: held targets are archived first, then deleted as asked.
+      const holds = holdsOf(this.kernel);
+      if (holds) {
+        const targets = await deletionTargets(this.kernel, st.relayId, event);
+        await archiveHeld(this.kernel, holds, st.relayId, targets, 'nip09');
+      }
       const ids = await store.applyDeletion(st.relayId, event);
       if (ids.length > 0)
         this.kernel.bus.emit('event.deleted', { relayId: st.relayId, ids, cause: 'nip09' });
@@ -938,6 +946,15 @@ export class RelayEngine implements ConnectionHandler {
       } catch (err) {
         this.fail(st, 'vanish', err);
       }
+    }
+    // Legal hold: archive held events (the user's own and wraps addressed to
+    // them) before they are erased; the request itself is still honoured.
+    const holds = holdsOf(this.kernel);
+    if (holds) {
+      const own = await queryAll(this.kernel, st.relayId, { authors: [event.pubkey], until });
+      await archiveHeld(this.kernel, holds, st.relayId, own, 'nip62');
+      const received = await queryAll(this.kernel, st.relayId, wraps);
+      await archiveHeld(this.kernel, holds, st.relayId, received, 'nip62', () => event.pubkey);
     }
     const removed =
       (await store.vanish(st.relayId, event.pubkey, until)) +
@@ -1127,11 +1144,57 @@ export class RelayEngine implements ConnectionHandler {
     const prepared = await this.prepareRead(st, rawFilters, closed);
     if (!prepared) return;
     const store = this.kernel.ports.events;
-    const count =
-      prepared.filters.length === 0 ? 0 : await store.count(st.relayId, prepared.filters);
-    const body: { count: number; approximate?: boolean } = { count };
-    if (!store.capabilities.exactCount) body.approximate = true;
+    const body: { count: number; approximate?: boolean } = { count: 0 };
+    if (prepared.filters.length > 0) {
+      if (await this.countNeedsScan(st.relayId, prepared.filters)) {
+        const r = await this.scanCount(st, prepared.filters);
+        if (r === null) return;
+        body.count = r.count;
+        if (r.capped) body.approximate = true;
+      } else {
+        body.count = await store.count(st.relayId, prepared.filters);
+        if (!store.capabilities.exactCount) body.approximate = true;
+      }
+    } else if (!store.capabilities.exactCount) body.approximate = true;
+    if (st.closed) return;
     this.send(st, ['COUNT', subId, body]);
+  }
+
+  /** Could an aggregate count include events this reader may not see? */
+  private async countNeedsScan(relayId: RelayId, filters: Filter[]): Promise<boolean> {
+    for (const ext of this.extensions) {
+      if (!ext.restrictsCount) continue;
+      if (await ext.restrictsCount(relayId, filters)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Privacy-preserving COUNT: count matching events one by one with the same
+   * expiration and audience checks as REQ. Bounded by `countScanLimit`.
+   */
+  private async scanCount(
+    st: ConnState,
+    filters: Filter[],
+  ): Promise<{ count: number; capped: boolean } | null> {
+    const cap = this.cfg.countScanLimit;
+    const events = await this.kernel.ports.events.query(
+      st.relayId,
+      // Like EventStore.count, `limit` does not bound a count.
+      filters.map((f) => ({ ...f, limit: cap })),
+      { maxLimit: cap },
+    );
+    const now = this.kernel.ports.clock.now();
+    let count = 0;
+    for (const e of events) {
+      const exp = expirationOf(e);
+      if (exp !== undefined && exp <= now) continue;
+      let visible = this.visibleTo(st, e);
+      if (visible instanceof Promise) visible = await visible;
+      if (st.closed) return null;
+      if (visible) count++;
+    }
+    return { count, capped: events.length >= cap };
   }
 
   // ───────────────────────── AUTH (NIP-42) ─────────────────────────

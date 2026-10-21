@@ -65,6 +65,41 @@ export const personaPresets: Record<Persona, RelayConfigPatch> = {
   },
 };
 
+/**
+ * Node-level module settings a persona turns on (`config.modules.<id>`).
+ * Only ever switches features on: modules are shared by every relay on the
+ * node, so applying another persona to one relay never turns them off.
+ * `team.enabled` serves the Team app at /app (runtime-bun, default off).
+ */
+export const personaModulePresets: Partial<Record<Persona, Record<string, unknown>>> = {
+  organization: { team: { enabled: true } },
+};
+
+/** Merge a persona's module presets into `config.modules`. */
+export function applyPersonaModules(
+  modules: Record<string, unknown>,
+  persona: Persona,
+): Record<string, unknown> {
+  const patch = personaModulePresets[PersonaSchema.parse(persona)];
+  return patch ? deepMerge(modules, patch) : modules;
+}
+
+/** Plain diff of module presets (e.g. the Team app being switched on). */
+export function diffPersonaModules(modules: Record<string, unknown>, persona: Persona): DiffLine[] {
+  const next = applyPersonaModules(modules, persona);
+  const team = (m: Record<string, unknown>) =>
+    (m.team as { enabled?: boolean } | undefined)?.enabled === true;
+  if (team(next) && !team(modules))
+    return [
+      {
+        kind: 'add',
+        text: 'Team app turns on (at /app)',
+        technical: 'modules.team.enabled: false → true',
+      },
+    ];
+  return [];
+}
+
 export const personaInfo: Record<Persona, { title: string; description: string }> = {
   'public-social': {
     title: 'Public social',

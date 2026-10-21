@@ -61,6 +61,32 @@ describe('Worker fetch routing', () => {
     expect(req?.headers.get('x-forwarded-for')).toBeNull();
   });
 
+  test('cf-ipcountry reaches RouteContext and the room; spoofed headers are dropped', async () => {
+    const ctx = setup({ modules: [routeEcho] });
+    const res = await ctx.runtime.worker.fetch(
+      new Request('https://alpha.example/', { headers: { 'cf-ipcountry': 'de' } }),
+      ctx.env,
+    );
+    expect(((await res.json()) as { country?: string }).country).toBe('DE');
+    const unknown = await ctx.runtime.worker.fetch(
+      new Request('https://alpha.example/', { headers: { 'cf-ipcountry': 'XX' } }),
+      ctx.env,
+    );
+    expect(((await unknown.json()) as { country?: string }).country).toBeUndefined();
+
+    const ws = setup();
+    await ws.runtime.worker.fetch(
+      upgradeRequest('https://alpha.example/', { 'cf-ipcountry': 'NL' }),
+      ws.env,
+    );
+    expect(ws.ns.requests.at(-1)?.headers.get('x-beamhop-country')).toBe('NL');
+    await ws.runtime.worker.fetch(
+      upgradeRequest('https://alpha.example/', { 'x-beamhop-country': 'FR' }),
+      ws.env,
+    );
+    expect(ws.ns.requests.at(-1)?.headers.get('x-beamhop-country')).toBeNull();
+  });
+
   test('client-supplied x-beamhop headers are overwritten', async () => {
     const ctx = setup();
     await ctx.runtime.worker.fetch(

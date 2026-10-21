@@ -18,6 +18,14 @@ import {
   xTagMismatch,
 } from './util.ts';
 
+export const HOLDS_SERVICE = 'lifecycle.holds';
+
+/** Structural view of lifecycle's legal-hold registry. */
+export interface LegalHoldsLike {
+  isHeld(relayId: RelayId, subject: { pubkey?: string; sha256?: string }): Promise<boolean>;
+  active?(): boolean;
+}
+
 export interface BlossomOptions {
   /** fetch used for BUD-04 mirroring (tests inject a mock remote). Default global fetch. */
   fetch?: (req: Request) => Promise<Response>;
@@ -346,9 +354,29 @@ export class BlossomService {
 
   // ───────────── deletion / GC ─────────────
 
-  /** Delete bytes when no relay owns the blob any more. */
-  async collect(sha256: string): Promise<boolean> {
+  /**
+   * Legal hold (§12.7, `kernel.use('lifecycle.holds')`): bytes are shared by all
+   * virtual relays, so they are frozen when any relay holds the hash (or the
+   * last owner, when known). Errors count as held (fail safe).
+   */
+  async bytesHeld(sha256: string, owner?: { relayId: RelayId; pubkey: string }): Promise<boolean> {
+    const holds = this.kernel.use<LegalHoldsLike>(HOLDS_SERVICE);
+    if (!holds || (typeof holds.active === 'function' && !holds.active())) return false;
+    try {
+      if (owner && (await holds.isHeld(owner.relayId, { sha256, pubkey: owner.pubkey })))
+        return true;
+      for (const r of this.kernel.config().relays)
+        if (await holds.isHeld(r.id, { sha256 })) return true;
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  /** Delete bytes when no relay owns the blob any more (and no legal hold freezes them). */
+  async collect(sha256: string, owner?: { relayId: RelayId; pubkey: string }): Promise<boolean> {
     if ((await this.ports.blobIndex.refCount(sha256)) > 0) return false;
+    if (await this.bytesHeld(sha256, owner)) return false;
     const erased = await this.ports.blobs.delete(sha256);
     await this.ports.docs.delete(QUARANTINE, sha256);
     return erased;
@@ -363,7 +391,7 @@ export class BlossomService {
     const removed = await this.ports.blobIndex.removeOwner(relayId, sha256, pubkey);
     if (!removed) return { removed, erased: false };
     this.kernel.bus.emit('blob.deleted', { relayId, sha256, pubkey, cause });
-    return { removed, erased: await this.collect(sha256) };
+    return { removed, erased: await this.collect(sha256, { relayId, pubkey }) };
   }
 
   /** One GC pass: drop expired ownerships, then sweep orphaned bytes. */

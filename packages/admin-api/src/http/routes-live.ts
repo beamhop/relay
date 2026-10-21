@@ -93,6 +93,43 @@ export function liveAllowed(
   return can(p, perm, rid);
 }
 
+/** SSE event carrying insights live snapshots (`kernel.use('insights').onLive`) for sparklines. */
+export const INSIGHTS_TICK = 'insights.tick';
+
+interface LiveSnapshotLike {
+  at: number;
+  relays: Array<{ relayId: RelayId } & Record<string, unknown>>;
+  storage?: unknown;
+  disk?: unknown;
+}
+
+interface InsightsLiveLike {
+  onLive?(fn: (s: LiveSnapshotLike) => void): () => void;
+}
+
+/**
+ * The part of a live snapshot this principal may see: relays they hold
+ * `insights.read` on (only `scopeRelay` on a relay route); node-wide storage
+ * and disk only with node-level `insights.read`. Null when nothing is visible.
+ */
+export function tickFor(
+  p: Principal,
+  snap: LiveSnapshotLike,
+  scopeRelay: RelayId | null,
+): LiveSnapshotLike | null {
+  const relays = (snap.relays ?? []).filter(
+    (r) => (!scopeRelay || r.relayId === scopeRelay) && can(p, 'insights.read', r.relayId),
+  );
+  const node = !scopeRelay && can(p, 'insights.read', null);
+  if (relays.length === 0 && !node) return null;
+  return {
+    at: snap.at,
+    relays,
+    storage: node ? (snap.storage ?? null) : null,
+    disk: node ? (snap.disk ?? null) : null,
+  };
+}
+
 // ───────────────────────────── health / cards ─────────────────────────────
 
 const RANK = { ok: 0, warn: 1, critical: 2 } as const;
@@ -290,18 +327,23 @@ export function liveRoutes(api: Api, deps: Deps): void {
       tags: ['Live'],
       summary: 'Live updates (Server-Sent Events), filtered by your permissions',
       produces: 'text/event-stream',
-      query: { events: 'Comma-separated event names (default: all low-volume events)' },
+      query: {
+        events: `Comma-separated event names (default: all low-volume events plus ${INSIGHTS_TICK})`,
+      },
     },
     (c, { relayId }) => {
       const p = requirePrincipal(c);
       const requested = c.req.query('events');
       const all = Object.keys(EVENT_PERMISSIONS) as AppEventName[];
-      const names = requested
-        ? (requested.split(',').map((s) => s.trim()) as AppEventName[]).filter(
-            (n) => n in EVENT_PERMISSIONS,
-          )
+      const asked = requested ? requested.split(',').map((s) => s.trim()) : null;
+      const names = asked
+        ? (asked as AppEventName[]).filter((n) => n in EVENT_PERMISSIONS)
         : all.filter((n) => !DEFAULT_EXCLUDED.has(n));
-      if (names.length === 0) throw new HttpError(400, 'bad_request', 'No known events requested');
+      const insights = kernel.use<InsightsLiveLike>('insights');
+      const ticks =
+        typeof insights?.onLive === 'function' && (!asked || asked.includes(INSIGHTS_TICK));
+      if (names.length === 0 && !ticks)
+        throw new HttpError(400, 'bad_request', 'No known events requested');
       const enc = new TextEncoder();
       const offs: Array<() => void> = [];
       let timer: ReturnType<typeof setInterval> | undefined;
@@ -323,9 +365,19 @@ export function liveRoutes(api: Api, deps: Deps): void {
               cleanup();
             }
           };
+          const streamed = ticks ? [...names, INSIGHTS_TICK] : names;
           send(
-            `: connected\nretry: 3000\n\nevent: ready\ndata: ${JSON.stringify({ events: names, relayId })}\n\n`,
+            `: connected\nretry: 3000\n\nevent: ready\ndata: ${JSON.stringify({ events: streamed, relayId })}\n\n`,
           );
+          if (ticks && insights?.onLive) {
+            offs.push(
+              insights.onLive((snap) => {
+                const visible = tickFor(p, snap, relayId);
+                if (!visible) return;
+                send(`id: ${++seq}\nevent: ${INSIGHTS_TICK}\ndata: ${JSON.stringify(visible)}\n\n`);
+              }),
+            );
+          }
           for (const name of names) {
             offs.push(
               kernel.bus.on(name, (payload: AppEvents[typeof name]) => {

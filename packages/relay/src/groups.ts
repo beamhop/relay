@@ -142,6 +142,8 @@ function isModerationKind(kind: number): boolean {
 
 export class GroupsService {
   private cache = new Map<string, CacheEntry>();
+  /** relayId → "has at least one private group" (same staleness bound as `cache`). */
+  private privateFlags = new Map<RelayId, { v: boolean; at: number }>();
   private keys = new Map<RelayId, Promise<{ pubkey: string; secretKey: string }>>();
 
   constructor(
@@ -256,6 +258,16 @@ export class GroupsService {
    * next record, `null` to delete, or `undefined` for "no change".
    */
   private async mutate(
+    relayId: RelayId,
+    id: string,
+    fn: (cur: GroupRecord | null) => GroupRecord | null | undefined,
+  ): Promise<{ before: GroupRecord | null; after: GroupRecord | null; changed: boolean }> {
+    const res = await this.mutateRecord(relayId, id, fn);
+    if (res.changed) this.privateFlags.delete(relayId);
+    return res;
+  }
+
+  private async mutateRecord(
     relayId: RelayId,
     id: string,
     fn: (cur: GroupRecord | null) => GroupRecord | null | undefined,
@@ -684,6 +696,21 @@ export class GroupsService {
     };
   }
 
+  /**
+   * Does this relay have any private group? Cached like group records (a
+   * change made on another node is seen within the same few seconds as REQ
+   * audience checks); local changes invalidate immediately.
+   */
+  async hasPrivateGroups(relayId: RelayId): Promise<boolean> {
+    if (!this.enabled()) return false;
+    const now = this.kernel.ports.clock.nowMs();
+    const hit = this.privateFlags.get(relayId);
+    if (hit && now - hit.at < CACHE_MS) return hit.v;
+    const v = (await this.list(relayId)).some((g) => g.private);
+    this.privateFlags.set(relayId, { v, at: now });
+    return v;
+  }
+
   async checkFilters(
     relayId: RelayId,
     filters: Filter[],
@@ -716,6 +743,9 @@ export class GroupsService {
       audience: (relayId, event) =>
         groupIdOf(event) === undefined ? null : this.audience(relayId, event),
       filters: (relayId, filters, authed) => this.checkFilters(relayId, filters, authed),
+      // Any event may carry an `h` tag, so while a private group exists every
+      // COUNT is answered by a per-event visibility scan.
+      restrictsCount: (relayId) => this.hasPrivateGroups(relayId),
       checkEvent: (event, ctx) => this.checkEvent(event, ctx),
       afterAccept: (event, ctx) => this.afterAccept(event, ctx),
     };

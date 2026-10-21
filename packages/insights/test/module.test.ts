@@ -348,6 +348,23 @@ describe('rollups, retention, OTLP, actions', () => {
     expect(old.map((p) => p.v)).toEqual([5, 11, 17, 23]);
   });
 
+  test('stop() unsubscribes from config changes (no OTLP job revived after stop)', async () => {
+    const { createInsightsModule } = await import('../src/index.ts');
+    const { parseConfig } = await import('@beamhop/core');
+    const { kernel, ports } = await setup();
+    const mod = createInsightsModule();
+    // A second instance on the same kernel shares the per-kernel subscription slot.
+    await mod.stop?.(kernel);
+    expect(ports.scheduler.jobs.has('insights.otlp')).toBe(false);
+    await kernel.applyConfig(
+      parseConfig({
+        relays: [{ id: 'main', hosts: ['relay.example.com'] }],
+        modules: { insights: { otlp: { endpoint: 'https://otel.example.com' } } },
+      }),
+    );
+    expect(ports.scheduler.jobs.has('insights.otlp')).toBe(false);
+  });
+
   test('OTLP export posts JSON to /v1/metrics via injected fetch', async () => {
     const calls: Array<{ url: string; body: unknown; headers: Record<string, string> }> = [];
     const { kernel, ports } = await setup({

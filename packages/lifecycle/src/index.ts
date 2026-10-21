@@ -39,6 +39,7 @@ export { HOLDS_SERVICE, createHolds } from './holds.ts';
 export type { HoldProvider, HoldSubject, LegalHolds } from './holds.ts';
 export {
   ARCHIVE_TYPE,
+  ARCHIVE_TYPE_ENCRYPTED,
   ARCHIVE_FORMAT,
   BackupService,
   type ArchiveManifest,
@@ -66,6 +67,13 @@ export { KnownGoodMarker } from './known-good.ts';
 export { exportUserData, USER_EXPORT_FORMAT, type ExportOptions } from './export.ts';
 export { FAILOVER_PLAYBOOK } from './health.ts';
 export { tarPack, tarUnpack, gzip, gunzip } from './tar.ts';
+export {
+  decryptArchive,
+  encryptArchive,
+  isEncryptedArchive,
+  maskSecrets,
+  MASK,
+} from './backup-crypto.ts';
 export type { SqlExecLike, TableSource } from './sql.ts';
 export {
   STORAGE_SQL_SERVICE,

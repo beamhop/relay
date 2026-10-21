@@ -27,6 +27,7 @@ import {
 } from '@beamhop/testkit';
 import type { DataLayout } from './config.ts';
 import { BunCrypto, BunScheduler, InProcessPubSub, systemClock } from './ports.ts';
+import { sharpLoader } from './sharp.ts';
 
 export interface SqlStores {
   events: EventStore;
@@ -63,6 +64,8 @@ export interface StorageLoaders {
 /** Shape the runtime expects from `@beamhop/media/bun` (sharp + ffmpeg composite). */
 export type CreateMediaProcessor = (opts: {
   logger?: Logger;
+  /** sharp loader for binaries shipping sharp next to them (see sharp.ts). */
+  sharp?: { load?: () => Promise<unknown> };
 }) => Promise<{ processor?: MediaProcessor }>;
 
 async function tryImport<T>(load: () => Promise<unknown>): Promise<T | undefined> {
@@ -184,9 +187,14 @@ export async function createDefaultPorts(
       () => import('@beamhop/media/bun'),
     ));
   if (typeof mediaMod?.createBunMediaProcessor === 'function') {
+    const loadSharp = sharpLoader();
+    if (loadSharp) logger.log('info', 'loading sharp from outside the binary', {});
     try {
       media = (
-        await mediaMod.createBunMediaProcessor({ logger: logger.child({ component: 'media' }) })
+        await mediaMod.createBunMediaProcessor({
+          logger: logger.child({ component: 'media' }),
+          ...(loadSharp ? { sharp: { load: loadSharp } } : {}),
+        })
       ).processor;
     } catch (err) {
       logger.log('warn', 'media tools could not be loaded', { err });

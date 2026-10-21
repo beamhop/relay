@@ -270,7 +270,7 @@ describe('NIP-45 COUNT', () => {
     const h = await setup({ ports: { events: store } });
     const c = await h.connect();
     c.take();
-    await h.send(c, ['COUNT', 'q', {}]);
+    await h.send(c, ['COUNT', 'q', { kinds: [1] }]);
     expect(c.take()).toEqual([['COUNT', 'q', { count: 0, approximate: true }]]);
   });
 });

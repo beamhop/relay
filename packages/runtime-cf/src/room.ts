@@ -25,6 +25,8 @@ export const CONFIG_CHANNEL = 'broadcast:config';
 export const H_RELAY = 'x-beamhop-relay';
 export const H_SHARD = 'x-beamhop-shard';
 export const H_IP_HASH = 'x-beamhop-ip-hash';
+/** ISO country from Cloudflare's `cf-ipcountry` (set by the Worker, never by clients). */
+export const H_COUNTRY = 'x-beamhop-country';
 
 export interface RoomIdentity {
   relayId: string;
@@ -158,6 +160,7 @@ export class RelayRoomCore {
         relayId,
         ipHash: req.headers.get(H_IP_HASH) ?? 'unknown',
         userAgent: req.headers.get('user-agent') ?? undefined,
+        country: req.headers.get(H_COUNTRY) ?? undefined,
         openedAt: services.clock.nowMs(),
         challenge: services.crypto.randomHex(32),
       },

@@ -25,6 +25,8 @@ export class BunConnection implements Connection {
     readonly openedAt: number,
     challenge: string,
     readonly userAgent?: string,
+    /** ISO country from the trusted proxy header (see `node.countryHeader`). */
+    readonly country?: string,
   ) {
     this.challenge = challenge;
   }

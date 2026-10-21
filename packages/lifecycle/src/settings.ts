@@ -75,6 +75,13 @@ export const LifecycleConfigSchema = z
           .default(false)
           .describe('Also copy media files to the backup storage'),
         includeMetrics: z.boolean().default(true).describe('Include chart history'),
+        includeSecrets: technical(
+          z
+            .boolean()
+            .default(false)
+            .describe('Keep passwords and keys in backups that are not encrypted'),
+          'Without ports.keyWrapper archives are not encrypted, so secret-looking config fields (password, token, secret, key, salt, webhook, URL credentials) are masked unless this is on. Encrypted archives always keep them.',
+        ),
         checkMinutes: z.number().int().min(1).default(15),
       })
       .prefault({}),

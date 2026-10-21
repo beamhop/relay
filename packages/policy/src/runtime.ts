@@ -5,7 +5,7 @@
  */
 import type { Decision, Kernel, RelayConfig, RelayId } from '@beamhop/core';
 import { type PolicyModuleConfig, PolicyModuleConfigSchema, type TierRule } from './config.ts';
-import { ModerationQueue } from './moderation.ts';
+import { type LegalHoldsLike, ModerationQueue } from './moderation.ts';
 import { COLLECTIONS, PolicyState } from './state.ts';
 import { TokenBuckets } from './util.ts';
 import { type FollowFetcher, type WotGraph, computeWot, followLoader } from './wot.ts';
@@ -129,6 +129,7 @@ export class PolicyRuntime {
       kernel.bus,
       this.state,
       () => this.config().recycleDays,
+      () => kernel.use<LegalHoldsLike>('lifecycle.holds'),
     );
   }
 
