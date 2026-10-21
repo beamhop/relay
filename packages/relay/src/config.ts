@@ -26,6 +26,12 @@ export const RelayModuleConfigSchema = z
       .describe(
         'Messages waiting per connection before new ones are refused. Protects the server from apps that send too fast.',
       ),
+    pipelineSaves: technical(
+      z.number().int().min(0).default(64),
+      'Per connection: EVENTs whose save may still be committing while later messages of the same connection are checked. OK answers keep their order; REQ, AUTH, COUNT, CLOSE and NEG-* wait for them. Deletions (kind 5) and NIP-29 group events are never pipelined. 0 = one EVENT at a time.',
+    ).describe(
+      'How many posts from one app may be saved at the same time. Higher lets busy apps post faster.',
+    ),
     backpressure: technical(
       z
         .object({

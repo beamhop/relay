@@ -28,6 +28,7 @@ import {
   type ReasonPrefix,
   type RelayConfig,
   type RelayId,
+  type SaveResult,
   expirationOf,
   kindClass,
   parseClientMessage,
@@ -73,6 +74,13 @@ export interface ConnState {
   readonly tiers: Map<string, string | undefined>;
   chain: Promise<void>;
   pending: number;
+  /**
+   * Answers still to come for EVENTs whose save is committing in the background
+   * (pipelined saves). Later answers on this connection are chained after it.
+   */
+  tail: Promise<void> | null;
+  /** Pipelined saves not finished yet. */
+  saving: number;
   opened: boolean;
   closed: boolean;
   dropping: boolean;
@@ -99,19 +107,29 @@ export function fanoutChannel(relayId: RelayId): string {
 /** Bounded insertion-ordered id set used for dedupe-before-verify and pubsub dedupe. */
 export class RecentIds {
   private set = new Set<string>();
-  constructor(private capacity: number) {}
+  /**
+   * Insertion order as a ring (oldest at `head`). Evicting through
+   * `set.values().next()` instead walks past every deleted slot of the Set and
+   * becomes the hottest line of the relay under sustained load.
+   */
+  private ring: Array<string | undefined>;
+  private head = 0;
+  constructor(private capacity: number) {
+    this.ring = new Array(Math.max(1, capacity));
+  }
   has(id: string): boolean {
     return this.set.has(id);
   }
   add(id: string): void {
     if (this.set.has(id)) return;
+    const old = this.ring[this.head];
+    if (old !== undefined) this.set.delete(old);
+    this.ring[this.head] = id;
+    this.head = (this.head + 1) % this.ring.length;
     this.set.add(id);
-    if (this.set.size > this.capacity) {
-      const first = this.set.values().next().value;
-      if (first !== undefined) this.set.delete(first);
-    }
   }
   delete(id: string): void {
+    // The ring slot stays; evicting an id that is no longer in the set is harmless.
     this.set.delete(id);
   }
 }
@@ -184,6 +202,24 @@ function readPersisted(conn: Connection): PersistedConnState | null {
   return { v: 1, subs: clean(v.subs), negs: clean(v.negs) };
 }
 
+/**
+ * Posts whose checks may depend on the same connection's earlier posts being stored
+ * and processed (deletions, NIP-29 group events): never pipelined.
+ */
+function waitsForEarlierPosts(event: NostrEvent): boolean {
+  if (event.kind === DELETION_KIND) return true;
+  if ((event.kind >= 9000 && event.kind < 9100) || (event.kind >= 39000 && event.kind < 39100))
+    return true;
+  return event.tags.some((t) => t[0] === 'h');
+}
+
+/**
+ * Most signature checks started ahead of their turn, across all connections. Well
+ * below the Bun verify pool's queue limit (8,192), above which it checks on the
+ * main thread.
+ */
+const PREFETCH_MAX = 2048;
+
 /** Cheap test for an EVENT frame (prefetching its signature check). */
 const EVENT_FRAME = /^\s*\[\s*"EVENT"/;
 
@@ -195,6 +231,8 @@ interface Prefetched {
 
 export class RelayEngine implements ConnectionHandler {
   readonly nodeId: string;
+  /** Signature checks started early (see `prefetch`), across all connections. */
+  private prefetching = 0;
   private conns = new Map<string, ConnState>();
   private relays = new Map<RelayId, RelayRuntime>();
   private cfg: RelayModuleConfig;
@@ -321,6 +359,8 @@ export class RelayEngine implements ConnectionHandler {
       tiers: new Map(),
       chain: Promise.resolve(),
       pending: 0,
+      tail: null,
+      saving: 0,
       opened: false,
       closed: false,
       dropping: false,
@@ -680,9 +720,17 @@ export class RelayEngine implements ConnectionHandler {
     if (!EVENT_FRAME.test(raw)) return undefined;
     const parsed = parseClientMessage(raw);
     if (!parsed.ok || parsed.message[0] !== 'EVENT') return { parsed };
+    // Bounded: a verifier with a long queue checks the overflow on this thread instead,
+    // which must never be caused by checks started early.
+    if (this.prefetching >= PREFETCH_MAX) return { parsed };
     const shape = validateEventShape(parsed.message[1]);
     if (!shape.ok || shape.event.kind === AUTH_KIND) return { parsed };
-    return { parsed, sig: this.checkSig(shape.event) };
+    this.prefetching++;
+    const sig = this.checkSig(shape.event);
+    void sig.finally(() => {
+      this.prefetching--;
+    });
+    return { parsed, sig };
   }
 
   private async dispatch(
@@ -701,10 +749,11 @@ export class RelayEngine implements ConnectionHandler {
       return;
     }
     const msg = parsed.message;
+    // Everything but EVENT sees the connection's earlier posts committed and answered.
+    if (msg[0] !== 'EVENT' && st.tail) await st.tail;
     switch (msg[0]) {
       case 'EVENT':
-        await this.onEvent(st, msg[1], start, pre?.sig);
-        return;
+        return this.onEvent(st, msg[1], start, pre?.sig);
       case 'REQ':
         return this.onReq(st, msg[1], msg.slice(2), start);
       case 'CLOSE':
@@ -770,8 +819,29 @@ export class RelayEngine implements ConnectionHandler {
 
   // ───────────────────────── EVENT ─────────────────────────
 
-  private ok(st: ConnState, id: string, accepted: boolean, message: string): void {
-    this.send(st, ['OK', id, accepted, message]);
+  /**
+   * Send an OK. While pipelined saves of this connection are still committing, it
+   * is queued behind their answers (answers keep the order EVENTs were sent);
+   * `direct` sends now (used by the pipelined save that is next in line).
+   */
+  private ok(st: ConnState, id: string, accepted: boolean, message: string, direct = false): void {
+    const frame = ['OK', id, accepted, message];
+    if (!direct && st.tail) {
+      this.setTail(
+        st,
+        st.tail.then(() => this.send(st, frame)),
+      );
+      return;
+    }
+    this.send(st, frame);
+  }
+
+  /** Make `p` the connection's answer tail; cleared once it settles (if still the tail). */
+  private setTail(st: ConnState, p: Promise<void>): void {
+    st.tail = p;
+    void p.finally(() => {
+      if (st.tail === p) st.tail = null;
+    });
   }
 
   private rejectEvent(
@@ -780,9 +850,10 @@ export class RelayEngine implements ConnectionHandler {
     prefix: ReasonPrefix,
     message: string,
     by?: string,
+    direct = false,
   ): void {
     const why = reason(prefix, message);
-    this.ok(st, event.id, false, why);
+    this.ok(st, event.id, false, why, direct);
     this.kernel.bus.emit('event.rejected', {
       relayId: st.relayId,
       eventId: event.id,
@@ -798,7 +869,7 @@ export class RelayEngine implements ConnectionHandler {
     input: unknown,
     start: number,
     presig?: Promise<boolean | null>,
-  ): Promise<void> {
+  ): Promise<Detached | undefined> {
     const rawId =
       typeof input === 'object' &&
       input !== null &&
@@ -960,27 +1031,66 @@ export class RelayEngine implements ConnectionHandler {
     }
 
     if (cls === 'ephemeral') {
+      if (st.tail) await st.tail;
       this.ok(st, event.id, true, '');
       await this.accepted(st, event, json, start);
       return;
     }
 
-    const res = await store.save(st.relayId, event);
+    // Plain posts: queue the save (the store applies saves in call order) and let the
+    // connection move on while it commits; its answer is sent in order.
+    if (this.cfg.pipelineSaves <= 0 || waitsForEarlierPosts(event)) {
+      if (st.tail) await st.tail;
+      await this.finishSave(st, event, json, start, await store.save(st.relayId, event));
+      return;
+    }
+    if (st.saving >= this.cfg.pipelineSaves && st.tail) await st.tail;
+    const saving = store.save(st.relayId, event);
+    const prev = st.tail;
+    st.saving++;
+    const done = saving
+      .then(
+        async (res) => {
+          if (prev) await prev;
+          await this.finishSave(st, event, json, start, res);
+        },
+        async (err) => {
+          if (prev) await prev;
+          throw err;
+        },
+      )
+      .catch((err) => this.fail(st, 'message', err))
+      .finally(() => {
+        st.saving--;
+      });
+    this.setTail(st, done);
+    return { detached: done };
+  }
+
+  /** Answer a stored EVENT and run what follows acceptance (it is next in line to answer). */
+  private async finishSave(
+    st: ConnState,
+    event: NostrEvent,
+    json: string,
+    start: number,
+    res: SaveResult,
+  ): Promise<void> {
+    const store = this.kernel.ports.events;
     switch (res.status) {
       case 'duplicate':
-        rt.seen.add(event.id);
-        this.ok(st, event.id, true, reason('duplicate', 'already have this event'));
+        this.runtime(st.relayId).seen.add(event.id);
+        this.ok(st, event.id, true, reason('duplicate', 'already have this event'), true);
         return;
       case 'superseded':
-        this.ok(st, event.id, true, reason('duplicate', 'a newer version is already stored'));
+        this.ok(st, event.id, true, reason('duplicate', 'a newer version is already stored'), true);
         return;
       case 'deleted':
-        this.rejectEvent(st, event, 'blocked', 'this event has been deleted');
+        this.rejectEvent(st, event, 'blocked', 'this event has been deleted', undefined, true);
         return;
       case 'saved':
         break;
     }
-    this.ok(st, event.id, true, '');
+    this.ok(st, event.id, true, '', true);
     if (event.kind === DELETION_KIND) {
       // Legal hold: held targets are archived first, then deleted as asked.
       const holds = holdsOf(this.kernel);

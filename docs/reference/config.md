@@ -544,6 +544,7 @@ Each section exists only when that feature is turned on; enterprise features are
 |---|---|---|---|
 | `maxMessageBytes` | number | `524288` | Largest message an app may send in one go. Raise it only if people post very long texts. *Technical:* Maximum size of any single WebSocket frame from a client, in bytes. |
 | `maxPendingMessages` | number | `256` | Messages waiting per connection before new ones are refused. Protects the server from apps that send too fast. |
+| `pipelineSaves` | number | `64` | How many posts from one app may be saved at the same time. Higher lets busy apps post faster. *Technical:* Per connection: EVENTs whose save may still be committing while later messages of the same connection are checked. OK answers keep their order; REQ, AUTH, COUNT, CLOSE and NEG-* wait for them. Deletions (kind 5) and NIP-29 group events are never pipelined. 0 = one EVENT at a time. |
 | `backpressure` | section |  | How to handle apps that cannot keep up with live updates *Technical:* Uses Connection.bufferedAmount(): above dropAboveBytes live EVENT frames are dropped (one NOTICE per episode); above closeAboveBytes the socket is closed with 1013. |
 | `backpressure.dropAboveBytes` | number | `1048576` | Skip live updates to slow readers above this backlog |
 | `backpressure.closeAboveBytes` | number | `8388608` | Disconnect readers whose backlog grows past this |

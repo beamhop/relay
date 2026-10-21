@@ -28,10 +28,8 @@ import {
 import type { DataLayout } from './config.ts';
 import { BunCrypto, BunScheduler, InProcessPubSub, systemClock } from './ports.ts';
 import { sharpLoader } from './sharp.ts';
-import {
-  BACKGROUND_CHECKPOINT_SAFETY_PAGES,
-  startSqliteCheckpointer,
-} from './sqlite-checkpointer.ts';
+import { startSqliteCheckpointer } from './sqlite-checkpointer.ts';
+import { WorkerEventStore } from './sqlite-writer.ts';
 
 export interface SqlStores {
   events: EventStore;
@@ -78,6 +76,11 @@ export interface StorageLoaders {
   importMedia?: () => Promise<{ createBunMediaProcessor?: CreateMediaProcessor } | undefined>;
   /** Run SQLite checkpoints on a background thread (default true; see sqlite-checkpointer.ts). */
   backgroundCheckpoint?: boolean;
+  /**
+   * Event writes on a dedicated SQLite writer thread (sqlite-writer.ts). Default: off,
+   * or on with env `BEAMHOP_SQLITE_WRITER_THREAD=1`.
+   */
+  writerThread?: boolean;
 }
 
 /** Shape the runtime expects from `@beamhop/media/bun` (sharp + ffmpeg composite). */
@@ -86,6 +89,11 @@ export type CreateMediaProcessor = (opts: {
   /** sharp loader for binaries shipping sharp next to them (see sharp.ts). */
   sharp?: { load?: () => Promise<unknown> };
 }) => Promise<{ processor?: MediaProcessor }>;
+
+function writerThreadFromEnv(): boolean {
+  const v = process.env.BEAMHOP_SQLITE_WRITER_THREAD;
+  return v === '1' || v === 'true';
+}
 
 /** SQLite's own default (pages); used again when no background checkpointer runs. */
 const DEFAULT_WAL_AUTOCHECKPOINT = 1000;
@@ -157,20 +165,23 @@ export async function createDefaultPorts(
           dataDir: layout.root,
           logger: logger.child({ component: 'storage' }),
           ...(sqlite ? { events: { groupCommit: { windowMs: SQLITE_COMMIT_WINDOW_MS } } } : {}),
-          ...(background
-            ? { pragmas: { wal_autocheckpoint: BACKGROUND_CHECKPOINT_SAFETY_PAGES } }
-            : {}),
+          // Checkpoints run on a background thread (below), not inside commits here.
+          ...(background ? { pragmas: { wal_autocheckpoint: 0 } } : {}),
         });
         if (sql.close) closers.push(sql.close.bind(sql));
-        if (background && sql.file) {
-          const cp = await startSqliteCheckpointer(sql.file, {
-            logger: logger.child({ component: 'storage' }),
-          });
+        if (background) {
+          const exec = sql.exec;
+          const selfCheckpoint = () =>
+            setWalAutocheckpoint(exec, DEFAULT_WAL_AUTOCHECKPOINT).catch(() => {});
+          const cp = sql.file
+            ? await startSqliteCheckpointer(sql.file, {
+                logger: logger.child({ component: 'storage' }),
+                onStopped: () => void selfCheckpoint(),
+              })
+            : null;
           // Stopped before the database closes (closers run in order).
           if (cp) closers.unshift(() => cp.stop());
-          else await setWalAutocheckpoint(sql.exec, DEFAULT_WAL_AUTOCHECKPOINT);
-        } else if (background) {
-          await setWalAutocheckpoint(sql.exec, DEFAULT_WAL_AUTOCHECKPOINT);
+          else await selfCheckpoint();
         }
       } catch (err) {
         logger.log('error', 'database could not be opened', { err });
@@ -187,7 +198,29 @@ export async function createDefaultPorts(
     warn(name, why);
     return make();
   };
-  const events = orMemory('events', sql.events, () => new MemoryEventStore());
+  let events = orMemory('events', sql.events, () => new MemoryEventStore());
+  const sqlEvents = events;
+  if (sql.events && sql.file && (loaders.writerThread ?? writerThreadFromEnv())) {
+    // Opt-in prototype: event writes on a dedicated SQLite writer thread (reads stay
+    // here). Measured slower than the default under the load test; see
+    // docs/performance.md. Runs from source only (not embedded in the single binary).
+    const threaded = new WorkerEventStore({
+      path: sql.file,
+      reader: sql.events,
+      windowMs: SQLITE_COMMIT_WINDOW_MS,
+      logger: logger.child({ component: 'storage' }),
+    });
+    try {
+      await threaded.init();
+      events = threaded;
+      logger.log('info', 'database writes run on a separate thread', {});
+    } catch (err) {
+      await threaded.stopWriter().catch(() => {});
+      logger.log('warn', 'database writer thread could not start; writing here', {
+        err: String(err),
+      });
+    }
+  }
   const blobIndex = orMemory('blobIndex', sql.blobIndex, () => new MemoryBlobIndex());
   const docs = orMemory('docs', sql.docs, () => new MemoryDocStore());
   const metrics = orMemory('metrics', sql.metrics, () => new MemoryTimeSeries());
@@ -268,7 +301,7 @@ export async function createDefaultPorts(
     scheduler,
     crypto: bunCrypto,
     memoryFallbacks,
-    ...(sql.exec && sql.events === events
+    ...(sql.exec && sql.events === sqlEvents
       ? {
           sql: {
             exec: sql.exec,

@@ -8,62 +8,97 @@
  * thread that writes, which is the server's main thread. As the database grows
  * those checkpoints touch more pages and dominate the cost of accepting posts.
  *
- * This moves them to a worker thread with its own connection: it runs a PASSIVE
- * checkpoint every `intervalMs` (PASSIVE never blocks the writer or readers).
- * The main connection keeps a high `wal_autocheckpoint` as a safety net, so the
- * log stays bounded even if the worker stops.
+ * This moves them to a worker thread with its own connection, while the main
+ * connection runs with `wal_autocheckpoint = 0`:
+ * - every `intervalMs` a PASSIVE checkpoint (never blocks the writer or readers);
+ * - under constant writes a passive checkpoint never catches up completely, so the
+ *   log would only grow. Once it holds `restartFrames` frames the worker runs a
+ *   RESTART checkpoint: it copies the few frames the passive runs have not, while
+ *   writers wait briefly, and the next commit starts the log from the beginning.
+ * If the worker cannot start or stops, `onStopped` is called so the main
+ * connection can checkpoint itself again.
  */
 import type { Logger } from '@beamhop/core';
-
-/** Pages: safety-net auto-checkpoint on the main connection (≈ 80 MB of log at 4 KiB). */
-export const BACKGROUND_CHECKPOINT_SAFETY_PAGES = 20_000;
 
 export interface SqliteCheckpointerOptions {
   /** How often the worker checkpoints. Default 250 ms. */
   intervalMs?: number;
+  /** Log size (frames, ≈ 4 KiB each) that triggers a RESTART checkpoint. Default 8192. */
+  restartFrames?: number;
   logger?: Logger;
+  /** The worker died unexpectedly (not called after `stop()`). */
+  onStopped?: () => void;
+}
+
+export interface CheckpointStats {
+  /** Checkpoints run. */
+  runs: number;
+  /** Frames copied into the database file. */
+  frames: number;
+  /** Runs that could not finish because a writer or reader was busy. */
+  busy: number;
+  /** RESTART checkpoints that completed (the log starts over). */
+  restarts: number;
+  /** Frames in the log after the latest run. */
+  logFrames: number;
 }
 
 export interface SqliteCheckpointer {
   /** Stop the worker (after one last checkpoint). */
   stop(): Promise<void>;
-  /** Checkpoints run, frames copied, and busy (skipped) runs so far. */
-  stats(): { runs: number; frames: number; busy: number; logFrames: number };
+  stats(): CheckpointStats;
 }
 
-/** Worker body (kept inline so the single binary needs no extra entrypoint). */
+/** Worker body (inline, so the single binary needs no extra entrypoint). */
 const WORKER_SOURCE = `
 import { Database } from 'bun:sqlite';
 let db = null;
 let timer = null;
-const stats = { runs: 0, frames: 0, busy: 0, logFrames: 0 };
-function checkpoint() {
+let restartFrames = 8192;
+const stats = { runs: 0, frames: 0, busy: 0, restarts: 0, logFrames: 0 };
+function run(mode) {
+  const r = db.query('PRAGMA wal_checkpoint(' + mode + ')').get();
+  stats.runs++;
+  if (!r) return null;
+  if (r.busy) stats.busy++;
+  if (r.checkpointed > 0) stats.frames += r.checkpointed;
+  stats.logFrames = r.log;
+  return r;
+}
+function tick() {
   try {
-    const r = db.query('PRAGMA wal_checkpoint(PASSIVE)').get();
-    stats.runs++;
-    if (r) {
-      if (r.busy) stats.busy++;
-      stats.logFrames = r.log;
-      stats.frames += r.checkpointed;
+    const r = run('PASSIVE');
+    if (r && r.log >= restartFrames) {
+      // Wait a little for the writer's current transaction, not longer.
+      db.run('PRAGMA busy_timeout = 100');
+      try {
+        const x = run('RESTART');
+        if (x && !x.busy) stats.restarts++;
+      } finally {
+        db.run('PRAGMA busy_timeout = 0');
+      }
     }
     postMessage({ type: 'tick', stats });
   } catch (err) {
-    postMessage({ type: 'error', message: String(err && err.message || err) });
+    postMessage({ type: 'error', message: String((err && err.message) || err) });
   }
 }
 onmessage = (e) => {
   const m = e.data;
   if (m.type === 'start') {
-    db = new Database(m.path);
-    db.run('PRAGMA busy_timeout = 0');
-    timer = setInterval(checkpoint, m.intervalMs);
-    postMessage({ type: 'started' });
-  } else if (m.type === 'stats') {
-    postMessage({ type: 'stats', stats });
+    try {
+      db = new Database(m.path, { create: false, readwrite: true });
+      db.run('PRAGMA busy_timeout = 0');
+      restartFrames = m.restartFrames;
+      timer = setInterval(tick, m.intervalMs);
+      postMessage({ type: 'started' });
+    } catch (err) {
+      postMessage({ type: 'error', message: String((err && err.message) || err) });
+    }
   } else if (m.type === 'stop') {
     if (timer) clearInterval(timer);
     if (db) {
-      checkpoint();
+      try { run('PASSIVE'); } catch {}
       db.close();
     }
     postMessage({ type: 'stopped', stats });
@@ -73,7 +108,7 @@ onmessage = (e) => {
 
 /**
  * Start background checkpoints for the database file at `path`. Returns null
- * (and the main connection keeps checkpointing itself) when no worker can start.
+ * when no worker could start (the main connection must then checkpoint itself).
  */
 export async function startSqliteCheckpointer(
   path: string,
@@ -88,7 +123,9 @@ export async function startSqliteCheckpointer(
     opts.logger?.log('warn', 'background database checkpoints are off', { err: String(err) });
     return null;
   }
-  let last = { runs: 0, frames: 0, busy: 0, logFrames: 0 };
+  let last: CheckpointStats = { runs: 0, frames: 0, busy: 0, restarts: 0, logFrames: 0 };
+  let stopping = false;
+  let dead = false;
   const waiters = new Map<string, Array<(m: Record<string, unknown>) => void>>();
   const waitFor = (type: string) =>
     new Promise<Record<string, unknown>>((resolve) => {
@@ -96,9 +133,15 @@ export async function startSqliteCheckpointer(
       list.push(resolve);
       waiters.set(type, list);
     });
+  const died = (why: string) => {
+    if (stopping || dead) return;
+    dead = true;
+    opts.logger?.log('warn', 'background database checkpoints stopped', { why });
+    opts.onStopped?.();
+  };
   worker.addEventListener('message', (e: MessageEvent<Record<string, unknown>>) => {
     const m = e.data;
-    if (m.stats) last = m.stats as typeof last;
+    if (m.stats) last = m.stats as CheckpointStats;
     if (m.type === 'error')
       opts.logger?.log('warn', 'background database checkpoint failed', {
         message: String(m.message),
@@ -109,18 +152,28 @@ export async function startSqliteCheckpointer(
       for (const fn of list) fn(m);
     }
   });
-  worker.addEventListener('error', (e) => {
-    opts.logger?.log('warn', 'background database checkpoint thread failed', {
-      message: (e as ErrorEvent).message,
-    });
-  });
+  worker.addEventListener('error', (e) => died((e as ErrorEvent).message || 'worker error'));
+  worker.addEventListener('close', () => died('worker exited'));
+
   const started = waitFor('started');
-  worker.postMessage({ type: 'start', path, intervalMs: opts.intervalMs ?? 250 });
+  const failed = waitFor('error');
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  worker.postMessage({
+    type: 'start',
+    path,
+    intervalMs: opts.intervalMs ?? 250,
+    restartFrames: opts.restartFrames ?? 8192,
+  });
   const ok = await Promise.race([
     started.then(() => true),
-    new Promise<boolean>((r) => setTimeout(() => r(false), 5000)),
+    failed.then(() => false),
+    new Promise<boolean>((r) => {
+      timeout = setTimeout(() => r(false), 5000);
+    }),
   ]);
+  clearTimeout(timeout);
   if (!ok) {
+    stopping = true;
     worker.terminate();
     URL.revokeObjectURL(url);
     opts.logger?.log('warn', 'background database checkpoints are off', {
@@ -129,15 +182,16 @@ export async function startSqliteCheckpointer(
     return null;
   }
   (worker as { unref?: () => void }).unref?.();
-  let stopped = false;
   return {
     stats: () => last,
     async stop() {
-      if (stopped) return;
-      stopped = true;
-      const done = waitFor('stopped');
-      worker.postMessage({ type: 'stop' });
-      await Promise.race([done, new Promise((r) => setTimeout(r, 5000))]);
+      if (stopping) return;
+      stopping = true;
+      if (!dead) {
+        const done = waitFor('stopped');
+        worker.postMessage({ type: 'stop' });
+        await Promise.race([done, new Promise((r) => setTimeout(r, 5000))]);
+      }
       worker.terminate();
       URL.revokeObjectURL(url);
     },
