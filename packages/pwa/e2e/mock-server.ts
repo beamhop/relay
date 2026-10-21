@@ -15,9 +15,9 @@ import { ConfigSchema, RelaySchema } from '@beamhop/core';
 import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { registerMediaMocks } from './mocks/media.ts';
 import { registerPeopleMocks } from './mocks/people.ts';
 import { pluginWriterActions } from './mocks/plugins.ts';
-import { registerMediaMocks } from './mocks/media.ts';
 
 type Relay = z.infer<typeof RelaySchema>;
 type Diff = {
