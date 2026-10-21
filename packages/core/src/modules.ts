@@ -108,6 +108,14 @@ export interface ConnectionHandler {
   onOpen(conn: Connection): void;
   onMessage(conn: Connection, raw: string): void;
   onClose(conn: Connection): void;
+  /**
+   * Optional. Called by runtimes that hibernate sockets (Cloudflare Durable Objects)
+   * after a still-open connection was rebuilt on wake-up: `authed`, `challenge` and
+   * JSON-serializable `state` entries (plain objects, arrays, Map, Set) are restored,
+   * but in-memory indexes outside the connection are not. Handlers rebuild them here
+   * (e.g. re-index subscriptions kept in `conn.state`). `onOpen` is NOT called again.
+   */
+  onRestore?(conn: Connection): void;
 }
 
 export interface Kernel {

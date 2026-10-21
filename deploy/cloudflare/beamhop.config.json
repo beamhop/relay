@@ -1,0 +1,12 @@
+{
+  "storage": { "driver": "d1" },
+  "blobStorage": { "driver": "r2" },
+  "relays": [
+    {
+      "id": "main",
+      "hosts": ["relay.example.com"],
+      "info": { "name": "My Beamhop Relay", "description": "A friendly Nostr relay" }
+    }
+  ],
+  "plugins": []
+}

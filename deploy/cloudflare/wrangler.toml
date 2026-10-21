@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Beamhop on Cloudflare: Worker + Durable Objects (WebSockets) + D1 (data) + R2 (files).
+# Replace the placeholder ids below with your own (see README.md), then `wrangler deploy`.
+
+name = "beamhop"
+main = "build/entry.ts"
+compatibility_date = "2025-09-01"
+
+# Generates build/entry.ts: a static import map of built-in packages and the plugins
+# enabled in beamhop.config.json (Workers cannot load code at runtime).
+[build]
+command = "bun ../../packages/runtime-cf/src/bundle/cli.ts --config beamhop.config.json --out build/entry.ts"
+watch_dir = ["../../packages"]
+
+# One RelayRoom object per relay shard; WebSockets use the Hibernation API.
+[[durable_objects.bindings]]
+name = "RELAY_ROOM"
+class_name = "RelayRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayRoom"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "beamhop"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "beamhop-blobs"
+
+# Optional: Cloudflare Images for thumbnails/resizing. Uncomment to enable.
+# [images]
+# binding = "IMAGES"
+
+# Maintenance jobs (retention, expiry, digests) run from this one-minute cron.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+RELAY_SHARDS = "1"
+LOG_LEVEL = "info"
+QUERY_BUDGET_MS = "2000"
+
+[observability]
+enabled = true
