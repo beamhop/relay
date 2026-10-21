@@ -8,7 +8,14 @@ import type { NostrEvent } from './event.ts';
 import type { RelayId } from './ports.ts';
 
 export interface AppEvents {
-  'conn.open': { relayId: RelayId; connId: string; ipHash: string; userAgent?: string };
+  'conn.open': {
+    relayId: RelayId;
+    connId: string;
+    ipHash: string;
+    userAgent?: string;
+    /** ISO 3166 country code if the runtime/proxy provides one (e.g. CF `cf-ipcountry`). Never derived from raw IPs. */
+    country?: string;
+  };
   'conn.close': { relayId: RelayId; connId: string; durationMs: number };
   'event.accepted': { relayId: RelayId; event: NostrEvent; connId?: string; latencyMs: number };
   'event.rejected': {

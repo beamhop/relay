@@ -5,7 +5,11 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "description": "Metrics, health score, analytics, Prometheus/OTel export",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
+  "exports": { ".": "./src/index.ts", "./grafana/beamhop.json": "./grafana/beamhop.json" },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "hono": "^4.13.13",
+    "zod": "^4.1.0"
+  },
   "devDependencies": { "@beamhop/testkit": "workspace:*" }
 }
