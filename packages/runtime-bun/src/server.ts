@@ -403,6 +403,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         ports.crypto.randomHex(16),
         req.headers.get('user-agent') ?? undefined,
         country,
+        meta.host.toLowerCase().replace(/:\d+$/, ''),
       );
       if (server.upgrade(req, { data: { conn } })) return undefined;
       return new Response('WebSocket upgrade failed', { status: 400 });

@@ -27,6 +27,8 @@ export class BunConnection implements Connection {
     readonly userAgent?: string,
     /** ISO country from the trusted proxy header (see `node.countryHeader`). */
     readonly country?: string,
+    /** Host the client connected to; lets the relay check NIP-42/62 relay tags on catch-all relays. */
+    readonly host?: string,
   ) {
     this.challenge = challenge;
   }

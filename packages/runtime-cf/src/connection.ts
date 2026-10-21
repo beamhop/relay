@@ -24,6 +24,8 @@ export interface ConnMeta {
   userAgent?: string;
   /** ISO 3166 country (Cloudflare `cf-ipcountry`). */
   country?: string;
+  /** Host the client connected to (lower-case, no port). */
+  host?: string;
   openedAt: number;
   challenge: string;
 }
@@ -120,6 +122,7 @@ export class HibernatableConnection implements Connection {
   readonly ipHash: string;
   readonly userAgent?: string;
   readonly country?: string;
+  readonly host?: string;
   readonly openedAt: number;
   readonly authed: Set<string>;
   challenge: string;
@@ -141,6 +144,7 @@ export class HibernatableConnection implements Connection {
     this.ipHash = meta.ipHash;
     if (meta.userAgent !== undefined) this.userAgent = meta.userAgent;
     if (meta.country !== undefined) this.country = meta.country;
+    if (meta.host !== undefined) this.host = meta.host;
     this.openedAt = meta.openedAt;
     this.challenge = meta.challenge;
     this.authed = new Set(restored?.authed ?? []);
@@ -188,6 +192,7 @@ export class HibernatableConnection implements Connection {
     };
     if (this.userAgent !== undefined) m.userAgent = this.userAgent;
     if (this.country !== undefined) m.country = this.country;
+    if (this.host !== undefined) m.host = this.host;
     return m;
   }
 

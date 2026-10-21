@@ -130,14 +130,18 @@ export function utf8Length(s: string): number {
 }
 
 /** Does a relay URL (from an AUTH or vanish tag) point at this virtual relay? */
-export function relayUrlMatches(relay: RelayConfig, url: string): boolean {
+export function relayUrlMatches(relay: RelayConfig, url: string, connHost?: string): boolean {
   let host: string;
   try {
     host = new URL(url).hostname.toLowerCase();
   } catch {
     return false;
   }
-  return relay.hosts.some((h) => h === '*' || h.toLowerCase().replace(/:\d+$/, '') === host);
+  return relay.hosts.some((h) => {
+    // A catch-all relay is "this relay" only under the host the client actually connected to.
+    if (h === '*') return connHost === undefined || connHost === host;
+    return h.toLowerCase().replace(/:\d+$/, '') === host;
+  });
 }
 
 const noop = () => {};
@@ -945,7 +949,9 @@ export class RelayEngine implements ConnectionHandler {
     start: number,
   ): Promise<void> {
     const targets = tagValues(event, 'relay');
-    const forUs = targets.some((u) => u === 'ALL_RELAYS' || relayUrlMatches(relay, u));
+    const forUs = targets.some(
+      (u) => u === 'ALL_RELAYS' || relayUrlMatches(relay, u, st.conn.host),
+    );
     if (!forUs) {
       this.rejectEvent(st, event, 'invalid', 'this request to vanish names a different relay');
       return;
@@ -1254,7 +1260,7 @@ export class RelayEngine implements ConnectionHandler {
     if (!st.conn.challenge || challenge !== st.conn.challenge)
       return fail('invalid', 'challenge does not match');
     const relayTag = tagValues(event, 'relay')[0];
-    if (!relayTag || !relayUrlMatches(relay, relayTag))
+    if (!relayTag || !relayUrlMatches(relay, relayTag, st.conn.host))
       return fail('invalid', 'sign-in event is for a different relay');
     const d = await this.kernel.policy.run('onAuth', [event.pubkey, this.ctx(st)]);
     if (d.action === 'reject') return fail(d.prefix, d.message);

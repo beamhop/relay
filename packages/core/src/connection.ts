@@ -13,6 +13,8 @@ export interface Connection {
   readonly userAgent?: string;
   /** ISO 3166 country code from a trusted proxy header (e.g. CF `cf-ipcountry`), if any. */
   readonly country?: string;
+  /** Host the client connected to (from Host / trusted X-Forwarded-Host), lower-case, no port. */
+  readonly host?: string;
   readonly openedAt: number;
   /** Pubkeys authenticated via NIP-42 on this connection. */
   readonly authed: Set<string>;

@@ -161,6 +161,7 @@ export class RelayRoomCore {
         ipHash: req.headers.get(H_IP_HASH) ?? 'unknown',
         userAgent: req.headers.get('user-agent') ?? undefined,
         country: req.headers.get(H_COUNTRY) ?? undefined,
+        host: new URL(req.url).hostname.toLowerCase(),
         openedAt: services.clock.nowMs(),
         challenge: services.crypto.randomHex(32),
       },
