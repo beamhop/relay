@@ -669,6 +669,9 @@ describe('admin actions and health', () => {
       items: Array<{ sha256: string }>;
     };
     expect(listed.items.map((i) => i.sha256)).toEqual([sha]);
+    // Absolute URL on the relay's public URL; no thumbnail without the media module.
+    expect(listed.items[0]).toMatchObject({ url: `${BASE}/${sha}.png` });
+    expect(listed.items[0]).not.toHaveProperty('thumbUrl');
 
     const del = s.kernel.actions.get('media.delete-blob')!;
     const input = del.input.parse({ sha256: sha });

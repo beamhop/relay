@@ -537,6 +537,12 @@ export class MediaService {
     return this.kernel.ports.docs.get<VariantRecord>(VARIANTS, sha256);
   }
 
+  /** The thumbnail (images) or poster (videos) variant of a blob, if one was made. */
+  async thumbnailOf(sha256: string): Promise<VariantInfo | null> {
+    const rec = await this.variants(sha256);
+    return rec?.variants.find((v) => v.role === 'thumbnail' || v.role === 'poster') ?? null;
+  }
+
   isProcessing(relayId: RelayId, sha256: string): boolean {
     return (
       this.queue.has(`scan:${relayId}:${sha256}`) || this.queue.has(`variants:${relayId}:${sha256}`)

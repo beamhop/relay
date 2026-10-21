@@ -102,11 +102,54 @@ export interface QuarantineRecord {
   at: number;
 }
 
+/** Optional view of `kernel.use('media')` (media module): the thumbnail of a blob. */
+export interface MediaThumbnailsLike {
+  thumbnailOf?(sha256: string): Promise<{ sha256: string; type: string } | null>;
+}
+
 export class BlossomService {
+  /** Public base URL per relay, learned from routed requests (`route.publicUrl`). */
+  private readonly publicUrls = new Map<RelayId, string>();
+
   constructor(
     readonly kernel: Kernel,
     readonly opts: BlossomOptions = {},
   ) {}
+
+  /** Remember the relay's public URL as the runtime resolved it for a request. */
+  notePublicUrl(relayId: RelayId, publicUrl: string): void {
+    if (/^https?:\/\//.test(publicUrl)) this.publicUrls.set(relayId, publicUrl.replace(/\/+$/, ''));
+  }
+
+  /**
+   * Absolute public base URL of a relay's media server (no trailing slash), for links
+   * built outside a request (admin actions): the last `route.publicUrl` seen for the
+   * relay, else derived from config (`hosts[0]`, `node.tls`, `pathPrefix`).
+   */
+  publicUrlFor(relayId: RelayId): string | null {
+    const learned = this.publicUrls.get(relayId);
+    if (learned) return learned;
+    const relay = this.kernel.relay(relayId);
+    const host = relay?.hosts.find((h) => h && !h.includes('*'));
+    if (!relay || !host) return null;
+    const secure = this.kernel.config().node.tls.mode !== 'off';
+    const prefix = (relay.pathPrefix ?? '').replace(/\/+$/, '');
+    return `${secure ? 'https' : 'http'}://${host}${prefix}`;
+  }
+
+  /** Absolute URL of a blob on a relay (`<publicUrl>/<sha256>.<ext>`), or null. */
+  blobUrl(relayId: RelayId, sha256: string, type: string): string | null {
+    const base = this.publicUrlFor(relayId);
+    return base ? `${base}/${sha256}${extFor(type)}` : null;
+  }
+
+  /** Absolute URL of the blob's thumbnail (media module variants), or null. */
+  async thumbUrl(relayId: RelayId, sha256: string): Promise<string | null> {
+    const media = this.kernel.use<MediaThumbnailsLike>('media');
+    if (!media?.thumbnailOf) return null;
+    const t = await media.thumbnailOf(sha256);
+    return t ? this.blobUrl(relayId, t.sha256, t.type) : null;
+  }
 
   get ports(): Ports {
     return this.kernel.ports;

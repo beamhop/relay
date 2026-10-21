@@ -119,6 +119,15 @@ export function variantsView(
   };
 }
 
+/**
+ * Absolute public base URL of a relay's media server, from the blossom service
+ * (learned `route.publicUrl`, else config), for URLs built outside a request.
+ */
+export function relayPublicUrl(kernel: Kernel, relayId: string): string | null {
+  const blossom = kernel.use<{ publicUrlFor?(relayId: string): string | null }>('blossom');
+  return blossom?.publicUrlFor?.(relayId) ?? null;
+}
+
 export function registerRoutes(kernel: Kernel, svc: MediaService): void {
   const app = kernel.http;
 
@@ -128,10 +137,11 @@ export function registerRoutes(kernel: Kernel, svc: MediaService): void {
     const route = c.get('route') as { relayId: string; publicUrl: string } | undefined;
     const relay = route ? kernel.relay(route.relayId) : resolveRelay(kernel.config(), url, host);
     if (!relay || !relay.blossom.enabled) return null;
-    const publicUrl = (route?.publicUrl ?? `${url.origin}${relay.pathPrefix ?? ''}`).replace(
-      /\/+$/,
-      '',
-    );
+    const publicUrl = (
+      route?.publicUrl ??
+      relayPublicUrl(kernel, relay.id) ??
+      `${url.origin}${relay.pathPrefix ?? ''}`
+    ).replace(/\/+$/, '');
     return { relay, publicUrl };
   };
 
