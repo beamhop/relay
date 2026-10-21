@@ -6,6 +6,14 @@
   "license": "AGPL-3.0-or-later",
   "description": "Blossom module: BUD-01..06 HTTP handlers, upload auth, quotas, mirror",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "@noble/hashes": "^1.8.0",
+    "hono": "^4.13.13",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@beamhop/testkit": "workspace:*",
+    "blossom-client-sdk": "^4.1.0"
+  }
 }
