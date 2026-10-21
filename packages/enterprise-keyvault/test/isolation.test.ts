@@ -38,6 +38,7 @@ describe('isolation (§12.0)', () => {
       'keyvault.audit',
       'keyvault.cancel-destroy',
       'keyvault.destroy-key',
+      'keyvault.list-keys',
       'keyvault.revoke-sessions',
       'keyvault.rotate-kek',
       'keyvault.status',

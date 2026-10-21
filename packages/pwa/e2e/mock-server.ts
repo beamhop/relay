@@ -15,6 +15,7 @@ import { ConfigSchema, RelaySchema } from '@beamhop/core';
 import { applyPersona, explainLimits } from '@beamhop/policy';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { enterprise } from './mocks/enterprise.ts';
 import { registerMediaMocks } from './mocks/media.ts';
 import { registerPeopleMocks } from './mocks/people.ts';
 import { pluginWriterActions } from './mocks/plugins.ts';
@@ -58,6 +59,8 @@ interface ResetOptions {
   /** Public host name of the relay (default: catch-all only). */
   host?: string;
   persona?: Relay['persona'];
+  /** Enterprise modules on (company groups, keys, compliance, approvals, network). */
+  enterprise?: boolean;
 }
 
 interface MockCard {
@@ -1274,11 +1277,21 @@ ACTIONS.push(...moreActions());
 registerPeopleMocks(ACTIONS, () => S);
 ACTIONS.push(...pluginWriterActions({ setPlugin }));
 registerMediaMocks(ACTIONS, () => S);
+ACTIONS.push(
+  ...enterprise.actions({
+    mappings: () => S.mappings,
+    setMappings: (m) => {
+      S.mappings = m;
+    },
+  }),
+);
+enterprise.annotate(nodeSchemaJson);
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')
     .filter((a) => S.ai !== 'absent' || !a.id.startsWith('ai.'))
     .filter((a) => S.modules['enterprise-identity'] || !a.id.startsWith('enterprise.'))
+    .filter((a) => enterprise.visible(a.id))
     .map((a) => ({
       id: a.id,
       title: a.title,
@@ -1325,6 +1338,8 @@ const app = new Hono();
 app.post('/__reset', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as ResetOptions;
   S = freshState(!!body.claimed, body.ai ?? 'absent', body);
+  enterprise.reset(!!body.enterprise);
+  if (body.enterprise) Object.assign(S, enterprise.seed(S.modules));
   return c.json({ ok: true });
 });
 app.get('/__log', (c) =>
@@ -1417,6 +1432,7 @@ app.all('/api/v1/*', async (c) => {
               placement: 'settings-section',
               chunk: 'enterprise-identity',
             },
+            ...enterprise.routes(),
           ]
         : [],
     });

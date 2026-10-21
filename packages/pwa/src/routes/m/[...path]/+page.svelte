@@ -13,9 +13,17 @@
   import Skeleton from '$lib/components/ui/skeleton.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
-  const path = $derived(`/${page.params.path ?? ''}`);
-  const route = $derived(app.uiRoutes.find((r) => r.path === path));
-  let Screen = $state<Component | null>(null);
+  const path = $derived(`/${page.params.path ?? ''}`.replace(/\/+$/, '') || '/');
+  /** Exact screen, else the longest module path this one is below (`/approvals/<id>`). */
+  const route = $derived(
+    app.uiRoutes.find((r) => r.path === path) ??
+      app.uiRoutes
+        .filter((r) => path.startsWith(`${r.path}/`))
+        .sort((a, b) => b.path.length - a.path.length)[0],
+  );
+  /** What follows the module path (e.g. a request id), without the leading slash. */
+  const sub = $derived(route && path !== route.path ? path.slice(route.path.length + 1) : '');
+  let Screen = $state<Component<{ path: string; sub: string }> | null>(null);
   let error = $state<unknown>(null);
   let missing = $state(false);
 
@@ -31,7 +39,7 @@
       return;
     }
     load()
-      .then((mod) => (Screen = mod.default))
+      .then((mod) => (Screen = mod.default as Component<{ path: string; sub: string }>))
       .catch((err) => (error = err));
   });
 </script>
@@ -42,7 +50,7 @@
   <ErrorPanel {error} />
 {:else if Screen}
   <h1 class="mb-4 text-xl font-semibold tracking-tight">{route.title}</h1>
-  <Screen />
+  <Screen path={route.path} {sub} />
 {:else}
   <Skeleton class="h-40 w-full" />
 {/if}

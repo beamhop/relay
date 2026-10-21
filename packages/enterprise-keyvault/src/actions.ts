@@ -3,7 +3,7 @@ import { type ActionDef, defineAction } from '@beamhop/core';
 import { z } from 'zod';
 import { requireApproval } from './escrow.ts';
 import type { KeyvaultRuntime } from './runtime.ts';
-import type { AuditOp } from './signer.ts';
+import { type AuditOp, KEYS_COLLECTION, type KeyRecord } from './signer.ts';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -37,6 +37,42 @@ export function createActions(rt: KeyvaultRuntime): ActionDef[] {
       return {
         output,
         summary: `${output.keys.active} company-managed keys; master key in ${output.provider ?? 'nowhere (not ready)'}`,
+      };
+    },
+  });
+
+  const listKeys = defineAction({
+    id: 'keyvault.list-keys',
+    title: 'Show company-managed keys',
+    description: 'Whose keys the company holds, and which are waiting to be destroyed.',
+    technical:
+      'keyvault.keys records (subjectId, pubkey, status, destroyAfter); never the wrapped secret.',
+    scope: 'node',
+    permission: 'compliance.read',
+    input: z.object({
+      status: z.enum(['active', 'pending-destroy', 'destroyed']).optional(),
+      limit: z.number().int().min(1).max(1000).default(200),
+    }),
+    readOnly: true,
+    keywords: ['managed keys', 'custody', 'destroy'],
+    async run(input) {
+      const keys: Array<Omit<KeyRecord, 'wrappedSk' | 'tenant'>> = [];
+      let cursor: string | undefined;
+      do {
+        const page = await rt.kernel.ports.docs.list<KeyRecord>(KEYS_COLLECTION, {
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const { value } of page.items) {
+          if (input.status && value.status !== input.status) continue;
+          const { wrappedSk: _sk, tenant: _t, ...rest } = value;
+          keys.push(rest);
+        }
+        cursor = page.cursor;
+      } while (cursor && keys.length < input.limit);
+      return {
+        output: { keys: keys.slice(0, input.limit) },
+        summary: `${Math.min(keys.length, input.limit)} company-managed key(s)`,
       };
     },
   });
@@ -277,6 +313,7 @@ export function createActions(rt: KeyvaultRuntime): ActionDef[] {
 
   return [
     status,
+    listKeys,
     rotateKek,
     wrapLegacy,
     destroyKey,
