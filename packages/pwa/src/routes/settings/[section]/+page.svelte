@@ -8,9 +8,11 @@
   import { page } from '$app/state';
   import Bell from '@lucide/svelte/icons/bell';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
   import { app } from '$lib/stores/app.svelte';
   import { asApiError } from '$lib/stores/actions.svelte';
   import { configFlow } from '$lib/stores/config.svelte';
+  import { assistant } from '$lib/stores/assistant.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
   import { sectionById } from '$lib/settings/sections';
   import { loadSection, patchFor, type LoadedSection } from '$lib/settings/load';
@@ -105,7 +107,11 @@
     }
     const ok = await configFlow.propose(
       { patch, summary: m.settings_change_summary({ section: sectionTitle(id) }) },
-      { relay: data.def.scope === 'relay', onApplied: () => load() },
+      {
+        relay: data.def.scope === 'relay',
+        // Turning AI on or off loads or unloads the assistant: its actions come and go.
+        onApplied: () => (id === 'ai' ? Promise.all([load(), app.refreshCatalog()]) : load()),
+      },
     );
     if (ok) advancedOpen = false;
   }
@@ -133,6 +139,12 @@
 
   {#if def.id === 'alerts'}
     <Button variant="secondary" class="mt-4 w-full md:w-auto" onclick={phoneAlerts}><Bell class="size-4" />{m.wizard_alerts()}</Button>
+  {/if}
+  {#if def.id === 'ai'}
+    <p class="mt-2 text-xs text-muted-foreground">{m.section_ai_restart_free()}</p>
+    {#if assistant.installed}
+      <Button variant="secondary" class="mt-4 w-full md:w-auto" onclick={() => assistant.show()} data-testid="ai-open-chat"><Sparkles class="size-4" />{m.section_ai_chat()}</Button>
+    {/if}
   {/if}
   {#if def.id === 'domains' && check}
     <div class="mt-4 flex items-center gap-2 rounded-xl border p-3 text-sm" data-testid="tls-status">

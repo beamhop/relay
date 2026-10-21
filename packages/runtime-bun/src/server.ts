@@ -31,7 +31,7 @@ import { type AssetServer, createAssetServer } from './assets.ts';
 import { installConfigWriteBack } from './config-writeback.ts';
 import { type DataLayout, ensureDataDir, parseListen, withDataDirDefaults } from './config.ts';
 import { BunConnection, type WsData } from './connection.ts';
-import { optionalModuleSources } from './modules.ts';
+import { manageFollowingModules, optionalModuleSources } from './modules.ts';
 import { JsonLogger } from './ports.ts';
 import {
   DISK_SERVICE,
@@ -283,6 +283,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         optionalModuleSources({ secretsDir: layout.secretsDir, env: process.env }, logger),
     );
   }
+
+  // Modules that follow a settings switch (the assistant on `ai.enabled`).
+  if (opts.optionalModules !== false) manageFollowingModules(kernel, logger);
 
   if (safe) {
     const lkg = await lastKnownGood(kernel);

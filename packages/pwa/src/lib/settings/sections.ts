@@ -34,6 +34,7 @@ const ICONS: Record<string, string> = {
   backups: 'archive',
   domains: 'globe',
   privacy: 'shield',
+  ai: 'sparkles',
   advanced: 'sliders',
 };
 
@@ -62,7 +63,6 @@ const ADVANCED: Record<string, string[]> = {
     'backups.target.path',
   ],
   domains: ['relays[].pathPrefix'],
-  privacy: ['ai.baseUrl', 'ai.model'],
   advanced: [
     'relays[].limits.maxSubscriptions',
     'relays[].limits.maxFilters',

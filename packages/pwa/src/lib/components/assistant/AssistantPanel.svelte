@@ -94,7 +94,7 @@
       {#if prefs.lens}<p class="font-mono text-[11px] text-muted-foreground" data-lens>{assistant.offMessage ?? 'ai module not registered (no ai.* actions)'} · config ai.enabled</p>{/if}
       <div class="mt-2 flex flex-wrap justify-center gap-2">
         {#if canTurnOn}
-          <Button size="sm" href={to('/settings/privacy')} onclick={() => (open = false)} data-testid="assistant-turn-on">{m.assistant_off_cta()}</Button>
+          <Button size="sm" href={to('/settings/ai')} onclick={() => (open = false)} data-testid="assistant-turn-on">{m.assistant_off_cta()}</Button>
         {/if}
         <Button size="sm" variant="secondary" onclick={palette}><Search class="size-4" />{m.palette_search()}</Button>
       </div>

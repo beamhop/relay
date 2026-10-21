@@ -9,7 +9,13 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BeamhopConfig, BeamhopModule, Logger, OptionalModuleSource } from '@beamhop/core';
+import type {
+  BeamhopConfig,
+  BeamhopModule,
+  Kernel,
+  Logger,
+  OptionalModuleSource,
+} from '@beamhop/core';
 
 /** What a runtime knows when it builds the default config section of an optional module. */
 export interface OptionalModuleContext {
@@ -35,6 +41,11 @@ export interface ModulePackage {
   optIn?: boolean;
   /** Opt-in modules of this package that can be turned on/off while running (§12.0). */
   optional?: OptionalModuleDef[];
+  /**
+   * Module id that follows `when` while running: loaded when `when` turns true after a
+   * settings change, unloaded when it turns false (no restart needed).
+   */
+  follows?: string;
 }
 
 /** Env var holding the key vault's local master key; without it a key file is generated. */
@@ -81,7 +92,12 @@ export const DEFAULT_MODULE_PACKAGES: ModulePackage[] = [
   { name: '@beamhop/experience', load: () => import('@beamhop/experience') },
   { name: '@beamhop/public-web', load: () => import('@beamhop/public-web') },
   { name: '@beamhop/media', load: () => import('@beamhop/media') },
-  { name: '@beamhop/ai', load: () => import('@beamhop/ai'), when: (c) => c.ai.enabled },
+  {
+    name: '@beamhop/ai',
+    load: () => import('@beamhop/ai'),
+    when: (c) => c.ai.enabled,
+    follows: 'ai',
+  },
   // Plugin host + webhooks. Always loaded so admins can browse/install plugins;
   // with no enabled plugins and no webhooks it adds nothing to the hot path.
   // `--safe` disables every plugin via config, so the host loads none.
@@ -185,4 +201,40 @@ export async function loadModules(
     }
   }
   return [...out.values()];
+}
+
+/**
+ * Hot-load / unload modules that follow a config switch (`follows` + `when`), e.g. the
+ * assistant on `ai.enabled`. Runs on every config change; returns the listener's off().
+ */
+export function manageFollowingModules(
+  kernel: Kernel,
+  logger: Logger,
+  packages: ModulePackage[] = DEFAULT_MODULE_PACKAGES,
+): () => void {
+  const cache = new Map<string, BeamhopModule>();
+  const sync = async (config: BeamhopConfig): Promise<void> => {
+    if (!kernel.enableModule || !kernel.disableModule) return;
+    for (const pkg of packages) {
+      const id = pkg.follows;
+      if (!id || !pkg.when) continue;
+      const want = pkg.when(config);
+      if (want === kernel.isEnabled(id)) continue;
+      if (!want) {
+        await kernel.disableModule(id);
+        logger.log('info', 'module turned off', { module: id });
+        continue;
+      }
+      let m = cache.get(id);
+      if (!m) {
+        const mod = await pkg.load();
+        m = Object.values(mod).find((v): v is BeamhopModule => isModule(v) && v.id === id);
+        if (!m) throw new Error(`${id} is not available on this server`);
+        cache.set(id, m);
+      }
+      await kernel.enableModule(m);
+      logger.log('info', 'module turned on', { module: id });
+    }
+  };
+  return kernel.onConfigChange((next) => sync(next));
 }

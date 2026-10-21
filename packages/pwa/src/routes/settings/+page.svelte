@@ -14,6 +14,7 @@
   import Gauge from '@lucide/svelte/icons/gauge';
   import History from '@lucide/svelte/icons/history';
   import Shield from '@lucide/svelte/icons/shield';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
   import LifeBuoy from '@lucide/svelte/icons/life-buoy';
   import Building2 from '@lucide/svelte/icons/building-2';
   import HeartPulse from '@lucide/svelte/icons/heart-pulse';
@@ -44,6 +45,7 @@
     globe: Globe,
     sliders: SlidersHorizontal,
     shield: Shield,
+    sparkles: Sparkles,
   };
 
   type AccessMode = RelayConfig['access']['mode'];

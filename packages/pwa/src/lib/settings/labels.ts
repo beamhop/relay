@@ -4,6 +4,7 @@ import { m } from '../paraglide/messages.js';
 const TITLES: Record<string, () => string> = {
   profile: () => m.section_relay_info(),
   privacy: () => m.section_privacy(),
+  ai: () => m.section_ai(),
   access: () => m.section_access(),
   media: () => m.section_media(),
   alerts: () => m.section_alerts(),
@@ -15,6 +16,7 @@ const TITLES: Record<string, () => string> = {
 const SUMMARIES: Record<string, () => string> = {
   profile: () => m.section_relay_info_desc(),
   privacy: () => m.section_privacy_desc(),
+  ai: () => m.section_ai_desc(),
   access: () => m.section_access_desc(),
   media: () => m.section_media_desc(),
   alerts: () => m.section_alerts_desc(),

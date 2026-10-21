@@ -76,6 +76,12 @@ export const simpleScreens: readonly SimpleScreen[] = [
     ],
   },
   {
+    id: 'ai',
+    title: 'AI assistant',
+    path: '/settings/ai',
+    settings: ['ai.enabled', 'ai.baseUrl', 'ai.model', 'ai.apiKey'],
+  },
+  {
     id: 'alerts',
     title: 'Alerts',
     path: '/settings/alerts',
@@ -97,12 +103,7 @@ export const simpleScreens: readonly SimpleScreen[] = [
     id: 'privacy',
     title: 'Privacy and public pages',
     path: '/settings/privacy',
-    settings: [
-      'privacy.ipLogging',
-      'relays[].public.portal',
-      'relays[].public.status',
-      'ai.enabled',
-    ],
+    settings: ['privacy.ipLogging', 'relays[].public.portal', 'relays[].public.status'],
   },
 ];
 

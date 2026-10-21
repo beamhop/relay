@@ -165,16 +165,16 @@
         <span class="flex-1">{m.palette_search()}</span>
         <kbd class="rounded border px-1 text-[10px]">⌘K</kbd>
       </button>
-      {#if assistant.installed}
-        <button
-          class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
-          data-testid="assistant-open"
-          onclick={() => assistant.show()}
-        >
-          <Sparkles class="size-4 text-primary" />
-          <span class="flex-1">{m.assistant_open()}</span>
-        </button>
-      {/if}
+      <!-- Always shown: with AI off the panel says so and links to Settings › AI assistant. -->
+      <button
+        class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+        data-testid="assistant-open"
+        data-installed={assistant.installed}
+        onclick={() => assistant.show()}
+      >
+        <Sparkles class={assistant.installed ? 'size-4 text-primary' : 'size-4 text-muted-foreground'} />
+        <span class="flex-1">{m.assistant_open()}</span>
+      </button>
       <TabBar variant="side" />
       <div class="mt-auto space-y-1">
         <button

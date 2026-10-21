@@ -58,9 +58,9 @@ test.describe('assistant', () => {
     await panel.getByTestId('assistant-send').click();
     const off = panel.getByTestId('assistant-off');
     await expect(off).toContainText('AI is off');
-    await expect(off).toContainText('Settings › Privacy');
+    await expect(off).toContainText('Settings › AI assistant');
     await off.getByTestId('assistant-turn-on').click();
-    await expect(page).toHaveURL(/\/admin\/settings\/privacy$/);
+    await expect(page).toHaveURL(/\/admin\/settings\/ai$/);
   });
 
   test('without the AI module the button keeps the command palette', async ({ page }) => {
