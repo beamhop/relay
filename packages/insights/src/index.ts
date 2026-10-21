@@ -38,6 +38,8 @@ export const MAINTAIN_JOB = 'insights.maintain';
 export const OTLP_JOB = 'insights.otlp';
 
 const runtimes = new WeakMap<Kernel, InsightsRuntime>();
+/** Config-change subscriptions made in start(), removed in stop(). */
+const configOffs = new WeakMap<Kernel, () => void>();
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -113,12 +115,18 @@ export function createInsightsModule(opts: InsightsModuleOptions = {}): BeamhopM
           );
       };
       scheduleOtlp();
-      kernel.onConfigChange(() => scheduleOtlp());
+      configOffs.get(kernel)?.();
+      configOffs.set(
+        kernel,
+        kernel.onConfigChange(() => scheduleOtlp()),
+      );
     },
 
     async stop(kernel) {
       const rt = runtimes.get(kernel);
       if (!rt) return;
+      configOffs.get(kernel)?.();
+      configOffs.delete(kernel);
       for (const job of [FLUSH_JOB, MAINTAIN_JOB, OTLP_JOB]) kernel.ports.scheduler.cancel(job);
       await rt.flush().catch(() => undefined);
       rt.stop();
