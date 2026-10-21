@@ -776,7 +776,7 @@ export function createActions(rt: PolicyRuntime): ActionDef[] {
     title: 'Change relay type',
     description: 'Apply a ready-made setup (goals, who can post, media options).',
     technical:
-      'Deep-merges personaPresets[persona] into relays[id] (limits overrides, tiers, hosts and info are kept) and personaModulePresets[persona] into modules (organization: modules.team.enabled=true; never switches modules off). Committed via admin.config when available.',
+      'Deep-merges personaPresets[persona] into relays[id] (limits overrides, tiers, hosts and info are kept) and personaModulePresets[persona] into modules (organization: modules.team.enabled=true and modules.enterprise-identity={enabled:true}, loaded without a restart; never switches modules off). Committed via admin.config when available.',
     scope: 'relay',
     permission: 'config.write',
     keywords: ['persona', 'preset', 'template', 'relay type'],

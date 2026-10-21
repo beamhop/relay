@@ -534,7 +534,7 @@ Apply a ready-made setup (goals, who can post, media options).
 
 - **id:** `config.apply-persona` · **CLI:** `beamhop config apply-persona` · **scope:** relay · **permission:** `config.write`
 - changes settings/data · undoable
-- *Technical:* Deep-merges personaPresets[persona] into relays[id] (limits overrides, tiers, hosts and info are kept) and personaModulePresets[persona] into modules (organization: modules.team.enabled=true; never switches modules off). Committed via admin.config when available.
+- *Technical:* Deep-merges personaPresets[persona] into relays[id] (limits overrides, tiers, hosts and info are kept) and personaModulePresets[persona] into modules (organization: modules.team.enabled=true and modules.enterprise-identity={enabled:true}, loaded without a restart; never switches modules off). Committed via admin.config when available.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
