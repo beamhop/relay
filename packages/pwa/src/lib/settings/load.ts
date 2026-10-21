@@ -3,7 +3,7 @@
 import type { ApiClient } from '../api/client.ts';
 import type { JsonSchema, NodeConfig, RelayConfig } from '../api/types.ts';
 import { type FieldSpec, type PatchOp, buildPatch, fieldAt, getIn } from '../forms/json-schema.ts';
-import { flatten, formKey } from '../forms/zod.ts';
+import { flatten, formKey } from '../forms/values.ts';
 import { type SectionDef, resolvePath } from './sections.ts';
 
 export interface LoadedSection {

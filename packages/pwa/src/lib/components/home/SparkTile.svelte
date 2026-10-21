@@ -1,6 +1,6 @@
 <script lang="ts">
-  /** Sparkline tile (LayerChart). Shows "—" when there is no data yet. */
-  import { Area, Chart, Svg } from 'layerchart';
+  /** Sparkline tile (inline SVG, no chart library). Shows "—" when there is no data yet. */
+  import { sparkPaths } from '$lib/sparkline';
 
   let {
     label,
@@ -10,8 +10,8 @@
     onclick,
   }: { label: string; value: string; points: number[]; testid?: string; onclick?: () => void } = $props();
 
-  const data = $derived(points.map((v, i) => ({ i, v })));
   const hasData = $derived(points.length > 1 && points.some((p) => p !== 0));
+  const paths = $derived(sparkPaths(points, 100, 32));
 </script>
 
 <button
@@ -24,11 +24,10 @@
   <span class="text-lg font-semibold tabular-nums">{value}</span>
   <div class="h-8 w-full" aria-hidden="true">
     {#if hasData}
-      <Chart {data} x="i" y="v" yDomain={[0, null]} padding={{ top: 2, bottom: 1 }}>
-        <Svg>
-          <Area class="fill-primary/15" line={{ class: 'stroke-primary stroke-[1.5]' }} />
-        </Svg>
-      </Chart>
+      <svg viewBox="0 0 100 32" preserveAspectRatio="none" class="h-full w-full overflow-visible" data-sparkline>
+        <path d={paths.area} class="fill-primary/15" />
+        <path d={paths.line} fill="none" class="stroke-primary" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+      </svg>
     {:else}
       <div class="mt-4 h-px w-full bg-border"></div>
     {/if}

@@ -3,12 +3,12 @@
   import LoaderCircle from '@lucide/svelte/icons/loader-circle';
   import { flow } from '$lib/stores/actions.svelte';
   import { fieldsFromSchema } from '$lib/forms/json-schema';
-  import { flatten, formDefaults, unflatten } from '$lib/forms/zod';
+  import { flatten, formDefaults, unflatten } from '$lib/forms/values';
   import { prefs } from '$lib/stores/prefs.svelte';
   import Sheet from './Sheet.svelte';
   import DiffList from './DiffList.svelte';
   import Button from './ui/button.svelte';
-  import GeneratedForm from './forms/GeneratedForm.svelte';
+  import GeneratedForm from './forms/LazyForm.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
   let open = $state(false);

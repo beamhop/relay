@@ -6,7 +6,7 @@
  * zod schemas from @beamhop/core and the real goals engine from
  * @beamhop/policy keep the shapes honest.
  *
- *   POST /__reset {claimed?: boolean}  → fresh state
+ *   POST /__reset {claimed?, ai?}      → fresh state (ai: 'absent' | 'off' | 'on')
  *   GET  /__log                        → actions run so far
  */
 import { existsSync, statSync } from 'node:fs';
@@ -43,7 +43,9 @@ interface Action {
   run: (input: Record<string, unknown>) => { output: unknown; summary: string; undo?: () => void };
 }
 
-function freshState(claimed: boolean) {
+type AiMode = 'absent' | 'off' | 'on';
+
+function freshState(claimed: boolean, ai: AiMode = 'absent') {
   const relay: Relay = RelaySchema.parse({
     id: 'main',
     hosts: ['*'],
@@ -113,6 +115,9 @@ function freshState(claimed: boolean) {
     })),
     bans: new Set<string>(),
     invites: 0,
+    ai,
+    assistantRequests: [] as unknown[],
+    tests: [] as string[],
   };
 }
 
@@ -196,7 +201,12 @@ function applyPatch(
     const last = parts.pop() as string;
     let cur = copy;
     for (const p of parts) cur = cur[p];
-    if (o.op === 'remove') delete cur[last];
+    if (Array.isArray(cur)) {
+      const i = last === '-' ? cur.length : Number(last);
+      if (o.op === 'remove') cur.splice(i, 1);
+      else if (o.op === 'add') cur.splice(i, 0, o.value);
+      else cur[i] = o.value;
+    } else if (o.op === 'remove') delete cur[last];
     else cur[last] = o.value;
   }
   return copy;
@@ -291,6 +301,49 @@ const ACTIONS: Action[] = [
     },
   },
   {
+    id: 'experience.dismiss-card',
+    title: 'Dismiss a suggestion',
+    description: 'Hide this suggestion for you.',
+    scope: 'node',
+    permission: 'relay.read',
+    shortcut: 'e',
+    input: z.object({ key: z.string() }),
+    run: (i) => {
+      S.hiddenCards.add(String(i.key));
+      return {
+        output: { key: i.key },
+        summary: 'Dismissed',
+        undo: () => S.hiddenCards.delete(String(i.key)),
+      };
+    },
+  },
+  {
+    id: 'alerts.test-channel',
+    title: 'Send a test alert',
+    description: 'Check that a notification channel works.',
+    scope: 'node',
+    permission: 'config.write',
+    readOnly: true,
+    input: z.object({ channelId: z.string().min(1) }),
+    run: (i) => {
+      const id = String(i.channelId);
+      if (!S.nodeExtra.alerts.channels.some((c) => c.id === id))
+        throw new Error(`No channel called "${id}"`);
+      S.tests.push(id);
+      return { output: { ok: true }, summary: `Test message sent to ${id}` };
+    },
+  },
+  {
+    id: 'ai.moderation-labels',
+    title: 'AI hints for items waiting for review',
+    description: 'Hints only.',
+    scope: 'relay',
+    permission: 'relay.read',
+    readOnly: true,
+    input: z.object({ ids: z.array(z.string()).optional() }),
+    run: () => ({ output: { labels: [] }, summary: '0 AI hints' }),
+  },
+  {
     id: 'experience.checklist',
     title: 'Setup checklist',
     description: 'Setup steps.',
@@ -308,6 +361,13 @@ const ACTIONS: Action[] = [
             done: false,
             available: true,
             link: { screen: '/settings/backups' },
+          },
+          {
+            id: 'filters',
+            title: 'Review blocked words',
+            done: false,
+            available: true,
+            link: { screen: '/settings/filters' },
           },
           {
             id: 'recovery-codes',
@@ -494,23 +554,25 @@ const ACTIONS: Action[] = [
 ];
 
 const catalog = (scope: 'node' | 'relay' | null) =>
-  ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay').map((a) => ({
-    id: a.id,
-    title: a.title,
-    description: a.description,
-    scope: a.scope,
-    permission: a.permission,
-    readOnly: !!a.readOnly,
-    sensitive: false,
-    bulk: !!a.bulk,
-    undoable: !a.readOnly,
-    hasPreview: !!a.preview,
-    keywords: a.keywords ?? [],
-    shortcut: a.shortcut,
-    cli: `beamhop ${a.id.split('.').join(' ')}`,
-    inputSchema: z.toJSONSchema(a.input, { io: 'input', unrepresentable: 'any' }),
-    allowed: true,
-  }));
+  ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')
+    .filter((a) => S.ai !== 'absent' || !a.id.startsWith('ai.'))
+    .map((a) => ({
+      id: a.id,
+      title: a.title,
+      description: a.description,
+      scope: a.scope,
+      permission: a.permission,
+      readOnly: !!a.readOnly,
+      sensitive: false,
+      bulk: !!a.bulk,
+      undoable: !a.readOnly,
+      hasPreview: !!a.preview,
+      keywords: a.keywords ?? [],
+      shortcut: a.shortcut,
+      cli: `beamhop ${a.id.split('.').join(' ')}`,
+      inputSchema: z.toJSONSchema(a.input, { io: 'input', unrepresentable: 'any' }),
+      allowed: true,
+    }));
 
 const PERMS = [
   'relay.read',
@@ -537,11 +599,20 @@ const fail = (status: number, code: string, message: string) =>
 const app = new Hono();
 
 app.post('/__reset', async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { claimed?: boolean };
-  S = freshState(!!body.claimed);
+  const body = (await c.req.json().catch(() => ({}))) as { claimed?: boolean; ai?: AiMode };
+  S = freshState(!!body.claimed, body.ai ?? 'absent');
   return c.json({ ok: true });
 });
-app.get('/__log', (c) => c.json({ log: S.log, bans: [...S.bans], relay: S.relay }));
+app.get('/__log', (c) =>
+  c.json({
+    log: S.log,
+    bans: [...S.bans],
+    relay: S.relay,
+    channels: S.nodeExtra.alerts.channels,
+    tests: S.tests,
+    assistant: S.assistantRequests,
+  }),
+);
 
 app.get('/healthz', (c) => c.json({ status: 'ok', connections: 7 }));
 app.get('/.well-known/beamhop/self-check', (c) =>
@@ -632,6 +703,7 @@ app.all('/api/v1/*', async (c) => {
     return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
   }
   if (path === '/actions') return c.json({ actions: catalog(relayScoped ? 'relay' : null) });
+  if (path === '/assistant' && method === 'POST') return assistant(body);
 
   const act = path.match(/^\/actions\/([^/]+)(\/preview)?$/);
   if (act && method === 'POST') {
@@ -658,7 +730,12 @@ app.all('/api/v1/*', async (c) => {
         action: def.id,
         diff: def.readOnly ? [] : (def.preview?.(input) ?? [{ kind: 'info', text: def.title }]),
       });
-    const r = def.run(input);
+    let r: ReturnType<Action['run']>;
+    try {
+      r = def.run(input);
+    } catch (err) {
+      return fail(422, 'action_failed', (err as Error).message);
+    }
     if (!def.readOnly) S.log.push({ id: def.id, input });
     const out: Record<string, unknown> = { output: r.output, summary: r.summary };
     if (r.undo) {
@@ -754,6 +831,77 @@ app.all('/api/v1/*', async (c) => {
   if (path === '/config/revisions') return c.json({ items: S.revisions });
   return fail(404, 'not_found', `No mock for ${method} ${path}`);
 });
+
+/** `POST /assistant`: canned SSE answer in the ai package's event format. */
+function assistant(body: Record<string, unknown>): Response {
+  if (S.ai === 'absent') return fail(404, 'not_found', 'Not found');
+  if (S.ai === 'off')
+    return fail(503, 'ai_disabled', 'The assistant is turned off. Turn it on in Settings → AI.');
+  S.assistantRequests.push(body);
+  const relay = (body.context as { relayId?: string } | undefined)?.relayId ?? 'main';
+  const input = { pubkeys: [SPAMMER] };
+  const events = [
+    {
+      type: 'meta',
+      sessionId: 'sess1',
+      tools: ['read_health', 'propose_moderation_ban_pubkey'],
+      proposalsAllowed: true,
+    },
+    { type: 'tool-call', id: 'c1', name: 'read_health', kind: 'read', args: {} },
+    {
+      type: 'tool-result',
+      id: 'c1',
+      name: 'read_health',
+      ok: true,
+      summary: 'Checked the relay health',
+    },
+    { type: 'text', delta: 'Your relay is healthy. ' },
+    { type: 'text', delta: 'One account is sending spam; I suggest blocking it.' },
+    {
+      type: 'proposal',
+      proposal: {
+        id: 'prop1',
+        kind: 'action',
+        actionId: 'moderation.ban-pubkey',
+        title: 'Block account',
+        input,
+        diffLines: [
+          { kind: 'add', text: '1 account will be blocked', technical: 'policy.bans += 1' },
+        ],
+        relayId: relay,
+        sensitive: false,
+        undoable: true,
+        requiresApproval: true,
+        approve: {
+          method: 'POST',
+          path: `/api/v1/nodes/local/relays/${relay}/actions/moderation.ban-pubkey`,
+          body: { input, reason: 'Suggested by the assistant' },
+        },
+      },
+    },
+    {
+      type: 'done',
+      result: {
+        sessionId: 'sess1',
+        text: '',
+        proposals: [],
+        toolCalls: [],
+        usage: { tokens: 10, limit: 1000, rounds: 2 },
+      },
+    },
+  ];
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(ctrl) {
+      for (const [i, e] of events.entries()) {
+        ctrl.enqueue(enc.encode(`event: ${e.type}\ndata: ${JSON.stringify(e)}\nid: ${i}\n\n`));
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      ctrl.close();
+    },
+  });
+  return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+}
 
 // Static app with SPA fallback (like runtime-bun's asset server).
 app.get('/admin/*', (c) => serve(c.req.path));

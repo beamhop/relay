@@ -457,6 +457,34 @@ export class ApiClient {
     return this.post<CommitResult>(`/config/revisions/${rev}/restore`);
   }
 
+  // ───────── assistant ─────────
+
+  /**
+   * Ask the AI assistant (`POST /assistant`, Server-Sent Events). Calls
+   * `onMessage` for every streamed message until the answer is complete.
+   * Throws `ApiError` (`ai_disabled` / 503 when the assistant is off).
+   */
+  async assistant(
+    body: unknown,
+    onMessage: (m: LiveMessage) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const o: RequestOptions = {
+      body,
+      raw: true,
+      headers: { accept: 'text/event-stream' },
+    };
+    if (signal) o.signal = signal;
+    const res = await this.request<Response>('POST', '/assistant', o);
+    if (!res.body) throw new ApiError(0, 'no_stream', 'The assistant did not answer');
+    await readSse(res.body, onMessage);
+  }
+
+  /** Run a proposal's approve call (an absolute admin-API path from the assistant). */
+  approveProposal<T>(path: string, body: unknown): Promise<T> {
+    return this.post<T>(path, body, { scope: 'abs' });
+  }
+
   // ───────── live ─────────
 
   /**

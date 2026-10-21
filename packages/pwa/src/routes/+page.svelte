@@ -1,7 +1,6 @@
 <script lang="ts">
   /** Home (§6.1, §6.9): "is everything OK, and what needs me?" */
   import { onMount } from 'svelte';
-  import { Area, Axis, Chart, Svg } from 'layerchart';
   import { app } from '$lib/stores/app.svelte';
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
@@ -56,7 +55,7 @@
   async function loadChecklist() {
     const server = await query<ServerChecklist>('experience.checklist');
     if (server) {
-      items = fromServer(server);
+      items = fromServer(server, app.uiRoutes.map((r) => r.path));
       return;
     }
     if (!app.can('config.write', false)) {
@@ -206,14 +205,14 @@
 <Sheet bind:open={tileOpen} title={tile?.title} description={tile?.help}>
   {#if tile}
     {#if tile.points.length > 1}
-      <div class="h-48 w-full">
-        <Chart data={tile.points.map((v, i) => ({ i, v }))} x="i" y="v" yDomain={[0, null]} padding={{ left: 32, bottom: 20, top: 8 }}>
-          <Svg>
-            <Axis placement="left" grid rule ticks={4} />
-            <Area class="fill-primary/15" line={{ class: 'stroke-primary stroke-2' }} />
-          </Svg>
-        </Chart>
-      </div>
+      {#await import('$lib/components/home/DetailChart.svelte')}
+        <Skeleton class="h-48 w-full" />
+      {:then mod}
+        {@const DetailChart = mod.default}
+        <DetailChart points={tile.points} />
+      {:catch}
+        <p class="text-sm text-muted-foreground">{m.tile_no_data()}</p>
+      {/await}
       <p class="mt-2 text-xs text-muted-foreground">{m.tile_window()}</p>
     {:else}
       <p class="text-sm text-muted-foreground">{m.tile_no_data()}</p>
