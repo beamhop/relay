@@ -5,6 +5,7 @@
  * virtual relays); who owns what, per relay, lives in `ports.blobIndex`.
  */
 import type { BlobOwnership, Decision, Kernel, Ports, RelayConfig, RelayId } from '@beamhop/core';
+import type { TieringOptions, TieringService } from './tiering.ts';
 import {
   BlossomError,
   DEFAULT_TYPE,
@@ -39,6 +40,8 @@ export interface BlossomOptions {
   authSkewSeconds?: number;
   /** Mirror download timeout. Default 60 s. */
   mirrorTimeoutMs?: number;
+  /** Hot/cold tiering job tuning and cold store override. */
+  tiering?: TieringOptions;
 }
 
 /** BUD-02 blob descriptor. */
@@ -95,6 +98,13 @@ export const QUOTAS = 'blossom.quotas';
 export const QUARANTINE = 'blossom.quarantine';
 export const STATE = 'blossom.state';
 /**
+ * Local block list: sha256 → BlockedRecord. Files whose quarantine was
+ * confirmed; uploads and mirrors of these exact bytes are refused.
+ */
+export const BLOCKED = 'blossom.blocked';
+/** Who quarantines on a known-abuse list match (media module's scan hook id). */
+export const ABUSE_SCAN_SOURCE = 'media.scan';
+/**
  * Files kept under legal hold after their owner asked for removal (e.g. NIP-62
  * vanish): key `<sha256>:<relayId>:<pubkey>` → the former ownership. The file is
  * no longer served (the ownership is gone) but its bytes are never collected
@@ -123,6 +133,45 @@ export interface QuarantineRecord {
   at: number;
 }
 
+export interface BlockedRecord {
+  relayId: RelayId;
+  /** Admin who confirmed the quarantine. */
+  by: string;
+  reason: string;
+  /** The file matched a known-abuse list. */
+  abuse: boolean;
+  at: number;
+}
+
+/** True when a quarantine came from a known-abuse list match (never show the file). */
+export function isAbuseMatch(q: Pick<QuarantineRecord, 'by' | 'reason'>): boolean {
+  return q.by === ABUSE_SCAN_SOURCE || /known-abuse/i.test(q.reason);
+}
+
+/** Result of one orphan collection attempt. */
+export interface CollectResult {
+  erased: boolean;
+  /** Bytes freed when erased. */
+  bytes: number;
+  /** Why the bytes were kept. */
+  kept?: 'owned' | 'held';
+}
+
+/** Last cleanup (orphan GC) run, in docs `blossom.state` key `gc`. */
+export interface GcState {
+  cursor?: string;
+  lastRun?: number;
+  nextRun?: number;
+  expired?: number;
+  erased?: number;
+  freedBytes?: number;
+  scanned?: number;
+  /** Unowned files kept because of a legal hold, seen by the last run. */
+  keptHeld?: number;
+  totalErased?: number;
+  totalFreedBytes?: number;
+}
+
 /** Optional view of `kernel.use('media')` (media module): the thumbnail of a blob. */
 export interface MediaThumbnailsLike {
   thumbnailOf?(sha256: string): Promise<{ sha256: string; type: string } | null>;
@@ -131,6 +180,8 @@ export interface MediaThumbnailsLike {
 export class BlossomService {
   /** Public base URL per relay, learned from routed requests (`route.publicUrl`). */
   private readonly publicUrls = new Map<RelayId, string>();
+  /** Hot/cold tiering and storage caps (set by the module at register). */
+  tiering?: TieringService;
 
   constructor(
     readonly kernel: Kernel,
@@ -276,6 +327,18 @@ export class BlossomService {
     this.kernel.bus.emit('blob.quarantined', { relayId, sha256, reason });
   }
 
+  /** Was this exact file confirmed as unwanted (local block list)? */
+  async blocked(sha256: string): Promise<BlockedRecord | null> {
+    return this.ports.docs.get<BlockedRecord>(BLOCKED, sha256);
+  }
+
+  /** Refuse bytes on the local block list. */
+  async assertNotBlocked(sha256: string): Promise<void> {
+    if (await this.blocked(sha256)) {
+      throw new BlossomError(403, 'This file is not allowed on this server');
+    }
+  }
+
   async uploadPolicy(
     relay: RelayConfig,
     tier: string,
@@ -374,6 +437,7 @@ export class BlossomService {
 
   private async prepare(p: IngestParams, limits: UploadLimits, sha: string, size: number) {
     const { relay } = p.ctx;
+    await this.assertNotBlocked(sha);
     const prior = (await this.ports.blobIndex.owners(relay.id, sha)).find(
       (o) => o.pubkey === p.pubkey,
     );
@@ -385,6 +449,7 @@ export class BlossomService {
       pubkey: p.pubkey,
     });
     const existing = await this.ports.blobs.head(sha);
+    if (!existing) await this.tiering?.checkCapacity(size);
     const own: BlobOwnership = prior ?? {
       relayId: relay.id,
       sha256: sha,
@@ -477,12 +542,22 @@ export class BlossomService {
 
   /** Delete bytes when no relay owns the blob any more (and no legal hold freezes them). */
   async collect(sha256: string, owner?: { relayId: RelayId; pubkey: string }): Promise<boolean> {
-    if ((await this.ports.blobIndex.refCount(sha256)) > 0) return false;
-    if (await this.bytesHeld(sha256, owner)) return false;
-    if (await this.heldAfterRemoval(sha256)) return false;
+    return (await this.collectDetailed(sha256, owner)).erased;
+  }
+
+  /** {@link collect} with the freed size and why bytes were kept. */
+  async collectDetailed(
+    sha256: string,
+    owner?: { relayId: RelayId; pubkey: string },
+  ): Promise<CollectResult> {
+    if ((await this.ports.blobIndex.refCount(sha256)) > 0)
+      return { erased: false, bytes: 0, kept: 'owned' };
+    if (await this.bytesHeld(sha256, owner)) return { erased: false, bytes: 0, kept: 'held' };
+    if (await this.heldAfterRemoval(sha256)) return { erased: false, bytes: 0, kept: 'held' };
+    const meta = await this.ports.blobs.head(sha256);
     const erased = await this.ports.blobs.delete(sha256);
     await this.ports.docs.delete(QUARANTINE, sha256);
-    return erased;
+    return { erased, bytes: erased ? (meta?.size ?? 0) : 0 };
   }
 
   async removeOwnership(
@@ -557,10 +632,12 @@ export class BlossomService {
   }
 
   /** One GC pass: drop expired ownerships, then sweep orphaned bytes. */
-  async gc(): Promise<{ expired: number; erased: number; scanned: number }> {
+  async gc(): Promise<{ expired: number; erased: number; scanned: number; freedBytes: number }> {
     const now = this.ports.clock.now();
     let expired = 0;
     let erased = 0;
+    let freedBytes = 0;
+    let keptHeld = 0;
     for (;;) {
       const batch = await this.ports.blobIndex.expired(now, 200);
       if (batch.length === 0) break;
@@ -572,32 +649,63 @@ export class BlossomService {
           progressed = true;
           continue;
         }
-        const r = await this.removeOwnership(o.relayId, o.sha256, o.pubkey, 'expired');
-        if (r.removed) {
+        const removed = await this.ports.blobIndex.removeOwner(o.relayId, o.sha256, o.pubkey);
+        if (removed) {
+          this.kernel.bus.emit('blob.deleted', {
+            relayId: o.relayId,
+            sha256: o.sha256,
+            pubkey: o.pubkey,
+            cause: 'expired',
+          });
           progressed = true;
           expired++;
+          const c = await this.collectDetailed(o.sha256, o);
+          if (c.erased) {
+            erased++;
+            freedBytes += c.bytes;
+          }
         }
-        if (r.erased) erased++;
       }
       if (!progressed) break;
     }
 
     const max = this.opts.gcMaxScan ?? 5000;
-    const state = (await this.ports.docs.get<{ cursor?: string }>(STATE, 'gc')) ?? {};
+    const state = (await this.ports.docs.get<GcState>(STATE, 'gc')) ?? {};
     let cursor = state.cursor;
     let scanned = 0;
     while (scanned < max) {
       const page = await this.ports.blobs.list({ cursor, limit: Math.min(200, max - scanned) });
       for (const b of page.items) {
         scanned++;
-        if (await this.collect(b.sha256)) erased++;
+        const c = await this.collectDetailed(b.sha256);
+        if (c.erased) {
+          erased++;
+          freedBytes += c.bytes;
+        } else if (c.kept === 'held') keptHeld++;
       }
       cursor = page.cursor;
       if (!cursor) break;
     }
-    await this.ports.docs.put(STATE, 'gc', { cursor, lastRun: now });
-    erased += await this.releaseHeld();
-    return { expired, erased, scanned };
+    const released = await this.releaseHeld();
+    erased += released;
+    const next: GcState = {
+      cursor,
+      lastRun: now,
+      nextRun: now + (this.opts.gcIntervalSeconds ?? 3600),
+      expired,
+      erased,
+      freedBytes,
+      scanned,
+      keptHeld,
+      totalErased: (state.totalErased ?? 0) + erased,
+      totalFreedBytes: (state.totalFreedBytes ?? 0) + freedBytes,
+    };
+    await this.ports.docs.put(STATE, 'gc', next);
+    return { expired, erased, scanned, freedBytes };
+  }
+
+  async gcState(): Promise<GcState> {
+    return (await this.ports.docs.get<GcState>(STATE, 'gc')) ?? {};
   }
 }
 

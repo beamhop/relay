@@ -12,4 +12,10 @@ export {
   type R2ObjectLike,
 } from './r2.ts';
 export { DEFAULT_TYPE, isSha256 } from './util.ts';
+export {
+  TieredBlobStore,
+  tierInPlace,
+  type Tier,
+  type TieredBlobStoreOptions,
+} from './tiered.ts';
 export { createBlobStore, type BlobStoreFactoryOptions } from './factory.ts';

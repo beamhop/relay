@@ -2,6 +2,7 @@
 /**
  * Blossom HTTP routes on the shared kernel Hono app:
  * BUD-01 GET/HEAD /<sha256>[.ext] · BUD-02 PUT /upload, GET /list/<pubkey>, DELETE /<sha256>
+ * BUD-03 author server lists (kind 10063) as redirect hints for missing blobs (`?as=<pubkey>`)
  * BUD-04 PUT /mirror · BUD-05 PUT|HEAD /media · BUD-06 HEAD /upload
  */
 import { type Kernel, type MediaOp, resolveRelay } from '@beamhop/core';
@@ -24,11 +25,18 @@ import {
 // biome-ignore lint/suspicious/noExplicitAny: Hono env generic of the shared kernel app
 type C = Context<any>;
 
+/** BUD-03 user server list (replaceable event; stored by the relay like any 1xxxx kind). */
+export const SERVER_LIST_KIND = 10063;
+/** Blossom specs this server implements. */
+export const SUPPORTED_BUDS = [1, 2, 3, 4, 5, 6] as const;
+const HEX64 = /^[0-9a-f]{64}$/;
+
 const CORS: Record<string, string> = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers': 'Authorization, *',
   'access-control-allow-methods': 'GET, HEAD, PUT, DELETE, OPTIONS',
-  'access-control-expose-headers': 'X-Reason, Content-Length, Content-Range, Accept-Ranges',
+  'access-control-expose-headers':
+    'X-Reason, Content-Length, Content-Range, Accept-Ranges, Location',
   'access-control-max-age': '86400',
 };
 
@@ -95,6 +103,49 @@ export function registerRoutes(kernel: Kernel, svc: BlossomService): void {
 
   const notFound = (head = false) => fail(404, 'Not found', head);
 
+  /**
+   * BUD-03: the author's server list (kind 10063, newest first as stored by this
+   * relay) → other Blossom servers that may have the file. Own URL excluded.
+   */
+  const authorServers = async (ctx: RelayCtx, pubkey: string): Promise<string[]> => {
+    const [ev] = await kernel.ports.events.query(ctx.relay.id, [
+      { kinds: [SERVER_LIST_KIND], authors: [pubkey], limit: 1 },
+    ]);
+    const own = ctx.publicUrl.replace(/\/+$/, '');
+    const out: string[] = [];
+    for (const t of ev?.tags ?? []) {
+      if (t[0] !== 'server' || typeof t[1] !== 'string') continue;
+      let u: URL;
+      try {
+        u = new URL(t[1]);
+      } catch {
+        continue;
+      }
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
+      const base = `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+      if (base !== own && !out.includes(base)) out.push(base);
+    }
+    return out;
+  };
+
+  /** Missing blob + `?as=<author pubkey>` hint → redirect to the author's next server. */
+  const redirectToAuthorServer = async (
+    c: C,
+    ctx: RelayCtx,
+    sha: string,
+    file: string,
+  ): Promise<Response | null> => {
+    const as = c.req.query('as')?.toLowerCase();
+    if (!as || !HEX64.test(as)) return null;
+    if (await svc.blocked(sha)) return null;
+    const [server] = await authorServers(ctx, as);
+    if (!server) return null;
+    return respond(null, {
+      status: 302,
+      headers: { location: `${server}/${file}`, 'x-reason': "Found on the author's media server" },
+    });
+  };
+
   // CORS pre-flight for every Blossom endpoint.
   for (const p of ['/upload', '/mirror', '/media', LIST_PATH, HASH_PATH]) {
     app.options(p, () => respond(null, { status: 204 }));
@@ -110,7 +161,7 @@ export function registerRoutes(kernel: Kernel, svc: BlossomService): void {
     try {
       // Tenancy: a relay only serves blobs someone uploaded to it.
       if ((await kernel.ports.blobIndex.owners(ctx.relay.id, sha)).length === 0) {
-        return notFound(head);
+        return (await redirectToAuthorServer(c, ctx, sha, file)) ?? notFound(head);
       }
       if (await svc.quarantined(sha)) return fail(403, 'This file is unavailable', head);
       const d = await kernel.policy.run('onBlobServe', [
@@ -221,11 +272,15 @@ export function registerRoutes(kernel: Kernel, svc: BlossomService): void {
     const size = lenHeader !== undefined ? Number(lenHeader) : undefined;
     const type = cleanType(c.req.header('x-content-type'));
     try {
+      if (sha) await svc.assertNotBlocked(sha);
       const limits = await svc.limitsFor(ctx.relay, pubkey);
       const owned =
         !!sha &&
         (await kernel.ports.blobIndex.owners(ctx.relay.id, sha)).some((o) => o.pubkey === pubkey);
       svc.checkUpload(ctx.relay, limits, { size, type, alreadyOwned: owned });
+      if (size !== undefined && !(sha && (await kernel.ports.blobs.head(sha)))) {
+        await svc.tiering?.checkCapacity(size);
+      }
       if (sha) {
         await svc.uploadPolicy(ctx.relay, limits.tier, {
           sha256: sha,

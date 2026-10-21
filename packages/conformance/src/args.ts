@@ -8,7 +8,7 @@ and BUDs it claims to support. Checks for features the relay does not list in
 its NIP-11 document are skipped.
 
 Options:
-  --blossom <url>        Also check this Blossom media server (BUD-01/02/04/05/06)
+  --blossom <url>        Also check this Blossom media server (BUD-01/02/03/04/05/06)
   --nips <1,9,11,...>    Only run checks for these NIPs
   --buds <1,2,...>       Only run these Blossom checks
   --only <id,...>        Only run checks whose id starts with one of these (e.g. nip01.req)

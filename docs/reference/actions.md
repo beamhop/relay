@@ -939,6 +939,27 @@ Remove the oldest reactions and reposts until storage is back under its limit.
 
 ## media
 
+### File cleanup
+
+When files nobody uses any more were last cleaned up, how much space that freed, and how many are waiting.
+
+- **id:** `media.cleanup-status` · **CLI:** `beamhop media cleanup-status` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* Orphan GC (blossom.gc): expired BlobIndex owners removed, bytes with refCount 0 erased unless under legal hold. orphans = blobs kept by a legal hold (last run) + docs blossom.held records.
+
+### Delete a quarantined file for good
+
+The file is not allowed: delete it and refuse it if anyone uploads it again. This cannot be undone.
+
+- **id:** `media.confirm-quarantine` · **CLI:** `beamhop media confirm-quarantine` · **scope:** relay · **permission:** `moderation.write`
+- changes settings/data · bulk
+- *Technical:* Removes this relay’s BlobIndex owners (bytes erased when refCount reaches 0 and no legal hold), adds sha256 to docs `blossom.blocked` (upload/mirror of the same bytes → 403), marks the policy queue item removed, optionally runs moderation.ban-pubkey. Abuse-list matches raise a safety notification (the existing reporting hook). No undo.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `sha256` | string |  | The file hash |
+| `banUploader` | boolean | `false` | Also block whoever uploaded it from posting and uploading here |
+
 ### Delete a media file
 
 Remove a file from this relay. It is erased from storage once nobody uses it.
@@ -959,7 +980,7 @@ See files uploaded to this relay, optionally for one person.
 
 - **id:** `media.list-blobs` · **CLI:** `beamhop media list-blobs` · **scope:** relay · **permission:** `relay.read`
 - read-only
-- *Technical:* BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent). `url` / `thumbUrl` are absolute, based on the relay’s public URL (route.publicUrl, else hosts[0] + node.tls), so an admin app on another host can load them.
+- *Technical:* BlobIndex.list / listByOwner for the relay (BUD-02 /list equivalent). `tier`: hot/cold storage (docs blossom.tiers); `owners`: uploads of the same hash on this relay. `url` / `thumbUrl` are absolute, based on the relay’s public URL (route.publicUrl, else hosts[0] + node.tls), so an admin app on another host can load them.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
@@ -979,6 +1000,31 @@ Uploads that matched a blocked-image list and were blocked.
 |---|---|---|---|
 | `limit` | number | `50` |  |
 
+### Quarantined files
+
+Files that were held back for review. Files that matched a known-abuse list are never shown.
+
+- **id:** `media.list-quarantine` · **CLI:** `beamhop media list-quarantine` · **scope:** relay · **permission:** `moderation.write`
+- read-only
+- *Technical:* docs `blossom.quarantine` filtered to blobs owned on this relay (or flagged here). source: abuse-list (media.scan pHash/dHash match), rule (policy onUpload hold/shadow), other.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `cursor` | string |  |  |
+| `limit` | number | `50` |  |
+
+### Preview a quarantined picture
+
+Load a small copy of a held picture so you can decide. Not available for files that matched a known-abuse list.
+
+- **id:** `media.quarantine-preview` · **CLI:** `beamhop media quarantine-preview` · **scope:** relay · **permission:** `moderation.write`
+- read-only
+- *Technical:* Returns a data: URL of the image bytes (≤ 2097152 bytes, images except SVG). Refused for abuse-list matches. Quarantined files are otherwise never served (BUD-01 GET → 403).
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `sha256` | string |  |  |
+
 ### Remake thumbnail and smaller copies
 
 Make the thumbnail and phone-sized copies of a photo (or video versions) again.
@@ -990,6 +1036,19 @@ Make the thumbnail and phone-sized copies of a photo (or video versions) again.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `sha256` | string |  | The file hash |
+
+### Release a quarantined file
+
+The file was held by mistake: make it available again.
+
+- **id:** `media.release-quarantine` · **CLI:** `beamhop media release-quarantine` · **scope:** relay · **permission:** `moderation.write`
+- changes settings/data · undoable · bulk
+- *Technical:* Deletes docs `blossom.quarantine[sha256]` (BUD-01 GET serves it again), records docs `blossom.released`, marks the policy queue item `blob-<sha256>` kept. Undo re-quarantines.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `sha256` | string |  | The file hash |
+| `note` | string |  | Why it is fine (kept with the decision) |
 
 ### Check a file against blocked-image lists again
 
@@ -1003,6 +1062,14 @@ Re-check one image against this relay’s blocked-image lists. A match blocks it
 |---|---|---|---|
 | `sha256` | string |  | The file hash |
 
+### Move older files now
+
+Move files nobody opened for a while to the cheaper storage now instead of waiting for the next automatic run.
+
+- **id:** `media.run-tiering` · **CLI:** `beamhop media run-tiering` · **scope:** node · **permission:** `media.write`
+- changes settings/data
+- *Technical:* Runs one pass of the blossom.tiering job (resumable; max 2000 scanned / 200 moved per run). Quarantined and legally held files are never moved.
+
 ### Change someone’s storage limit
 
 Give one person more (or less) space for media uploads on this relay.
@@ -1015,6 +1082,14 @@ Give one person more (or less) space for media uploads on this relay.
 |---|---|---|---|
 | `pubkey` | string |  | Whose storage limit to change |
 | `quotaBytes` | number |  | New limit in bytes, or empty to go back to their tier’s default |
+
+### Storage tiers
+
+How full the main and the cheaper file storage are, and when older files were last moved.
+
+- **id:** `media.storage-tiers` · **CLI:** `beamhop media storage-tiers` · **scope:** node · **permission:** `relay.read`
+- read-only
+- *Technical:* Per tier: bytes/count from the last full sweep of the blossom.tiering job (+ changes since, this process), caps from modules.blossom.tiers.*.maxBytes; job state in docs blossom.state[tiering].
 
 ### Storage use
 
