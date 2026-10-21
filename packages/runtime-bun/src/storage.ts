@@ -14,6 +14,7 @@ import type {
   DocStore,
   EventStore,
   Logger,
+  MediaProcessor,
   Ports,
   TimeSeriesStore,
 } from '@beamhop/core';
@@ -54,7 +55,13 @@ export interface StorageLoaders {
   importBlobs?: () => Promise<
     { createBlobStore?: CreateBlobStore; createBlobStoreFromConfig?: CreateBlobStore } | undefined
   >;
+  importMedia?: () => Promise<{ createBunMediaProcessor?: CreateMediaProcessor } | undefined>;
 }
+
+/** Shape the runtime expects from `@beamhop/media/bun` (sharp + ffmpeg composite). */
+export type CreateMediaProcessor = (opts: {
+  logger?: Logger;
+}) => Promise<{ processor?: MediaProcessor }>;
 
 async function tryImport<T>(load: () => Promise<unknown>): Promise<T | undefined> {
   try {
@@ -166,6 +173,22 @@ export async function createDefaultPorts(
 
   for (const store of [events, blobIndex, docs, metrics, blobs]) await store.init();
 
+  // Optional media tools (sharp / ffmpeg); absent → no `ports.media`, media health explains.
+  let media: MediaProcessor | undefined;
+  const mediaMod = await (loaders.importMedia?.() ??
+    tryImport<{ createBunMediaProcessor?: CreateMediaProcessor }>(
+      () => import('@beamhop/media/bun'),
+    ));
+  if (typeof mediaMod?.createBunMediaProcessor === 'function') {
+    try {
+      media = (
+        await mediaMod.createBunMediaProcessor({ logger: logger.child({ component: 'media' }) })
+      ).processor;
+    } catch (err) {
+      logger.log('warn', 'media tools could not be loaded', { err });
+    }
+  }
+
   const scheduler = new BunScheduler({ logger: logger.child({ component: 'scheduler' }) });
   const bunCrypto = new BunCrypto({
     secret: loadOrCreateSecret(layout),
@@ -183,6 +206,7 @@ export async function createDefaultPorts(
     clock: systemClock,
     logger,
     crypto: bunCrypto,
+    ...(media ? { media } : {}),
   };
   return {
     ports,

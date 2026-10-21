@@ -1,0 +1,6 @@
+# Beamhop TEST hash list: synthetic images only (test/helpers.ts syntheticImage seeds 1 and 4).
+# NOT a real abuse list. Real CSAM/abuse hash lists are only available under legal
+# agreements with the organisations that maintain them; Beamhop ships none.
+9be4e19e67998621 synthetic-seed-1
+dhash:24240c0c0c242424 synthetic-seed-4
+not-a-hash
