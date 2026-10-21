@@ -1,0 +1,106 @@
+@layer components {
+  /* checkbox / radio / toggle */
+  .checkbox {
+    @apply bg-surface border-line-more relative shrink-0 cursor-pointer appearance-none border-solid;
+    width: 1.3rem;
+    height: 1.3rem;
+    border-width: var(--border-thin);
+    border-radius: 0.45rem;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease;
+
+    &:checked {
+      @apply bg-primary border-primary;
+    }
+    &:checked::after {
+      content: "";
+      @apply absolute;
+      left: 0.4rem;
+      top: 0.16rem;
+      width: 0.35rem;
+      height: 0.65rem;
+      border: solid var(--primary-content);
+      border-width: 0 3px 3px 0;
+      transform: rotate(45deg);
+    }
+  }
+
+  .radio {
+    @apply bg-surface border-line-more relative shrink-0 cursor-pointer appearance-none rounded-full border-solid;
+    width: 1.3rem;
+    height: 1.3rem;
+    border-width: var(--border-thin);
+
+    &:checked {
+      @apply border-primary;
+    }
+    &:checked::after {
+      content: "";
+      @apply bg-primary absolute rounded-full;
+      inset: 0.25rem;
+    }
+  }
+
+  .toggle {
+    @apply bg-surface-more border-line-more relative shrink-0 cursor-pointer appearance-none rounded-full border-solid;
+    width: 2.75rem;
+    height: 1.6rem;
+    border-width: var(--border-thin);
+    transition: background-color 0.2s ease;
+
+    &::after {
+      content: "";
+      @apply bg-surface absolute rounded-full;
+      top: 50%;
+      left: 0.15rem;
+      transform: translateY(-50%);
+      width: 1.1rem;
+      height: 1.1rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      transition: left 0.2s ease;
+    }
+    &:checked {
+      @apply bg-primary border-primary;
+    }
+    &:checked::after {
+      left: calc(100% - 1.25rem);
+    }
+  }
+
+  input.range {
+    @apply bg-surface-more w-full cursor-pointer appearance-none rounded-full;
+    height: 0.5rem;
+
+    &::-webkit-slider-thumb {
+      @apply bg-primary appearance-none rounded-full;
+      width: 1.3rem;
+      height: 1.3rem;
+      border: 2px solid var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    &::-moz-range-thumb {
+      @apply bg-primary rounded-full;
+      width: 1.3rem;
+      height: 1.3rem;
+      border: 2px solid var(--surface);
+    }
+  }
+
+  .progress {
+    @apply bg-surface-more w-full appearance-none overflow-hidden rounded-full;
+    height: 0.65rem;
+    border: none;
+
+    &::-webkit-progress-bar {
+      @apply bg-surface-more;
+    }
+    &::-webkit-progress-value {
+      @apply bg-primary rounded-full;
+      transition: width 0.5s;
+    }
+    &::-moz-progress-bar {
+      @apply bg-primary;
+    }
+  }
+}

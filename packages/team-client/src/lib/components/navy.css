@@ -1,0 +1,85 @@
+[data-fl-theme="navy"] {
+  --radius-xl: 0.375rem;
+  --radius-2xl: 0.5rem;
+  --radius-3xl: 0.75rem;
+
+  &[data-theme="light"] {
+    --primary: #0d2545;
+    --primary-soft: #1a3f6b;
+    --primary-bold: #06162d;
+    --primary-content: #f3f7fd;
+
+    --secondary: #c9a84c;
+    --secondary-soft: #dcc069;
+    --secondary-bold: #a8862e;
+    --secondary-content: #0a1426;
+
+    --success: oklch(80.494% 0.16 154.45);
+    --success-content: oklch(16.098% 0.032 154.45);
+    --warning: oklch(80% 0.142 78);
+    --warning-content: oklch(17% 0.03 78);
+    --error: oklch(60% 0.208 25);
+    --error-content: oklch(98% 0.012 25);
+
+    --backdrop: oklch(92.5% 0.013 256);
+    --surface: oklch(100% 0 0);
+    --surface-more: oklch(93.5% 0.014 256);
+    --surface-less: oklch(97.6% 0.008 256);
+
+    --content: oklch(30% 0.052 260);
+    --content-muted: color-mix(in oklab, var(--content) 68%, var(--surface));
+    --content-subtle: color-mix(in oklab, var(--content) 42%, var(--surface));
+
+    --line: color-mix(in oklab, var(--content) 20%, transparent);
+    --line-more: color-mix(in oklab, var(--content) 35%, transparent);
+    --line-less: color-mix(in oklab, var(--content) 10%, transparent);
+
+    /* soft, blurred navy shadow — not clay's hard offset shadow */
+    --shadow-color: 6, 22, 45;
+    --shadow-sm: 0 1px 3px rgba(var(--shadow-color), 0.1);
+    --shadow: 0 4px 12px rgba(var(--shadow-color), 0.1);
+    --shadow-lg: 0 10px 30px rgba(var(--shadow-color), 0.12);
+    --shadow-inset: inset 0 -4px 0 rgba(0, 0, 0, 0.05);
+    --shadow-inset-strong: inset 0 -3px 0 rgba(0, 0, 0, 0.1);
+  }
+
+  &[data-theme="dark"],
+  & .primary-nav {
+    --primary: #d6b65c;
+    --primary-soft: #b8973c;
+    --primary-bold: #e8c96a;
+    --primary-content: #0a1426;
+
+    --secondary: #3e6fd0;
+    --secondary-soft: #2b569f;
+    --secondary-bold: #6e9ae8;
+    --secondary-content: #f3f7fd;
+
+    --success: oklch(78% 0.15 154.45);
+    --success-content: oklch(16% 0.03 154.45);
+    --warning: oklch(83% 0.142 80);
+    --warning-content: oklch(17% 0.03 80);
+    --error: oklch(64% 0.215 25);
+    --error-content: oklch(99% 0.01 25);
+
+    --backdrop: #06162d;
+    --surface: #0d2545;
+    --surface-more: #06162d;
+    --surface-less: #0a1f3a;
+
+    --content: oklch(86% 0.025 255);
+    --content-muted: color-mix(in oklab, var(--content) 70%, var(--surface));
+    --content-subtle: color-mix(in oklab, var(--content) 45%, var(--surface));
+
+    --line: color-mix(in oklab, var(--content) 16%, transparent);
+    --line-more: color-mix(in oklab, var(--content) 30%, transparent);
+    --line-less: color-mix(in oklab, var(--content) 8%, transparent);
+
+    --shadow-color: 0, 0, 0;
+    --shadow-sm: 0 1px 3px rgba(var(--shadow-color), 0.35);
+    --shadow: 0 4px 12px rgba(var(--shadow-color), 0.4);
+    --shadow-lg: 0 10px 30px rgba(var(--shadow-color), 0.5);
+    --shadow-inset: inset 0 -4px 0 rgba(0, 0, 0, 0.25);
+    --shadow-inset-strong: inset 0 -3px 0 rgba(0, 0, 0, 0.3);
+  }
+}

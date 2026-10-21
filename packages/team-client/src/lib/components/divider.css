@@ -1,0 +1,7 @@
+@layer components {
+  .divider {
+    @apply bg-line rounded-full;
+    border: none;
+    height: var(--border-thin);
+  }
+}

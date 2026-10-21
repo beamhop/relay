@@ -1,0 +1,21 @@
+@layer components {
+  .join {
+    @apply inline-flex;
+
+    & > .join-item {
+      @apply overflow-hidden rounded-full;
+      &:hover {
+        @apply relative;
+      }
+      &:not(:last-child) {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+      }
+      &:not(:first-child) {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+        margin-left: calc(-1 * var(--border-thin));
+      }
+    }
+  }
+}

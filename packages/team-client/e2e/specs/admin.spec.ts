@@ -1,0 +1,1051 @@
+import type {Locator, Page} from "@playwright/test"
+import {DAY, HOUR, MINUTE, MONTH, now} from "@welshman/lib"
+import {Article} from "@welshman/domain"
+import {
+  DEFAULT_BLOSSOM_ORIGIN,
+  dialog,
+  expect,
+  getHosting,
+  gifFile,
+  makeTestUser,
+  menuButton,
+  mockBlossom,
+  openMessageMenu,
+  roomPath,
+  spacePath,
+  test,
+  users,
+} from "../harness"
+
+const ICON = gifFile("icon.gif")
+
+// `free` is what RelayForm starts on. PricingTable names a plan by its member limit.
+const PLANS = [
+  {id: "free", name: "Free", amount: 0, hidden: false, members: 50, blossom: false, livekit: false},
+  {
+    id: "basic",
+    name: "Basic",
+    amount: 500,
+    hidden: false,
+    // Plan["members"] is number | null upstream, and null is how the hosting API spells unlimited.
+    // eslint-disable-next-line no-restricted-syntax
+    members: null,
+    blossom: true,
+    livekit: true,
+  },
+]
+
+// Every field RelayDetailCard reads is present, since it calls .trim() and .replace() on several.
+const hostedRelay = (overrides: Record<string, unknown> = {}) => ({
+  id: "relay-1",
+  tenant_pubkey: users.alice.pubkey,
+  subdomain: "space",
+  zooid_domain: "test",
+  plan_id: "free",
+  status: "active",
+  sync_error: "",
+  synced: now(),
+  custom_domain: "",
+  custom_domain_verified: 0,
+  info_name: "Space",
+  info_icon: "",
+  info_description: "",
+  policy_public_read: 0,
+  policy_public_write: 0,
+  policy_public_join: 1,
+  policy_strip_signatures: 0,
+  groups_enabled: 1,
+  management_enabled: 1,
+  blossom_enabled: 0,
+  livekit_enabled: 0,
+  push_enabled: 1,
+  ...overrides,
+})
+
+// Tippy leaves a menu in the dom when it hides. Exact, since "Edit role" and "Edit roles" differ.
+const menuItem = (page: Page, name: string) =>
+  page.getByRole("button", {name, exact: true}).filter({visible: true})
+
+// That button is labeled with the space's name and its host, and only the host survives a rename.
+const openSpaceMenu = (page: Page) => page.getByRole("button", {name: /space\.test/}).click()
+
+// The card's aria-label is baked at first render, so the card is found by the name it shows.
+const memberCard = (page: Page, name: string) =>
+  page.locator(".card-interactive").filter({hasText: name})
+
+// Exact, because several permission names are a substring of another: "Ban members" of "Unban members".
+const permission = (scope: Locator, name: string) =>
+  scope.getByRole("checkbox", {name, exact: true})
+
+const openEventMenu = (card: Locator) => menuButton(card).click()
+
+const articleCard = (page: Page, title: string) =>
+  page.locator('[data-component="ArticleItem"]').filter({hasText: title})
+
+// A FieldInline puts its control in the div immediately after its label.
+const setting = (page: Page, label: string) =>
+  page.locator("label").filter({hasText: label}).locator("xpath=following-sibling::div")
+
+const settingToggle = (page: Page, label: string) => setting(page, label).getByRole("checkbox")
+
+test("US-092 edit a space's profile and featured content", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.bob, "general")
+  })
+
+  const {url} = scenario.space("space")
+  const admin = await as(users.admin, spacePath(url) + "/about")
+
+  await mockBlossom(admin.context(), {server: DEFAULT_BLOSSOM_ORIGIN})
+
+  await openSpaceMenu(admin)
+  await menuItem(admin, "Edit Space").click()
+
+  const editor = dialog(admin, "Edit this Space")
+
+  await editor.getByRole("button", {name: "Add an image"}).click()
+
+  // The upload's file input is hidden inside its own label, so the chooser opens by clicking it.
+  const picker = dialog(admin, "Add an image")
+  const chooser = admin.waitForEvent("filechooser")
+
+  await picker.locator('label:has(input[type="file"])').click()
+  await (await chooser).setFiles(ICON)
+
+  await expect(editor.getByText("Selected:")).toBeVisible()
+
+  await editor.locator('input[type="text"]').fill("Harbor")
+  await editor.locator("textarea").fill("Where the fleet ties up.")
+  await editor.getByRole("button", {name: "Save Changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Your changes have been saved!")
+
+  // All three come back off the relay's own nip-11 document
+  await expect(admin.getByRole("heading", {name: "Harbor"})).toBeVisible()
+  await expect(admin.getByText("Where the fleet ties up.")).toBeVisible()
+  await expect(admin.locator(`img[src^="${DEFAULT_BLOSSOM_ORIGIN}"]`).first()).toBeVisible()
+
+  const featured = admin
+    .locator(".card")
+    .filter({has: admin.getByRole("heading", {name: "Featured"})})
+
+  await featured.getByRole("button").first().click()
+
+  const featuredEditor = dialog(admin, "Featured Content")
+
+  await featuredEditor.getByRole("button", {name: "Add content"}).click()
+  await featuredEditor.getByPlaceholder("URL or nevent...").fill("Read the harbor rules first")
+  await featuredEditor.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Featured content updated!")
+  await expect(featured.getByText("Read the harbor rules first")).toBeVisible()
+
+  // What admin published reaches every visitor
+  const bob = await as(users.bob, spacePath(url) + "/about")
+
+  await expect(bob.getByRole("heading", {name: "Harbor"})).toBeVisible()
+
+  const bobsFeatured = bob
+    .locator(".card")
+    .filter({has: bob.getByRole("heading", {name: "Featured"})})
+
+  await expect(bobsFeatured.getByText("Read the harbor rules first")).toBeVisible()
+})
+
+test("US-093 create roles and assign them", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.bob, "general")
+    space.join(user.carol, "general")
+    space.profile(user.bob, {name: "Bob Barnacle"})
+    space.profile(user.carol, {name: "Carol Cutter"})
+  })
+
+  const {url} = scenario.space("space")
+  const admin = await as(users.admin, spacePath(url) + "/directory")
+
+  await expect(memberCard(admin, "Bob Barnacle")).toBeVisible()
+
+  await admin.getByRole("button", {name: "More options"}).click()
+  await menuItem(admin, "Manage Roles").click()
+
+  const roles = dialog(admin, "Manage Roles")
+
+  await roles.getByRole("button", {name: "Create Role"}).click()
+
+  const roleForm = dialog(admin, "Create Role")
+
+  await roleForm.getByPlaceholder("Moderator").fill("Deckhand")
+  await roleForm.locator("textarea").fill("Keeps the decks in order.")
+  await roleForm.getByRole("slider").fill("200")
+  await roleForm.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Role created!")
+  await expect(roles.locator(".role-badge")).toHaveText("Deckhand")
+
+  // Editing the label rewrites the role rather than adding a second one
+  await roles.locator(".card").filter({hasText: "Deckhand"}).getByRole("button").last().click()
+  await menuItem(admin, "Edit role").click()
+
+  const roleEditor = dialog(admin, "Edit Role")
+
+  await roleEditor.getByPlaceholder("Moderator").fill("Bosun")
+  await roleEditor.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Role updated!")
+  await expect(roles.locator(".role-badge")).toHaveText("Bosun")
+
+  // Handed out from the role's own menu...
+  await roles.locator(".card").filter({hasText: "Bosun"}).getByRole("button").last().click()
+  await menuItem(admin, "Add members").click()
+
+  const addMembers = dialog(admin, "Add to Bosun")
+
+  await addMembers.getByPlaceholder("Search for profiles...").fill("Bob")
+  await admin.locator(".tiptap-suggestions").getByRole("button", {name: users.bob.pubkey}).click()
+  await addMembers.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Members assigned!")
+
+  await roles.getByRole("button", {name: "Go back"}).click()
+
+  await expect(memberCard(admin, "Bob Barnacle").locator(".role-badge")).toHaveText("Bosun")
+
+  // ...or from a member's own card
+  await memberCard(admin, "Carol Cutter").getByRole("button").last().click()
+  await menuItem(admin, "Edit roles").click()
+
+  const carolsRoles = dialog(admin, "Edit Member")
+
+  await carolsRoles.getByRole("checkbox").check()
+  await carolsRoles.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Roles updated!")
+  await expect(memberCard(admin, "Carol Cutter").locator(".role-badge")).toHaveText("Bosun")
+
+  await admin.getByRole("button", {name: "More options"}).click()
+  await menuItem(admin, "Manage Roles").click()
+  await roles.locator(".card").filter({hasText: "Bosun"}).getByRole("button").last().click()
+  await menuItem(admin, "Delete role").click()
+
+  await dialog(admin, "Delete Role").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Role deleted!")
+
+  await roles.getByRole("button", {name: "Go back"}).click()
+
+  await expect(memberCard(admin, "Bob Barnacle")).toBeVisible()
+  await expect(memberCard(admin, "Carol Cutter").locator(".role-badge")).toHaveCount(0)
+})
+
+test("US-094 invite people to a space", async ({seed, as}) => {
+  const newcomer = makeTestUser("newcomer")
+
+  const scenario = await seed(({relay, user, at}) => {
+    const space = relay("space")
+    const other = relay("other")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.bob, "general")
+    space.profile(user.bob, {name: "Bob Barnacle"})
+
+    // Somebody who belongs to a different space, so adding her here is a change to this one.
+    other.room("lounge", {name: "Lounge"})
+    other.join(user.admin, "lounge")
+    other.join(newcomer, "lounge")
+    other.profile(newcomer, {name: "Nadia Newcomer"})
+    other.message(newcomer, "lounge", "hello from the lounge", at(2, HOUR))
+  })
+
+  const other = scenario.space("other")
+
+  // The invite dialog's search reads the profiles this client already holds.
+  const page = await as(users.admin, roomPath(other.url, "lounge"))
+
+  await expect(page.getByText("Nadia Newcomer").first()).toBeVisible()
+
+  // In-app navigation rather than a reload, which would empty the repository she was loaded into
+  await page.locator('.primary-nav [data-tip^="space"]').click()
+  await openSpaceMenu(page)
+  await menuItem(page, "Create Invite").click()
+
+  const invite = dialog(page, "Create an Invite")
+
+  await expect(invite.locator("input[readonly]")).toHaveValue(/\/join\?r=space\.test&c=.+/)
+
+  await invite.getByRole("button", {name: "Add members"}).click()
+
+  const addMembers = dialog(page, "Add Members")
+
+  await addMembers.getByPlaceholder("Search for profiles...").fill("Nadia")
+  await page.locator(".tiptap-suggestions").getByRole("button", {name: newcomer.pubkey}).click()
+  await addMembers.getByRole("button", {name: "Save", exact: true}).click()
+
+  await expect(page.getByRole("alert")).toContainText("Members have successfully been added!")
+
+  // Adding members opened over the invite, so saving goes back to it.
+  await invite.getByRole("button", {name: "Done"}).click()
+  await page.locator(".secondary-nav").getByRole("link", {name: "Directory"}).click()
+
+  await expect(memberCard(page, "Nadia Newcomer")).toBeVisible()
+
+  // A room's own invite carries the space's claim and that room's join code alongside it
+  await page.locator(".space-menu__scroll").getByRole("link", {name: "General"}).click()
+  await page.locator('[data-component="PageBar"]').getByRole("button").last().click()
+  await page.getByRole("button", {name: "Create invite"}).click()
+
+  await expect(dialog(page, "Create a Room Invite").locator("input[readonly]")).toHaveValue(
+    /\/join\?r=space\.test&c=[^&]+&h=general&code=.+/,
+  )
+})
+
+test("US-095 remove, ban, and restore members", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.bob, "general")
+    space.join(user.carol, "general")
+    space.profile(user.bob, {name: "Bob Barnacle"})
+    space.profile(user.carol, {name: "Carol Cutter"})
+  })
+
+  const {url} = scenario.space("space")
+  const admin = await as(users.admin, spacePath(url) + "/directory")
+
+  await memberCard(admin, "Bob Barnacle").getByRole("button").last().click()
+  await menuItem(admin, "Remove member").click()
+
+  await dialog(admin, "Remove Member").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Member has successfully been removed!")
+  await expect(memberCard(admin, "Bob Barnacle")).toHaveCount(0)
+
+  await memberCard(admin, "Carol Cutter").getByRole("button").last().click()
+  await menuItem(admin, "Ban member").click()
+
+  await dialog(admin, "Ban Member").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Member has successfully been banned!")
+  await expect(memberCard(admin, "Carol Cutter")).toHaveCount(0)
+
+  await admin.getByRole("button", {name: "More options"}).click()
+  await menuItem(admin, "Banned Members").click()
+
+  const banned = dialog(admin, "Banned users")
+
+  await banned.locator(".card").filter({hasText: "Carol Cutter"}).getByRole("button").last().click()
+  await menuItem(admin, "Restore User").click()
+
+  await expect(admin.getByRole("alert")).toContainText(
+    "User has successfully been restored to membership!",
+  )
+  await expect(memberCard(admin, "Carol Cutter")).toBeVisible()
+})
+
+test("US-096 moderate messages and posts", async ({seed, as}) => {
+  const scenario = await seed(({relay, user, at}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.alice, "general")
+    space.join(user.bob, "general")
+    space.join(user.carol, "general")
+    space.profile(user.alice, {name: "Alice Anchor"})
+    space.profile(user.bob, {name: "Bob Barnacle"})
+    space.message(user.alice, "general", "the hull is patched", at(2, HOUR))
+    space.message(user.bob, "general", "aye captain", at(90, MINUTE))
+
+    space.event(
+      user.bob,
+      () =>
+        space
+          .kind(Article)
+          .writer()
+          .setIdentifier("charting-the-reef")
+          .setTitle("Charting the Reef")
+          .setSummary("Where the shallows are.")
+          .setPublishedAt(at(3, HOUR))
+          .setContent("Mind the coral.")
+          .renderTemplate(),
+      at(3, HOUR),
+    )
+
+    // A second article, so a page with the deleted one missing is still a page that loaded
+    space.event(
+      user.alice,
+      () =>
+        space
+          .kind(Article)
+          .writer()
+          .setIdentifier("tides-and-timetables")
+          .setTitle("Tides and Timetables")
+          .setSummary("When to sail.")
+          .setPublishedAt(at(4, HOUR))
+          .setContent("Slack water is best.")
+          .renderTemplate(),
+      at(4, HOUR),
+    )
+  })
+
+  const {url} = scenario.space("space")
+
+  // An author gets a delete on their own content
+  const alice = await as(users.alice, roomPath(url, "general"))
+
+  await openMessageMenu(alice, "the hull is patched")
+
+  await expect(menuItem(alice, "Delete Message")).toBeVisible()
+
+  // Everybody else gets a report instead
+  const bob = await as(users.bob, roomPath(url, "general"))
+
+  await openMessageMenu(bob, "the hull is patched")
+  await menuItem(bob, "Report Content").click()
+
+  const report = dialog(bob, "Report Content")
+
+  await report.getByRole("combobox").selectOption("Spam")
+  await report.getByRole("button", {name: "Send Report"}).click()
+
+  await expect(bob.getByRole("alert")).toContainText("Your report has been sent!")
+
+  // An admin gets a delete on anything, authored by them or not
+  const admin = await as(users.admin, roomPath(url, "general"))
+
+  await expect(admin.getByText("aye captain")).toBeVisible()
+
+  await openMessageMenu(admin, "aye captain")
+  await menuItem(admin, "Delete Message").click()
+
+  await dialog(admin, "Delete Message").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Event has successfully been deleted!")
+
+  await admin.goto(spacePath(url) + "/articles")
+  await openEventMenu(articleCard(admin, "Charting the Reef"))
+  await menuItem(admin, "Delete Article").click()
+
+  await dialog(admin, "Delete Article").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Event has successfully been deleted!")
+
+  // A viewer arriving after the fact reads the space as the relay now holds it
+  const carol = await as(users.carol, roomPath(url, "general"))
+
+  await expect(carol.getByText("the hull is patched")).toBeVisible()
+  await expect(carol.getByText("aye captain")).toHaveCount(0)
+
+  await carol.goto(spacePath(url) + "/articles")
+
+  await expect(articleCard(carol, "Tides and Timetables")).toBeVisible()
+  await expect(articleCard(carol, "Charting the Reef")).toHaveCount(0)
+})
+
+test("US-097 work through the action-items queue", async ({seed, as}) => {
+  const scenario = await seed(({relay, user, at}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    // A room the relay will not admit anyone to on their own say-so, so a join request stays pending.
+    space.room("vault", {name: "Vault", closed: true, private: true})
+    space.join(user.admin, "general", "vault")
+    space.join(user.alice, "general")
+    space.join(user.bob, "general")
+    space.join(user.carol, "general")
+    space.profile(user.alice, {name: "Alice Anchor"})
+    space.profile(user.bob, {name: "Bob Barnacle"})
+    space.profile(user.carol, {name: "Carol Cutter"})
+    space.message(user.alice, "general", "the hull is patched", at(2, HOUR))
+    space.message(user.alice, "general", "the sails are torn", at(90, MINUTE))
+  })
+
+  const {url} = scenario.space("space")
+  const admin = await as(users.admin, spacePath(url) + "/about")
+
+  const report = async (page: Page, text: string, reason: string) => {
+    await openMessageMenu(page, text)
+    await menuItem(page, "Report Content").click()
+
+    const form = dialog(page, "Report Content")
+
+    await form.getByRole("combobox").selectOption(reason)
+    await form.getByRole("button", {name: "Send Report"}).click()
+
+    await expect(page.getByRole("alert")).toContainText("Your report has been sent!")
+  }
+
+  const askToJoinVault = async (page: Page) => {
+    await page.goto(roomPath(url, "vault"))
+    await page.getByRole("button", {name: "Join Room"}).click()
+
+    await expect(page.getByRole("button", {name: "Access Pending"})).toBeVisible()
+  }
+
+  const bob = await as(users.bob, roomPath(url, "general"))
+
+  await expect(bob.getByText("the hull is patched")).toBeVisible()
+
+  await report(bob, "the hull is patched", "Spam")
+  await askToJoinVault(bob)
+
+  const carol = await as(users.carol, roomPath(url, "general"))
+
+  await expect(carol.getByText("the sails are torn")).toBeVisible()
+
+  await report(carol, "the sails are torn", "Other")
+  await askToJoinVault(carol)
+
+  await openSpaceMenu(admin)
+  await admin.getByRole("button", {name: /^Action Items/}).click()
+
+  const queue = dialog(admin, "Action Items")
+  const item = (text: string, kind: string) =>
+    queue.locator(".card").filter({hasText: text}).filter({hasText: kind})
+
+  // Each report names its reporter, its reason and the message it was filed against
+  const spamReport = item("Bob Barnacle", "Reported this event")
+
+  await expect(spamReport).toContainText('as "spam"')
+  await expect(spamReport).toContainText("the hull is patched")
+
+  const otherReport = item("Carol Cutter", "Reported this event")
+
+  await expect(otherReport).toContainText('as "other"')
+  await expect(otherReport).toContainText("the sails are torn")
+
+  // ...and each join request names its requester and the room they asked for
+  const carolsRequest = item("Carol Cutter", "requested membership")
+  const bobsRequest = item("Bob Barnacle", "requested membership")
+
+  await expect(carolsRequest).toContainText("requested membership in #Vault")
+  await expect(bobsRequest).toContainText("requested membership in #Vault")
+
+  await carolsRequest.getByRole("button", {name: "Accept"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Member has been added to the room!")
+  await expect(carolsRequest).toHaveCount(0)
+
+  await bobsRequest.getByRole("button", {name: "Dismiss"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Join request has been dismissed.")
+  await expect(bobsRequest).toHaveCount(0)
+
+  // Removing content deletes the message the report was filed against...
+  await spamReport.getByRole("button").first().click()
+  await menuItem(admin, "Remove Content").click()
+
+  await dialog(admin, "Remove Content").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Content has successfully been deleted!")
+  await expect(spamReport).toHaveCount(0)
+
+  // ...while dismissing only clears the report
+  await otherReport.getByRole("button").first().click()
+  await menuItem(admin, "Dismiss Report").click()
+
+  await expect(otherReport).toHaveCount(0)
+
+  // Accepting granted membership, dismissing did not
+  await admin.goto(roomPath(url, "vault"))
+  await admin.locator('[data-component="PageBar"]').getByRole("button").last().click()
+  await admin.getByRole("button", {name: "View All"}).click()
+
+  const members = dialog(admin, "Members")
+
+  await expect(members.getByText("Carol Cutter")).toBeVisible()
+  await expect(members.getByText("Bob Barnacle")).toHaveCount(0)
+
+  // The removed message is gone from the space, the dismissed one is not
+  const alice = await as(users.alice, roomPath(url, "general"))
+
+  await expect(alice.getByText("the sails are torn")).toBeVisible()
+  await expect(alice.getByText("the hull is patched")).toHaveCount(0)
+})
+
+test("US-130 share out admin permissions", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.bob, "general")
+    space.profile(user.bob, {name: "Bob Barnacle"})
+  })
+
+  const {url} = scenario.space("space")
+  const admin = await as(users.admin, spacePath(url) + "/directory")
+
+  await memberCard(admin, "Bob Barnacle").getByRole("button").last().click()
+  await menuItem(admin, "Edit permissions").click()
+
+  const permissions = dialog(admin, "Edit Permissions")
+
+  await permission(permissions, "Ban members").check()
+  await permission(permissions, "List banned members").check()
+  await permissions.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Permissions updated!")
+
+  await admin.getByRole("button", {name: "More options"}).click()
+  await menuItem(admin, "Admins").click()
+
+  const admins = dialog(admin, "Admins")
+
+  await expect(
+    admins.locator(".card").filter({hasText: "Bob Barnacle"}).locator(".badge"),
+  ).toHaveText(["Ban members", "List banned members"])
+
+  await admins.getByRole("button", {name: "Go back"}).click()
+
+  // bob holds two methods now, so he gets the one control they cover and nothing else
+  const bob = await as(users.bob, spacePath(url) + "/directory")
+
+  await bob.getByRole("button", {name: "More options"}).click()
+
+  await expect(menuItem(bob, "Banned Members")).toBeVisible()
+  await expect(menuItem(bob, "Admins")).toHaveCount(0)
+
+  await memberCard(admin, "Bob Barnacle").getByRole("button").last().click()
+  await menuItem(admin, "Edit permissions").click()
+  await permission(permissions, "Ban members").uncheck()
+  await permission(permissions, "List banned members").uncheck()
+  await permissions.getByRole("button", {name: "Save changes"}).click()
+
+  await expect(admin.getByRole("alert")).toContainText("Permissions updated!")
+
+  await admin.getByRole("button", {name: "More options"}).click()
+  await menuItem(admin, "Admins").click()
+
+  await expect(admins.getByText("Nobody else has been given management permissions.")).toBeVisible()
+})
+
+test("US-098 browse and create hosted spaces", async ({seed, as}) => {
+  await seed(({relay, user}) => {
+    const space = relay("space")
+    const other = relay("other")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+    other.room("lounge", {name: "Lounge"})
+    other.join(user.alice, "lounge")
+  })
+
+  const page = await as(users.alice, "/settings/hosting", {
+    hosting: {plans: PLANS},
+    // A space created here is opened at wss://<subdomain>.<domain>/, which has to name a tenant.
+    env: {VITE_HOSTING_RELAY_DOMAIN: "test"},
+  })
+
+  await page.getByRole("button", {name: "Create a Space"}).click()
+
+  const form = dialog(page, "New Space")
+
+  await form.getByPlaceholder("My Space").fill("Space")
+
+  // The subdomain follows the name until it is edited
+  await expect(form.getByPlaceholder("my-space")).toHaveValue("space")
+
+  await form.getByRole("button").filter({hasText: "Up to 50 members"}).click()
+  await form.getByRole("button", {name: "Create Space", exact: true}).click()
+
+  await expect(page).toHaveURL(/\/spaces\/space\.test\/admin/)
+  await expect(page.getByRole("heading", {name: "Space", exact: true})).toBeVisible()
+
+  await page.goto("/settings/hosting")
+
+  const listed = page.locator(".card").filter({hasText: "space.test"}).first()
+
+  await expect(listed).toContainText("Active")
+  await expect(listed).toContainText("Free")
+
+  // A paid plan has to be paid for, so creation hands straight over to payment
+  await page.getByRole("button", {name: "Create a Space"}).click()
+  await form.getByPlaceholder("My Space").fill("Other")
+  await form.getByRole("button").filter({hasText: "Unlimited members"}).click()
+  await form.getByRole("button", {name: "Create Space", exact: true}).click()
+
+  await expect(page).toHaveURL(/\/spaces\/other\.test\/admin/)
+  await expect(page.getByRole("heading", {name: "Set Up Payments"})).toBeVisible()
+})
+
+test("US-099 configure a hosted relay", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+    space.join(user.bob, "general")
+  })
+
+  const {url} = scenario.space("space")
+  const relayRecord = hostedRelay({
+    activity: [
+      {
+        id: "activity-1",
+        tenant_pubkey: users.alice.pubkey,
+        created_at: scenario.at(1, DAY),
+        activity_type: "create_relay",
+        resource_type: "relay",
+        resource_id: "relay-1",
+      },
+    ],
+  })
+
+  const alice = await as(users.alice, spacePath(url) + "/admin", {
+    hosting: {plans: PLANS, relays: [relayRecord]},
+  })
+
+  await expect(alice.getByRole("heading", {name: "Space", exact: true})).toBeVisible()
+  await expect(alice.getByText("Relay created")).toBeVisible()
+
+  await alice.getByRole("button", {name: "Relay actions"}).click()
+  await menuItem(alice, "Edit details").click()
+
+  const editor = dialog(alice, "Edit Space")
+
+  await editor.getByPlaceholder("My Space").fill("Harbor")
+  await editor.locator("textarea").fill("Where the fleet ties up.")
+  await editor.getByRole("button", {name: "Save Changes"}).click()
+
+  await expect(alice.getByRole("heading", {name: "Harbor", exact: true})).toBeVisible()
+  await expect(alice.getByText("Where the fleet ties up.")).toBeVisible()
+
+  const publicRead = settingToggle(alice, "Public read")
+
+  await expect(publicRead).not.toBeChecked()
+
+  await publicRead.click()
+
+  await expect(publicRead).toBeChecked()
+
+  await alice.reload()
+
+  await expect(settingToggle(alice, "Public read")).toBeChecked()
+
+  // The free plan doesn't include either of these
+  await expect(settingToggle(alice, "Media storage")).toBeDisabled()
+  await expect(settingToggle(alice, "LiveKit support")).toBeDisabled()
+
+  // A member of the space who doesn't own it has nothing to manage here
+  const bob = await as(users.bob, spacePath(url) + "/admin")
+
+  await expect(bob.getByRole("link", {name: "Go to Hosting settings"})).toBeVisible()
+})
+
+test("US-100 change a hosted relay's plan", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+  })
+
+  const {url} = scenario.space("space")
+  const page = await as(users.alice, spacePath(url) + "/admin", {
+    hosting: {plans: PLANS, relays: [hostedRelay()]},
+  })
+
+  await expect(setting(page, "Current plan")).toHaveText("Free")
+
+  await page.getByRole("button", {name: "Relay actions"}).click()
+  await menuItem(page, "Change plan").click()
+
+  const plans = dialog(page, "Change plan")
+
+  await plans.getByRole("button").filter({hasText: "Unlimited members"}).click()
+  await plans.getByRole("button", {name: "Save", exact: true}).click()
+
+  await expect(page.getByRole("alert")).toContainText("Plan updated.")
+
+  // Nothing is on file to charge, so the upgrade hands over to payment setup
+  await expect(page.getByRole("heading", {name: "Set Up Payments"})).toBeVisible()
+
+  await page.getByRole("button", {name: "Set up later"}).click()
+
+  await expect(setting(page, "Current plan")).toHaveText("Basic")
+
+  // The paid plan unlocks both gated features
+  const blossom = settingToggle(page, "Media storage")
+  const livekit = settingToggle(page, "LiveKit support")
+
+  await blossom.click()
+  await livekit.click()
+
+  await expect(blossom).toBeChecked()
+  await expect(livekit).toBeChecked()
+
+  await page.getByRole("button", {name: "Relay actions"}).click()
+  await menuItem(page, "Change plan").click()
+  await plans.getByRole("button").filter({hasText: "Up to 50 members"}).click()
+  await plans.getByRole("button", {name: "Save", exact: true}).click()
+
+  await expect(page.getByRole("alert")).toContainText("Plan updated.")
+  await expect(setting(page, "Current plan")).toHaveText("Free")
+  await expect(settingToggle(page, "Media storage")).not.toBeChecked()
+  await expect(settingToggle(page, "LiveKit support")).not.toBeChecked()
+})
+
+test("US-101 point a custom domain at a hosted relay", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+    const other = relay("other")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+
+    // Where the space ends up once the domain verifies.
+    other.room("general", {name: "General"})
+    other.join(user.alice, "general")
+  })
+
+  const {url} = scenario.space("space")
+  const page = await as(users.alice, spacePath(url) + "/admin", {
+    hosting: {plans: PLANS, relays: [hostedRelay()]},
+  })
+
+  await page.getByRole("button", {name: "Add domain"}).click()
+
+  const domainForm = dialog(page, "Custom domain")
+
+  await domainForm.getByPlaceholder("relay.example.com").fill("relay.other.test")
+  await domainForm.getByRole("button", {name: "Save", exact: true}).click()
+
+  await expect(page.getByRole("alert")).toContainText("Custom domain saved.")
+  await expect(page.getByText("relay.other.test", {exact: true})).toBeVisible()
+  await expect(page.getByText("Pending", {exact: true})).toBeVisible()
+  await expect(page.getByText("relay.other.test CNAME space.test")).toBeVisible()
+
+  // A bare domain can't take a CNAME, so it's shown as an ALIAS at the same target
+  await page.getByRole("button", {name: "Manage"}).click()
+  await domainForm.getByPlaceholder("relay.example.com").fill("other.test")
+  await domainForm.getByRole("button", {name: "Save", exact: true}).click()
+
+  await expect(page.getByText("other.test", {exact: true})).toBeVisible()
+  await expect(page.getByText("other.test ALIAS space.test")).toBeVisible()
+
+  getHosting(page.context()).setRelay("relay-1", {custom_domain_verified: 1})
+
+  await page.getByRole("button", {name: "Verify DNS record"}).click()
+
+  await expect(page.getByRole("alert")).toContainText("Custom domain verified.")
+  await expect(page.getByText("Verified", {exact: true})).toBeVisible()
+
+  // The space is now reached through the domain its owner controls
+  await expect(page.getByRole("link", {name: "wss://other.test"})).toBeVisible()
+  await expect(page).toHaveURL(/\/spaces\/other\.test\/admin/)
+})
+
+test("US-102 pause a relay and settle the bill", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+  })
+
+  const {url} = scenario.space("space")
+  const paidPeriod = {start: scenario.at(2, MONTH), end: scenario.at(1, MONTH)}
+  const openPeriod = {start: scenario.at(1, MONTH), end: scenario.startedAt}
+
+  const page = await as(users.alice, spacePath(url) + "/admin", {
+    hosting: {
+      plans: PLANS,
+      relays: [hostedRelay({plan_id: "basic"})],
+      // Declared oldest first, which is not the order payment history reads in. null is "not yet".
+      /* eslint-disable no-restricted-syntax */
+      invoices: [
+        {
+          id: "invoice-paid",
+          tenant_pubkey: users.alice.pubkey,
+          amount: 500,
+          period_start: paidPeriod.start,
+          period_end: paidPeriod.end,
+          created_at: paidPeriod.start,
+          paid_at: paidPeriod.end,
+          voided_at: null,
+          method: "nwc",
+        },
+        {
+          id: "invoice-open",
+          tenant_pubkey: users.alice.pubkey,
+          amount: 900,
+          period_start: openPeriod.start,
+          period_end: openPeriod.end,
+          created_at: openPeriod.start,
+          paid_at: null,
+          voided_at: null,
+          method: null,
+        },
+      ],
+      /* eslint-enable no-restricted-syntax */
+    },
+  })
+
+  await expect(page.getByText("Active", {exact: true})).toBeVisible()
+
+  await page.getByRole("button", {name: "Relay actions"}).click()
+  await menuItem(page, "Deactivate").click()
+
+  await dialog(page, "Deactivate relay?").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(page.getByText("Inactive", {exact: true})).toBeVisible()
+
+  await page.getByRole("button", {name: "Relay actions"}).click()
+  await menuItem(page, "Reactivate").click()
+
+  await dialog(page, "Reactivate relay?").getByRole("button", {name: "Confirm"}).click()
+
+  await expect(page.getByText("Active", {exact: true})).toBeVisible()
+
+  await page.goto("/settings/hosting")
+
+  const banner = page.getByText(
+    "You have an unpaid invoice. Pay it now to keep your relays running.",
+  )
+
+  await expect(banner).toBeVisible()
+
+  await page.getByRole("button", {name: "Pay now"}).first().click()
+
+  const payment = dialog(page, "Pay invoice")
+
+  await expect(payment.getByText("$9.00")).toBeVisible()
+
+  getHosting(page.context()).setInvoice("invoice-open", {paid_at: now(), method: "nwc"})
+
+  await payment.getByRole("button", {name: "Check payment"}).click()
+
+  await expect(payment.getByText("Payment confirmed!")).toBeVisible()
+
+  await payment.getByRole("button", {name: "Done"}).click()
+
+  await expect(banner).toHaveCount(0)
+
+  // With the balance settled, the standing prompt is to keep it that way
+  await page.getByRole("button", {name: "Set up autopay"}).click()
+
+  const autopay = dialog(page, "Set Up Payments")
+
+  await autopay
+    .getByPlaceholder("nostr+walletconnect://")
+    .fill(`nostr+walletconnect://${users.alice.pubkey}?relay=${url}&secret=abc`)
+  await autopay.getByRole("button", {name: "Save", exact: true}).click()
+
+  await expect(autopay.getByText("Wallet connected!")).toBeVisible()
+
+  await autopay.getByRole("button", {name: "Done"}).click()
+
+  await expect(page.getByRole("listitem").filter({hasText: "Lightning (NWC)"})).toContainText(
+    "Connected",
+  )
+
+  // Payment history, newest first
+  const history = page.locator(".card").filter({hasText: "Payment History"}).first()
+  const invoices = history.getByRole("listitem")
+
+  await expect(invoices.first()).toContainText("$9.00")
+  await expect(invoices.nth(1)).toContainText("$5.00")
+})
+
+test("US-122 export and import a hosted relay's data", async ({seed, as}) => {
+  const scenario = await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+  })
+
+  const {url} = scenario.space("space")
+  const dump = '{"id":"a","sig":"a"}\n{"id":"b","sig":"b"}\n'
+  const page = await as(users.alice, spacePath(url) + "/admin", {
+    hosting: {plans: PLANS, relays: [hostedRelay({events: dump})]},
+  })
+
+  await page.getByRole("button", {name: "Relay actions"}).click()
+  await menuItem(page, "Import / export data").click()
+
+  const modal = dialog(page, "Relay data")
+  const download = page.waitForEvent("download")
+
+  await modal.getByRole("button", {name: "Download events"}).click()
+
+  expect((await download).suggestedFilename()).toBe("space.jsonl")
+
+  await modal.locator("input[type=file]").setInputFiles({
+    name: "events.jsonl",
+    mimeType: "application/x-ndjson",
+    buffer: Buffer.from('{"id":"c","sig":"c"}\nnot an event\n'),
+  })
+
+  await modal.getByRole("button", {name: "Import events"}).click()
+
+  // The relay keeps what it could verify and says which line it refused
+  await expect(modal.getByText("Imported 1 event, skipped 1.")).toBeVisible()
+  await expect(modal.getByText("line 2: invalid event")).toBeVisible()
+})
+
+// delegated.test grants every member one management method, so `supportedmethods` differs by user.
+const openDelegatedMenu = (page: Page) =>
+  page.getByRole("button", {name: /delegated\.test/}).click()
+
+test("US-127 a member holding one method gets only that control", async ({seed, as}) => {
+  const scenario = await seed(({relay, user, at}) => {
+    const space = relay("delegated")
+
+    space.room("general", {name: "General"})
+    space.join(user.admin, "general")
+    space.join(user.alice, "general")
+    space.join(user.bob, "general")
+    space.profile(user.alice, {name: "Alice Anchor"})
+    space.profile(user.bob, {name: "Bob Barnacle"})
+    space.message(user.bob, "general", "aye captain", at(2, HOUR))
+  })
+
+  const {url} = scenario.space("delegated")
+
+  // alice holds allowpubkey, which covers the join requests in the queue and nothing else
+  const alice = await as(users.alice, roomPath(url, "general"))
+
+  await expect(alice.getByText("aye captain")).toBeVisible()
+
+  await openMessageMenu(alice, "aye captain")
+
+  await expect(menuItem(alice, "Report Content")).toBeVisible()
+  await expect(alice.getByRole("button", {name: "Delete Message", exact: true})).toHaveCount(0)
+
+  await alice.goto(spacePath(url) + "/directory")
+
+  await expect(alice.getByRole("button", {name: "Invite people"})).toBeVisible()
+  await expect(alice.getByRole("button", {name: "More options"})).toHaveCount(0)
+
+  await openDelegatedMenu(alice)
+
+  await expect(alice.getByRole("button", {name: /^Action Items/})).toBeVisible()
+  await expect(alice.getByRole("button", {name: "Edit Space", exact: true})).toHaveCount(0)
+
+  // admin owns the relay, so every method comes back and every control is there
+  const admin = await as(users.admin, roomPath(url, "general"))
+
+  await openMessageMenu(admin, "aye captain")
+
+  await expect(menuItem(admin, "Delete Message")).toBeVisible()
+
+  await admin.goto(spacePath(url) + "/directory")
+
+  await expect(admin.getByRole("button", {name: "More options"})).toBeVisible()
+
+  await openDelegatedMenu(admin)
+
+  await expect(menuItem(admin, "Edit Space")).toBeVisible()
+})

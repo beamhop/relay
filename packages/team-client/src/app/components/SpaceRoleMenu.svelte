@@ -1,0 +1,76 @@
+<script lang="ts">
+  import type {RelayRoleReader} from "@welshman/domain"
+  import AddCircle from "@assets/icons/add-circle.svg?dataurl"
+  import Pen from "@assets/icons/pen.svg?dataurl"
+  import TrashBin from "@assets/icons/trash-bin-2.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import Confirm from "@lib/components/Confirm.svelte"
+  import RoleEdit from "@app/components/RoleEdit.svelte"
+  import RoleAddMembers from "@app/components/RoleAddMembers.svelte"
+  import {relayManagement} from "@app/core/plugins"
+  import {deriveSpacePermissions} from "@app/core/management"
+  import {pushModal} from "@app/ui/modal"
+  import {pushToast} from "@app/ui/toast"
+
+  type Props = {
+    url: string
+    role: RelayRoleReader
+    onClick: () => void
+  }
+
+  const {url, role, onClick}: Props = $props()
+
+  const permissions = deriveSpacePermissions(url)
+
+  const back = () => history.back()
+
+  const editRole = () => pushModal(RoleEdit, {url, role})
+
+  const addMembers = () => pushModal(RoleAddMembers, {url, role})
+
+  const deleteRole = async () => {
+    const {error} = await $relayManagement.forUrl(url).deleteRole(role.identifier() ?? "")
+
+    if (error) {
+      pushToast({theme: "error", message: error})
+    } else {
+      pushToast({message: "Role deleted!"})
+      back()
+    }
+  }
+
+  const confirmDelete = () =>
+    pushModal(Confirm, {
+      title: "Delete Role",
+      message: `Delete the "${role.label()}" role? Members will keep their space membership.`,
+      confirm: deleteRole,
+    })
+</script>
+
+<ul class="menu whitespace-nowrap rounded-2xl bg-surface p-2" onclickcapture={onClick}>
+  {#if $permissions.assignRoles}
+    <li>
+      <Button onclick={addMembers}>
+        <Icon icon={AddCircle} />
+        Add members
+      </Button>
+    </li>
+  {/if}
+  {#if $permissions.editRoles}
+    <li>
+      <Button onclick={editRole}>
+        <Icon icon={Pen} />
+        Edit role
+      </Button>
+    </li>
+  {/if}
+  {#if $permissions.deleteRoles}
+    <li>
+      <Button class="text-error" onclick={confirmDelete}>
+        <Icon icon={TrashBin} />
+        Delete role
+      </Button>
+    </li>
+  {/if}
+</ul>

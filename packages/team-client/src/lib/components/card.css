@@ -1,0 +1,96 @@
+@layer components {
+  .card {
+    @apply text-content bg-surface border-line rounded-3xl border-solid p-6;
+    border-width: var(--border-thick);
+    background-clip: padding-box;
+    box-shadow: var(--shadow-lg);
+    transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease,
+      border-color 0.2s ease;
+
+    &.card-sm {
+      @apply p-4;
+      box-shadow: var(--shadow);
+    }
+
+    &.card-interactive {
+      @apply cursor-pointer;
+
+      &:hover {
+        @apply border-primary;
+      }
+    }
+
+    &.card-flat {
+      box-shadow: none;
+    }
+
+    /* content reaches the card's edges; padding moves to its inner sections */
+    &.card-media {
+      @apply overflow-hidden p-0;
+    }
+
+    &.card-primary {
+      --accent: var(--primary);
+    }
+
+    &.card-secondary {
+      --accent: var(--secondary);
+    }
+
+    &.card-primary,
+    &.card-secondary {
+      background-color: color-mix(in srgb, var(--accent) 10%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+    }
+  }
+
+  /* nested cards & cards in dialogs lose their shadow */
+  .card .card,
+  .dialog .card {
+    box-shadow: none;
+  }
+
+  [data-fl-theme="clay"] .card {
+    box-shadow: var(--shadow-lg), var(--shadow-inset);
+  }
+
+  [data-fl-theme="clay"] .card-sm {
+    box-shadow: var(--shadow), var(--shadow-inset);
+  }
+
+  [data-fl-theme="clay"] .card-primary,
+  [data-fl-theme="clay"] .card-secondary {
+    box-shadow:
+      8px 8px 0 color-mix(in srgb, var(--accent) 28%, transparent),
+      var(--shadow-inset);
+  }
+
+  [data-fl-theme="clay"] .card-sm.card-primary,
+  [data-fl-theme="clay"] .card-sm.card-secondary {
+    box-shadow:
+      6px 6px 0 color-mix(in srgb, var(--accent) 28%, transparent),
+      var(--shadow-inset);
+  }
+
+  /* cards nested in another card (or a dialog) drop the raised clay treatment and
+     read flat — no offset shadow / inset, hairline border. */
+  [data-fl-theme="clay"] .card .card,
+  [data-fl-theme="clay"] .dialog .card {
+    box-shadow: none;
+    border-width: 1px;
+  }
+
+  [data-fl-theme="clay"] .card-interactive:hover {
+    box-shadow:
+      10px 10px 0 rgba(var(--shadow-color), 0.18),
+      var(--shadow-inset);
+  }
+
+  /* excludes presses on nested buttons/links, which :active otherwise cascades to too */
+  [data-fl-theme="clay"] .card-interactive:active:not(:has(button:active, a:active)) {
+    transform: translateY(2px);
+    box-shadow: 2px 2px 0 rgba(var(--shadow-color), 0.3);
+  }
+}

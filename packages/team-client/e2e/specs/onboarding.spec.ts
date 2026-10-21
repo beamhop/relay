@@ -1,0 +1,298 @@
+import {readFile} from "node:fs/promises"
+import type {Page} from "@playwright/test"
+import {npubEncode, nsecEncode} from "nostr-tools/nip19"
+import {encrypt} from "nostr-tools/nip49"
+import {hexToBytes} from "@welshman/lib"
+import {expect, roomPath, test, users} from "../harness"
+import type {TestUser} from "../harness"
+
+// The sign-in gate AppContainer renders in place of the app for anyone without a session.
+const gate = (page: Page) => page.getByRole("heading", {name: "Welcome to Flotilla!"})
+
+const nsecFor = (user: TestUser) => nsecEncode(hexToBytes(user.secret))
+
+// The only way to watch a session come into existence: one `as()` injects is re-applied on every navigation.
+const logInWithKey = async (page: Page, key: string) => {
+  await page.getByRole("button", {name: "Log in"}).click()
+  await page.getByRole("button", {name: "Log in with Key"}).click()
+  await page.getByPlaceholder("nsec1...").fill(key)
+  // The landing page's own "Log in" is still behind the dialog, so submit is named by the form.
+  await page.locator("form").getByRole("button", {name: "Log in", exact: true}).click()
+}
+
+// The nav's settings link carries its label as a tooltip, so it is addressed by where it goes.
+const openSettings = (page: Page) =>
+  page.locator('.primary-nav a[href="/settings/profile"]').click()
+
+// A nip01 login renders a masked Private Key too, so the npub is the readonly non-password one.
+const npubField = (page: Page) => page.locator('input[readonly]:not([type="password"])')
+
+test("US-001 sign-in gate for logged-out visitors", async ({seed, visit}) => {
+  const scenario = await seed(({relay}) => {
+    relay("space").room("general", {name: "General"})
+  })
+
+  const {url} = scenario.space("space")
+
+  // A room url rather than the root: the gate stands in front of the whole app.
+  const page = await visit(roomPath(url, "general"))
+
+  await expect(gate(page)).toBeVisible()
+
+  await page.keyboard.press("Escape")
+
+  await expect(gate(page)).toBeVisible()
+
+  await page.getByRole("button", {name: "Log in"}).click()
+
+  await expect(page.getByRole("heading", {name: "Log in with Nostr"})).toBeVisible()
+
+  await page.goBack()
+
+  await expect(gate(page)).toBeVisible()
+
+  await page.getByRole("button", {name: "Create an account"}).click()
+
+  await expect(page.getByRole("heading", {name: "Create an Account"})).toBeVisible()
+})
+
+test("US-002 sign up by generating a new key", async ({seed, visit}) => {
+  await seed(({relay}) => {
+    relay("space").room("general", {name: "General"})
+  })
+
+  const page = await visit()
+
+  await page.getByRole("button", {name: "Create an account"}).click()
+  await page.getByRole("button", {name: "Generate a key"}).click()
+
+  await page.getByRole("textbox", {name: "Nickname"}).fill("Nova Tester")
+  await page.getByRole("button", {name: "Create Account"}).click()
+
+  await expect(page.getByRole("heading", {name: "Backup your Key"})).toHaveCount(0)
+  await expect(page.getByRole("heading", {name: "You're all set!"})).toBeVisible()
+
+  await page.getByRole("button", {name: "Go to Dashboard"}).click()
+
+  await expect(page).toHaveURL(/\/home$/)
+
+  await openSettings(page)
+
+  await expect(page.getByText("Nova Tester")).toBeVisible()
+
+  await page.goto("/home")
+
+  await page
+    .getByRole("group", {name: "Back Up Your Key"})
+    .getByRole("button", {name: "Fix"})
+    .click()
+
+  const doneButton = page.getByRole("button", {name: "Done"})
+
+  await page.getByRole("button", {name: "I want to download an encrypted version"}).click()
+  await page.locator('input[type="password"]').fill("correct horse battery staple")
+
+  const download = page.waitForEvent("download")
+
+  await page.getByRole("button", {name: "Download my key"}).click()
+
+  const contents = await readFile(await (await download).path(), "utf8")
+
+  expect(contents).toContain("ncryptsec1")
+  expect(contents).not.toContain("nsec1")
+
+  await expect(doneButton).toBeEnabled()
+  await doneButton.click()
+
+  await expect(page.getByText("Back Up Your Key")).toHaveCount(0)
+  await page.reload()
+  await expect(page.locator(".primary-nav")).toBeVisible()
+  await expect(page.getByText("Back Up Your Key")).toHaveCount(0)
+})
+
+test("US-003 log in with an existing private key", async ({seed, visit}) => {
+  await seed(({relay}) => {
+    relay("space").room("general", {name: "General"})
+  })
+
+  const aliceNpub = npubEncode(users.alice.pubkey)
+  const password = "a very good password"
+  const ncryptsec = encrypt(hexToBytes(users.alice.secret), password)
+
+  const withNsec = await visit()
+
+  await logInWithKey(withNsec, nsecFor(users.alice))
+  await openSettings(withNsec)
+  await expect(npubField(withNsec)).toHaveValue(aliceNpub)
+
+  const withNcryptsec = await visit()
+
+  await withNcryptsec.getByRole("button", {name: "Log in"}).click()
+  await withNcryptsec.getByRole("button", {name: "Log in with Key"}).click()
+
+  const submit = withNcryptsec.locator("form").getByRole("button", {name: "Log in", exact: true})
+
+  await withNcryptsec.getByPlaceholder("nsec1...").fill(ncryptsec)
+  await withNcryptsec.getByPlaceholder("Your password").fill("not the password")
+  await submit.click()
+
+  await expect(withNcryptsec.getByRole("alert")).toContainText(
+    "Failed to decrypt key. Please check your password.",
+  )
+
+  await withNcryptsec.getByPlaceholder("Your password").fill(password)
+  await submit.click()
+
+  await openSettings(withNcryptsec)
+  await expect(npubField(withNcryptsec)).toHaveValue(aliceNpub)
+})
+
+test("US-004 log in with a browser extension", async ({seed, visit}) => {
+  await seed(({relay}) => {
+    relay("space").room("general", {name: "General"})
+  })
+
+  const page = await visit("/", {nip07: users.alice})
+
+  await page.getByRole("button", {name: "Log in"}).click()
+  await page.getByRole("button", {name: "Log in with Extension"}).click()
+
+  await expect(page.locator(".primary-nav")).toBeVisible()
+
+  await openSettings(page)
+
+  await expect(page.getByRole("textbox")).toHaveValue(npubEncode(users.alice.pubkey))
+
+  const withoutExtension = await visit()
+
+  await withoutExtension.getByRole("button", {name: "Log in"}).click()
+
+  await expect(
+    withoutExtension.getByRole("button", {name: "Log in with Remote Signer"}),
+  ).toBeVisible()
+  await expect(withoutExtension.getByRole("button", {name: "Log in with Extension"})).toHaveCount(0)
+})
+
+test("US-005 log in with a remote signer", async ({seed, visit}) => {
+  await seed(({relay}) => {
+    relay("space").room("general", {name: "General"})
+  })
+
+  const page = await visit()
+
+  await page.getByRole("button", {name: "Log in"}).click()
+  await page.getByRole("button", {name: "Log in with Remote Signer"}).click()
+
+  // The relay named here belongs to no scenario, so a connection attempt is recorded as a leak.
+  await page
+    .getByPlaceholder("bunker://")
+    .fill("bunker://not-a-signer-pubkey?relay=wss://nowhere.test/")
+  await page.getByRole("button", {name: "Next"}).click()
+
+  await expect(page.getByRole("alert")).toContainText("invalid bunker link")
+
+  await page.getByRole("button", {name: "Log in with a QR code instead"}).click()
+
+  await expect(page.getByText("Scan with your signer to log in, or click to copy.")).toBeVisible()
+})
+
+test("US-006 stay logged in, and log out deliberately", async ({seed, visit}) => {
+  await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+  })
+
+  const page = await visit()
+
+  await logInWithKey(page, nsecFor(users.alice))
+  await openSettings(page)
+
+  await expect(npubField(page)).toHaveValue(npubEncode(users.alice.pubkey))
+
+  await page.reload()
+
+  await expect(npubField(page)).toHaveValue(npubEncode(users.alice.pubkey))
+
+  await page.locator(".secondary-nav").getByRole("button", {name: "Log Out"}).click()
+  await page.locator("form").getByRole("button", {name: "Log Out"}).click()
+
+  await expect(gate(page)).toBeVisible()
+})
+
+test("US-007 inspect your keys and signer status", async ({seed, as}) => {
+  await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+  })
+
+  const npub = npubEncode(users.alice.pubkey)
+  const page = await as(users.alice, "/settings/profile", {
+    context: {permissions: ["clipboard-read", "clipboard-write"]},
+  })
+
+  const readClipboard = () => page.evaluate(() => navigator.clipboard.readText())
+
+  const npubInput = npubField(page)
+
+  await expect(npubInput).toHaveValue(npub)
+
+  await page.locator("label.input").filter({has: npubInput}).getByRole("button").click()
+
+  await expect.poll(readClipboard).toBe(npub)
+
+  const secretInput = page.locator('input[type="password"]')
+
+  await expect(secretInput).toHaveValue(users.alice.secret)
+
+  await page.locator("label.input").filter({has: secretInput}).getByRole("button").click()
+
+  await expect.poll(readClipboard).toBe(nsecFor(users.alice))
+
+  await expect(page.getByText("Logged in with private key")).toBeVisible()
+})
+
+test("US-008 delete your nostr account", async ({seed, as, visit}) => {
+  await seed(({relay, user}) => {
+    const space = relay("space")
+
+    space.room("general", {name: "General"})
+    space.join(user.alice, "general")
+    space.join(user.bob, "general")
+    space.profile(user.alice, {name: "Alice Anderson"})
+  })
+
+  const alice = await visit()
+
+  await logInWithKey(alice, nsecFor(users.alice))
+  await openSettings(alice)
+
+  await alice.locator(".card").filter({hasText: "Advanced"}).getByRole("button").click()
+  await alice.getByRole("button", {name: "Delete your profile"}).click()
+
+  await expect(alice.getByRole("heading", {name: "Delete your account"})).toBeVisible()
+
+  const confirm = alice.getByRole("button", {name: "Confirm"})
+  const phrase = alice.locator('input[type="text"]')
+
+  await expect(confirm).toBeDisabled()
+
+  await phrase.fill("permanently delete my nostr account")
+
+  await expect(confirm).toBeEnabled()
+
+  await confirm.click()
+
+  await expect(gate(alice)).toBeVisible()
+
+  const bob = await as(users.bob, `/people/${npubEncode(users.alice.pubkey)}`)
+
+  // zooid honours the kind-62 right-to-vanish, so the profile is gone rather than renamed.
+  const aliceNpub = npubEncode(users.alice.pubkey)
+  const fallback = aliceNpub.slice(0, 8) + "…" + aliceNpub.slice(-5)
+
+  await expect(bob.getByRole("heading", {name: fallback})).toBeVisible()
+})

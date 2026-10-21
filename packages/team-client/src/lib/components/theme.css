@@ -1,0 +1,40 @@
+/* ============================================================================
+   Design-system entry point (imported once, by src/app/ui/app.css).
+
+     tailwindcss  — framework + our @theme token registration (via base.css)
+     base.css     — theme-independent structure (base, utilities, integrations)
+     <theme>.css  — one file per theme, its token values under its own
+                    [data-fl-theme] value, light and dark
+
+   Every theme is selected the same way, by its own data-fl-theme value — there
+   is no default, so VITE_THEME (→ FL_THEME, stamped on <body> + the app root)
+   must be set. Themes are mutually exclusive, so import order doesn't matter.
+   Add a theme = a token file, an @import, and its name in app/ui/theme.ts's
+   flThemes, which is what offers it in settings. ============================== */
+
+@import "tailwindcss";
+@import "./base.css";
+@import "./clay.css";
+@import "./flat.css";
+@import "./navy.css";
+@import "./nature.css";
+
+/* per-component styles (one file per component class family) */
+@import "./badge.css";
+@import "./button.css";
+@import "./card.css";
+@import "./card-button.css";
+@import "./content-markdown.css";
+@import "./content-search.css";
+@import "./controls.css";
+@import "./divider.css";
+@import "./emoji-picker.css";
+@import "./input.css";
+@import "./join.css";
+@import "./link.css";
+@import "./menu.css";
+@import "./page.css";
+@import "./primary-nav.css";
+@import "./spinner.css";
+@import "./secondary-nav.css";
+@import "./tooltip.css";

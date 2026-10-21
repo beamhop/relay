@@ -1,0 +1,107 @@
+/* ============================================================================
+   clay theme — token values
+   ----------------------------------------------------------------------------
+   Applies under [data-fl-theme="clay"] (stamped on <body> + the app root from
+   VITE_THEME). Every theme is selected the same way via its own data-fl-theme
+   value — there is no implicit default — so VITE_THEME must be set. These are
+   plain CSS variables consumed by:
+     - the component classes in base.css (var(--surface), var(--shadow-lg), …)
+     - the Tailwind utilities registered in base.css's @theme block
+       (bg-surface, text-content-muted, text-primary, rounded-2xl, shadow-lg, …)
+   Reskinning = override the same names in another theme file; no markup change.
+
+   The radius scale (--radius-xl/2xl/3xl) and shadow scale (--shadow/-sm/-lg)
+   intentionally reuse Tailwind v4's own variable names so rounded-* / shadow-*
+   utilities are themed too. clay's radii match Tailwind's defaults; flat.css
+   shrinks them.
+   ============================================================================ */
+
+[data-fl-theme="clay"] {
+  --border-thin: 2px;
+  --border-thick: 3px;
+
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+
+  &[data-theme="light"] {
+    --primary: #7161ff;
+    --primary-soft: #5a48f0;
+    --primary-bold: #8e80ff;
+    --primary-content: #ffffff;
+
+    --secondary: #eb5e28;
+    --secondary-soft: #f47845;
+    --secondary-bold: #cf4f1d;
+    --secondary-content: #ffffff;
+
+    --success: #06d6a0;
+    --success-content: #ffffff;
+    --warning: #fd8d0b;
+    --warning-content: #ffffff;
+    --error: #ef476f;
+    --error-content: #ffffff;
+
+    --backdrop: #f7f5fd;
+    --surface: #ffffff;
+    --surface-more: #e0dbf1;
+    --surface-less: #f3effc;
+
+    --content: #17122e;
+    --content-muted: #554d72;
+    --content-subtle: #8d86a6;
+
+    --line: #d3c7ff;
+    --line-more: #b3a4ff;
+    --line-less: #e5dcff;
+
+    /* clay shadow (offset, tinted with the primary) — overrides Tailwind's scale */
+    --shadow-color: 113, 97, 255;
+    --shadow-sm: 4px 4px 0 rgba(var(--shadow-color), 0.1);
+    --shadow: 6px 6px 0 rgba(var(--shadow-color), 0.12);
+    --shadow-lg: 8px 8px 0 rgba(var(--shadow-color), 0.15);
+    --shadow-inset: inset 0 -4px 0 rgba(0, 0, 0, 0.05);
+    --shadow-inset-strong: inset 0 -3px 0 rgba(0, 0, 0, 0.1);
+  }
+
+  /* `.primary-nav` opts the primary nav into this dark palette unconditionally */
+  &[data-theme="dark"],
+  & .primary-nav {
+    --primary: #8e80ff;
+    --primary-soft: #a394ff;
+    --primary-bold: #7161ff;
+    --primary-content: #ffffff;
+
+    --secondary: #f47845;
+    --secondary-soft: #f78d61;
+    --secondary-bold: #eb5e28;
+    --secondary-content: #ffffff;
+
+    --success: #06d6a0;
+    --success-content: #ffffff;
+    --warning: #fd8d0b;
+    --warning-content: #ffffff;
+    --error: #ef476f;
+    --error-content: #ffffff;
+
+    --backdrop: #121019;
+    --surface: #232032;
+    --surface-more: #100e17;
+    --surface-less: #1b1827;
+
+    --content: #d7d2ea;
+    --content-muted: #b4aed0;
+    --content-subtle: #918aac;
+
+    --line: #353050;
+    --line-more: #4a4470;
+    --line-less: #2a2640;
+
+    --shadow-color: 0, 0, 0;
+    --shadow-sm: 4px 4px 0 rgba(var(--shadow-color), 0.3);
+    --shadow: 6px 6px 0 rgba(var(--shadow-color), 0.35);
+    --shadow-lg: 8px 8px 0 rgba(var(--shadow-color), 0.4);
+    --shadow-inset: inset 0 -4px 0 rgba(0, 0, 0, 0.25);
+    --shadow-inset-strong: inset 0 -3px 0 rgba(0, 0, 0, 0.3);
+  }
+}

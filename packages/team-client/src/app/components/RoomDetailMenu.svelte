@@ -1,0 +1,126 @@
+<script lang="ts">
+  import type {Maybe} from "@welshman/lib"
+  import {MembershipStatus} from "@welshman/app"
+  import Pen from "@assets/icons/pen.svg?dataurl"
+  import TrashBin2 from "@assets/icons/trash-bin-2.svg?dataurl"
+  import Login3 from "@assets/icons/login-3.svg?dataurl"
+  import ClockCircle from "@assets/icons/clock-circle.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import Spinner from "@lib/components/Spinner.svelte"
+  import Confirm from "@lib/components/Confirm.svelte"
+  import RoomEdit from "@app/components/RoomEdit.svelte"
+  import {app} from "@app/core/app"
+  import {roomLists, rooms} from "@app/core/plugins"
+  import {joinRoom, leaveRoom} from "@app/features/access"
+  import {
+    deriveUserIsRoomAdmin,
+    deriveUserRoomMembershipStatus,
+    publishRoomList,
+  } from "@app/features/rooms"
+  import {forgetSpacePage, makeSpacePath} from "@app/ui/routes"
+  import {navigate, pushModal} from "@app/ui/modal"
+  import {pushToast} from "@app/ui/toast"
+
+  type Props = {
+    url: string
+    h: string
+    onClick: () => void
+  }
+
+  const {url, h, onClick}: Props = $props()
+
+  const userIsAdmin = deriveUserIsRoomAdmin(url, h)
+  const membershipStatus = deriveUserRoomMembershipStatus(url, h)
+
+  const startEdit = () => pushModal(RoomEdit, {url, h})
+
+  const handleLoading = async (action: () => Promise<Maybe<string>>, successMessage: string) => {
+    loading = true
+
+    try {
+      const message = await action()
+
+      pushToast(message ? {theme: "error", message} : {message: successMessage})
+    } catch (e) {
+      console.error(e)
+      pushToast({theme: "error", message: "Failed to update your room membership."})
+    } finally {
+      loading = false
+    }
+  }
+
+  const join = () => handleLoading(() => joinRoom(url, h), "You have joined the room.")
+
+  const leave = () => handleLoading(() => leaveRoom(url, h), "You have left the room.")
+
+  const startDelete = () =>
+    pushModal(Confirm, {
+      title: "Are you sure you want to delete this room?",
+      message:
+        "This room will no longer be accessible to space members, and all messages posted to it will be deleted.",
+      confirm: async () => {
+        const command = await $rooms.deleteRoom(url, {h})
+        const publication = command.publish()
+        const message = await publication.getError()
+
+        if (message) {
+          $app.repository.removeEvent(publication.event.id)
+          pushToast({theme: "error", message})
+        } else {
+          await $roomLists.removeRoom(h, url).then(publishRoomList)
+
+          forgetSpacePage(url)
+          navigate(makeSpacePath(url))
+        }
+      },
+    })
+
+  let loading = $state(false)
+</script>
+
+<ul class="menu whitespace-nowrap rounded-2xl bg-surface p-2" onclickcapture={onClick}>
+  {#if $userIsAdmin}
+    <li>
+      <Button onclick={startEdit}>
+        <Icon icon={Pen} />
+        Edit Room
+      </Button>
+    </li>
+    <li>
+      <Button class="text-error" onclick={startDelete}>
+        <Icon icon={TrashBin2} />
+        Delete Room
+      </Button>
+    </li>
+  {:else if $membershipStatus === MembershipStatus.Initial}
+    <li>
+      <Button disabled={loading} onclick={join}>
+        {#if loading}
+          <Spinner size="sm" />
+        {:else}
+          <Icon icon={Login3} />
+        {/if}
+        Join member list
+      </Button>
+    </li>
+  {:else if $membershipStatus === MembershipStatus.Pending}
+    <li>
+      <Button>
+        <Icon icon={ClockCircle} />
+        Membership pending
+      </Button>
+    </li>
+  {:else}
+    <li>
+      <Button disabled={loading} onclick={leave}>
+        {#if loading}
+          <Spinner size="sm" />
+        {:else}
+          <Icon icon={Login3} />
+        {/if}
+        Leave member list
+      </Button>
+    </li>
+  {/if}
+</ul>

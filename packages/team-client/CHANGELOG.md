@@ -1,0 +1,624 @@
+# Changelog
+
+# 1.13.0
+
+* Add bookmarks, with folders and a bookmark manager
+* Redesign the chat and room composers
+* Support paid spaces, with checkout and relay notifications
+* Mute people from their profile menu
+* Choose what the home network feed and notifications tab include, and merge notifications about the same note
+* Show replies in the network feed under the note they answer
+* Rework the home inbox to include space activity, and add a relay settings button to the network section
+* Spotlight screen shares in calls
+* Reorder lists by dragging on touch screens
+* Keep a space's content across a reload, and keep working when local storage fails
+* Show room references as links, every name in a reaction tooltip, and open a DM's message menu by clicking it
+* Cap comment indentation on narrow screens
+
+# 1.12.0
+
+* Share your screen in calls on all platforms
+* Redesign the content library
+* Add a location to profiles and a member map to the directory
+* Add a notifications tab to the home network section
+* Add a create post button to the home page and profiles
+* Remind people about calendar events they're going to
+* Record voice notes in a dialog, and go straight to the call in voice rooms
+* Add a nature theme, more emoji and kaomoji
+* Show rich link previews for links to spaces, rooms and profiles
+* Keep a message in the composer when it fails to send, instead of dropping it
+* Only raise notifications for new messages
+* Keep private mutes when saving content settings, and handle muted words from other clients
+* Keep edited listings and calendar events in their room
+* Fix stalled uploads, quotes that hadn't loaded, misplaced comments and the emoji picker overflowing
+
+# 1.11.2
+
+* Offer a way out when startup gets stuck waiting on a remote signer
+* Sign out of a remote signer session whose app data was cleared, instead of stalling at startup
+* Show a room's messages before its space finishes syncing
+* Fix messages missing from feeds when some relays answer more slowly than others
+* Add an F-Droid build, signed with the same key as the other APKs
+* Keep GitHub releases up to date for Obtainium
+
+# 1.11.1
+
+* Open notes in flotilla
+* Split the DM list into conversations and requests
+* Redesign the goal list and detail pages
+* List a space's admins and edit a member's permissions
+* Let any member curate the space library, and add an option to let members invite
+* Add native app shortcuts for common features
+* Review what a health check will do before applying it
+* Move the key backup reminder out of onboarding
+* Simplify hosting rows on the home page
+* Ask whether to transcribe a recording or send it as a voice note
+* Refine thread detail view
+* Scroll the space sidebar instead of using an overflow menu
+* Re-enter a space on the page it was left on
+* Improve permalinks and message sharing
+* Start new users out with some dashboard activity
+* Improve DM message style
+* Fix long words and links overflowing chat bubbles
+* Fix encrypted audio playback and read out loud
+* Fix unread indicators, modal navigation and several scrolling issues
+* Speed up feeds by not waiting on slow relays
+* Retry auth more proactively to prevent hanging connections
+* Add desktop build pipeline
+* Add Obtainium and F-Droid publishing
+
+# 1.11.0
+
+* Replace the home page with a dashboard of unread conversations, space activity and a network feed
+* Redesign the calendar with month, week and agenda views, and add RSVPs
+* Redesign classifieds as a browsable marketplace
+* Rework threads as one continuous list with unread indicators on every board
+* Add slash commands
+* Add read out loud and voice dictation
+* Add a desktop app with Linux, Windows and macOS packaging
+* Add relay data import and export to the hosting panel
+* Add a mute setting for rooms
+* Show NIP-38 statuses and a pinned note on profiles
+* Rework search dialogs
+* Improve link previews, falling back to an inline link when one fails
+* Persist direct messages so history survives relay retention
+* Add an image by upload or url from one dialog, and play audio attachments inline
+* Let space icons be dragged to reorder in the sidebar
+* Open the space menu in a drawer instead of navigating away from the room
+* Fix push notification delivery, taps and badge counts
+* Update welshman library to 0.10.9
+* Performance improvements to feeds, room chat and reactions
+* Add an end-to-end test suite covering the user story catalog
+
+# 1.10.0
+
+* There is no 1.10 version 👻
+
+# 1.9.1
+
+* Re-work how claims work under the hood
+* Fix storage and synchronization bugs
+* Update welshman library to 0.9.0
+* And long-form articles
+* Fix quote loading, rendering, and comments
+* Add "create thread" from chat message
+* Fix voice chat bugs
+* Fix notification bugs
+* Improve video tiling and chrome
+* Add ability to send logs to developer
+* Add theme selector
+* Add native sharing registration
+
+# 1.9.0
+
+* Fix nav safe are inset, qr code reactivity
+* Performance optimizations for chat rooms
+* Add hosting platform
+* Add room invite links
+* Improve audio/video calls
+* Bugfixes and UI refinements
+* Fix push notification icon
+* Swap datepicker implementations
+* Fix popover clipping
+* Add member directory page
+* Add pinboards and content library
+* Improve white-labeled support
+* Add full profile page at /people/[npub]
+* Add theming support, improve app design
+
+# 1.8.2
+
+* Fix thread board styling
+* Fix space joining errors
+
+# 1.8.1
+
+* Add space dashboard and directory
+* Add space roles
+* Fix UI bugs
+* Redesign threads as a linear phpBB-style forum view
+* Unwrap messages that are only quotes
+* Use direct zapping for the donate page, link to flotilla space for support
+* Speed up feed loading
+* Fix bunker login
+* Add welshman skill
+* Replace zap slider with common amount pills
+* Make join rejections due to an empty claim more forgiving
+* Show voice room participants before joining
+* Fix direct links to spaces
+* Show per-relay publish status on outgoing messages
+* Fix A/V call bugs
+* Sync checked read state for cross-device badges
+* Fix deleted rooms persisting in navigation
+* Turn on notification defaults and prompt on first DM visit
+
+# 1.8.0
+
+* Fix relay badge overflow
+* Suppress programmatic scroll when user is scrolling
+* Fix vertical alignment of emoji and overflow buttons in shared event action row
+* Use type=email for signup/login email inputs, validate password
+* Improve toggle switch placement on settings screens
+* Fix relay auth privacy toggle
+* Improve field layout
+* Add progress bar to signup flow
+* Bundle emojis properly
+* Rework hosting page
+* Fix padding on pages on small screens
+* Add richer link preview support
+* Fix pasting into event summary
+* Publish fewer join/claim requests
+* Fix new messages not rendering in safari
+* Avoid capturing stale cleanup function in chat
+* Hide keyboard on app resume
+* Add email rendering support
+* Fix bunker login
+* Fix undefined chat draft key
+* Allow sharing to chat without a message
+* Make sure to show date on calendar events when embedded
+* Improve space search
+
+# 1.7.4
+
+* Fix safe area inset for FAB
+
+# 1.7.3
+
+* Add native share support for space invites
+* Stop sending duplicate requests per room
+* Add more robust thumbnail url generation
+* Make space reordering discoverable with smoother drag animation
+* Improve relay member list
+* Add room mentions and clickable room/relay refs
+* Support native clipboard image paste on mobile
+* publish kind 9 quote after room content creation for cross-client interoperability
+* Improve feed pagination logic and performance
+* Support Aegis URL scheme for NIP-46 login
+* Various UI and bug fixes
+* Raise message size limit in chat
+* Fix realtime updates for room members and admins
+* Add video to calls
+* Remove follow graph building
+* Add start chat FAB
+* Add drafts
+* Redesign toast notifications
+* Remove room/space leave indications
+* Hide report badge for non-admin users
+* Add polls
+* Add search to recent activity page
+* Fix notification badge on mobile nav
+* Change audio devices in call
+
+# 1.7.2
+
+* Fix race condition in nip 46
+* Remove duplicate spaces button
+* Combine discover and space list pages
+* Fix some chat related bugs
+* Fix bug with joining spaces
+
+# 1.7.1
+
+* Fix pomade registration fallback in case of offline signer
+
+# 1.7.0
+
+* Enable email/password login
+* Add up/edit to direct messages
+* Fix a number of UI bugs
+* Improve navigation on mobile
+* Improve performance and syncing reliability
+* Add proof of work to DMs
+* Detect blossom support using supported_nips
+* Improve notification badges
+* Add voice rooms (@mplorentz)
+* Re-design relay onboarding and settings
+* Add android fallback for push notifications
+* Fix file uploads on android
+
+# 1.6.5
+
+* Attempt to fix permission grant for notifications
+* Make sync logic more robust
+* Add unban/unallow support
+* Improve support for downloading/opening protected images
+* Add manual send/receive to wallet
+* Show wallet status when wallet is unreachable
+* Update nostr signer capacitor plugin
+* Fix some safe area insets
+* Update NIP 55 signer plugin (fixes Primal login)
+* Refine space join dialogs and discover page
+* Reopen the last DM that was open when navigating back to chat
+* Get rid of ChatEnable interstitial
+* Enable auth for relays we're publishing to
+* Drag and drop space icons
+* Add better muting support
+* Add back button to settings menu
+* Add page titles
+* Improve scroll to event behavior
+* Add in-memory search to rooms
+* Fix editing messages with html tags
+* Fix DM media detection
+* Clean up reporting dialogs
+* Improve room detail
+
+# 1.6.4
+
+* Clean up modal design
+* Fix overflowing popovers
+* Use space urls for relay hints
+* Re-work notification badges
+* Add push notification support via NIP 9a
+* Optimistically load messaging relays to avoid unnecessary warning
+* Recover from indexeddb not being available
+* Fix safe area inset support
+* Show space URL in top bar on mobile
+* Fix calendar detail page
+* Improve relay synchronization, especially for pyramid and relay29
+* Improve invite code error handling
+* Add wallet receive flow
+* Fix safari image uploads
+* Re-work recent activity page
+* Add classified listing content type
+* Use address for page param for replaceable events
+* Refine discover page to avoid slowness
+* Upgrade som dependencies
+* Tag event author when tagging parent event
+* Disable macos build
+* Add room muting
+
+# 1.6.3
+
+* Fix scroll down button z index
+* Hide tooltips on mobile
+* Sort comments ascending
+* Make video embeds rounded
+* Fix ProfileMultiSelect styling
+* Accept hex pubkeys/npubs/nprofiles in ProfileMultiSelect
+* Tweak room edit form design
+* Report pending signer to user
+* Update default relays
+* Fix chat list responsiveness
+* Fix memory leak, notification badge not showing
+* Improve space join flow
+* Fix opening images in fullscreen dialog
+* Add support for blocked relays
+* Add authentication policy setting
+* Add login with key if no signer is detected
+* Publish default relay selections on signup
+
+# 1.6.2
+
+* Fix modal scrolling and style
+
+# 1.6.1
+
+* Fix skinny profile images
+* Custom handler for relay urls
+* Improve time based chat partitioning
+* Improve authenticated image access interop
+* Fix image detail dialog
+* Fix zapper loading
+* Fix recent events missing in feeds
+
+# 1.6.0
+
+* Switch back to indexeddb to fix memory and performance
+* Add pay invoice functionality
+* Add space membership management and bans
+* Add event info to profile dialog
+* Add better room membership management
+* Refactor stores for performance
+* Hide nav when keyboard is open
+* Handle flotilla links in-app
+* Fix new messages indicator z-index
+* Fix some display bugs
+* Add date to chat items
+* Refine data synchronization
+* Hide nav when keyboard is open on mobile
+
+# 1.5.3
+
+* Add space edit form
+* Improve room syncing
+* Return better blossom errors
+* Fix access restricted bugs
+* Add room detail dialog
+* Fix broken link to self hosting
+* Tweak shadows
+* Always join spaces when visiting them
+
+# 1.5.2
+
+* Fix negentropy room syncing
+
+# 1.5.1
+
+* Fix chat path link
+
+# 1.5.0
+
+* Restyle mobile dialogs
+* Add room membership lists
+* Add space membership lists
+* Add edit room form
+* Support closed/private/restricted/hidden rooms
+* Add hosting services page
+* Improve performance and UI
+* Fix push notifications
+* Improve error detection and handling
+* Support invite links on discover page
+* Add link to landlubber if user is admin
+* Clear reply/share/edit on escape
+
+# 1.4.1
+
+* Improve data synchronization
+* Fix app url on capacitor deployments
+
+# 1.4.0
+
+* Allow "editing" chat messages
+* Check for room create permission
+* Re-work space navigation
+* Show all messages in non-nip29 chat
+* Improve synchronization logic
+* Add connection status to space menu
+* Add icon picker to room create component
+* Improve mention suggestions
+* Improve storage adapter and relay list performance
+* Fix modals
+* Add room deletion
+* Fix zapper loading
+* Add support for relay/group member lists and join/leave events
+
+# 1.3.1
+
+* Fix memory leak in storage adapter
+* Show fewer annoying toast messages
+
+# 1.3.0
+
+* Add optional badge and sound for notifications
+* Improve link rendering
+* Remove imgproxy
+* Bring back blossom feature detection for spaces
+* Improve light theme
+* Add more info to signer status
+* Simplify navigation for adding a space
+* Add ability to scan QR code for invite links
+* Streamline wallet setup and move receive address setting
+* Remove indexeddb on mobile, use capacitor file storage API
+* Fix duplicate DMs showing up
+
+# 1.2.5
+
+* Fix icons in build
+
+# 1.2.4
+
+* Add direct message alerts
+* Add alert settings page
+* Add instructions to key download
+* Add option that allows relays to strip signatures
+* Detect relays that mostly refuse to serve requests
+* Compress and upload profile images
+* Use system theme by default
+* Switch icon set, refactor how they're included
+* Use capacitor's preferences for storage instead of localStorage
+
+# 1.2.3
+
+* Add `created_at` to event info dialog
+* Add signer status to profile page
+* Re-work bunker login flow
+* Add in-app onboarding flow
+* Only protect events if relay authenticates
+* Filter out non-global chats from global chat
+* Improve publish status indicator
+* Fix encrypted upload content type
+* Add relays to event details dialog
+* Add universal link handler for apps
+
+# 1.2.2
+
+* Fix phantom chat notifications
+* Fix zaps on mobile
+
+# 1.2.1
+
+* Add zaps to chat, threads, and events
+* Add funding goals
+* Add NWC support
+* Add wallet settings page
+* Handle invalid bunker url
+* Fix sidebar overflow
+* Fix profile npub display
+
+# 1.2.0
+
+* Fix sort order of thread comments
+* Fix link display when no title is available
+* Fix making profiles non-protected
+* Replace bunker url with relay claims for notifier auth
+* Add push notifications on all platforms
+* Add "mark all as read" on desktop
+* Re-design space dashboard
+
+# 1.1.1
+
+* Add chat quick link
+
+# 1.1.0
+
+* Add better theming support
+* Improve forms for entering invite codes
+* Rely more heavily on NIP 29 for rooms
+* Support multiple platform relays
+* Remove default general room
+* Remove room tag from threads/calendars
+* Show pubkey on profile detail
+* Support pasting pubkey into chat start dialog
+* Add minimal style for quoted messages
+
+# 1.0.4
+
+* Fix thunk status click handler
+* Remove duplicate dependencies
+* Improve navigation on white-labeled instances
+* Add setting for font size
+
+# 1.0.3
+
+* Add light theme
+* Use correct alerts server
+* Ignore relay errors for claims
+* Fix inline code blocks
+* Add custom emoji parsing and display
+
+# 1.0.2
+
+* Fix add relay button
+* Fix safe inset areas
+* Better rendering for errors from relays
+* Improve remote signer login
+
+# 1.0.1
+
+* Fix relay images in nav
+* Fix relay nav overflow
+
+# 1.0.0
+
+* Add alerts via Anchor
+* Fix nip46 signer connect
+* Allow use of cleartext relays on native builds
+* Fix some modal state bugs caused by svelte 5
+* Detect blossom support on community relays
+* Use user blossom server list in settings
+* Fix some feed bugs
+* Improve thunk indicator
+* Update storage adapters
+* Fix modal flash
+* Switch to pnpm
+* Improve calendar windowing
+
+# 0.2.14
+
+* Add calendar event editing
+
+# 0.2.13
+
+* Fix android keyboard issue
+
+# 0.2.12
+
+* Fix keyboard covering chat input
+* Fix thread replies
+* Make error reporting and analytics optional
+* Replace long press with tap target
+* Fix time input
+* Fix nevent hints for url-specific stuff
+* Fix confirm and reactions on mobile
+* Add reply to chat on mobile
+* Fix profile suggestions
+
+# 0.2.11
+
+* Add in-app signup flow on ios
+* Add profile deletion
+
+# 0.2.10
+
+* Improve space discovery
+
+# 0.2.9
+
+* Add NIP 01 signup flow on mobile
+
+# 0.2.8
+
+* Show spinner when joining a room
+* Reduce self-rate limiting of REQs
+* Fix disabled signers link
+* Prepare for iOS release
+* Improve threads and calendar pages
+* Improve quote rendering and new messages button
+
+# 0.2.7
+
+* Add calendar events
+* Migrate to svelte 5 (fixes some bugs, probably introduces others)
+* Migrate to new welshman editor
+* Make reply indicator nicer
+* Make share indicator nicer
+* Improve feed loading
+* Show marker for last activity in chat
+
+# 0.2.6
+
+* Add reply to long-press menu
+* Fix @-mentions
+* Replace nsec.app signup with njump.me
+* Add new messages button in rooms
+* Add media server settings
+* Add build hash to about page
+
+# 0.2.5
+
+* Improve room and data loading
+* Use @welshman/editor
+* Drop support for legacy event kinds
+* Add support for back button navigation on android
+* Remove note to self page (still available via chat)
+* Improve chat conversation search
+* Change how reply UI works
+
+# 0.2.4
+
+* Update icons
+
+# 0.2.3
+
+* Add NIP 56 reports for messages and threads
+* Add ToS and privacy policy
+* Add avatar fallback icons
+* Add mark as read to chats
+* Add send button to chat compose
+* Accommodate onion URLs
+* Improve loading and notifications
+
+# 0.2.2
+
+* Fix bug with sending messages
+
+# 0.2.1
+
+* Improve performance, as well as scrolling and loading
+* Integrate @welshman/editor
+* Improve NIP 29 compatibility
+* Fix incorrect connection errors
+* Refine notifications
+* Add room menu to space homepage
+* Fix storage bugs
+* Add join space CTA

@@ -1,0 +1,85 @@
+<script lang="ts">
+  import {onDestroy} from "svelte"
+  import {readable} from "svelte/store"
+  import type {TrustedEvent} from "@welshman/util"
+  import type {EventPointer} from "nostr-tools/nip19"
+  import Reply from "@assets/icons/reply-2.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import Modal from "@lib/components/Modal.svelte"
+  import ModalBody from "@lib/components/ModalBody.svelte"
+  import LoadingFallback from "@lib/components/LoadingFallback.svelte"
+  import CommentCompose from "@app/components/CommentCompose.svelte"
+  import CommentTree from "@app/components/CommentTree.svelte"
+  import NoteItem from "@app/components/NoteItem.svelte"
+  import {makeFeedContext} from "@app/features/feeds"
+  import {getQuoteRef, notes} from "@app/features/social"
+  import type {CommentNode} from "@app/features/social"
+
+  type Props = {
+    pointer: EventPointer
+    reply?: boolean
+  }
+
+  const {pointer, reply = false}: Props = $props()
+
+  const relays = $notes.relays(getQuoteRef(pointer))
+  const context = makeFeedContext({relays})
+  const event = $notes.deriveEvent(pointer)
+  const replies = $derived($event ? $notes.deriveReplies($event) : readable<CommentNode[]>([]))
+
+  const setReplyTo = (comment?: TrustedEvent) => {
+    replyTo = comment
+  }
+
+  const clearReplyTo = () => setReplyTo(undefined)
+
+  let replyTo: TrustedEvent | undefined = $state()
+  let composerRaised = false
+
+  // A reply button opens this modal composing, and cancelling it must not raise the composer again.
+  $effect(() => {
+    if (reply && $event && !composerRaised) {
+      composerRaised = true
+      setReplyTo($event)
+    }
+  })
+
+  onDestroy(context.cleanup)
+</script>
+
+<Modal label="Note">
+  <ModalBody>
+    {#if $event}
+      {@const note = $event}
+      {@const replyToNote = () => setReplyTo(note)}
+      <div class="border-line flex flex-col gap-4 border-b pb-4">
+        <NoteItem event={note} {context} card={false} showEntire showThreadLinks>
+          {#if replyTo?.id !== note.id}
+            <Button class="button button-neutral button-xs" onclick={replyToNote}>
+              <Icon icon={Reply} size={4} />
+              Reply
+            </Button>
+          {/if}
+        </NoteItem>
+        {#if replyTo?.id === note.id}
+          <CommentCompose
+            event={note}
+            noun="Reply"
+            onCancel={clearReplyTo}
+            onSubmit={clearReplyTo} />
+        {/if}
+      </div>
+      <div class="flex flex-col">
+        {#each $replies as node (node.comment.id)}
+          <CommentTree {node} root={note} {replyTo} {setReplyTo} {context} />
+        {/each}
+        {#if $replies.length === 0}
+          <p class="py-2 text-sm opacity-75">No replies yet.</p>
+        {/if}
+      </div>
+    {:else}
+      <LoadingFallback loadingMessage="Loading note..." failureMessage="Failed to load note." />
+    {/if}
+  </ModalBody>
+</Modal>

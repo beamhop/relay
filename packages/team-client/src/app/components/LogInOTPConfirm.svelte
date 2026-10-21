@@ -1,0 +1,111 @@
+<script lang="ts">
+  import {uniq} from "@welshman/lib"
+  import {Client} from "@pomade/core"
+  import {preventDefault} from "@lib/html"
+  import Spinner from "@lib/components/Spinner.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import AltArrowLeft from "@assets/icons/alt-arrow-left.svg?dataurl"
+  import AltArrowRight from "@assets/icons/alt-arrow-right.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Modal from "@lib/components/Modal.svelte"
+  import ModalBody from "@lib/components/ModalBody.svelte"
+  import ModalHeader from "@lib/components/ModalHeader.svelte"
+  import ModalTitle from "@lib/components/ModalTitle.svelte"
+  import ModalSubtitle from "@lib/components/ModalSubtitle.svelte"
+  import ModalFooter from "@lib/components/ModalFooter.svelte"
+  import StringMultiInput from "@lib/components/StringMultiInput.svelte"
+  import LogInSelect from "@app/components/LogInSelect.svelte"
+  import {pushModal, clearModals} from "@app/ui/modal"
+  import {setChecked} from "@app/ui/notifications"
+  import {deleteDeactivatedPomadeSessions, loginWithPomade} from "@app/core/pomade"
+  import {getPomadeLoginFailureMessage, POMADE_NETWORK_ERROR_MESSAGE} from "@app/core/pomade"
+  import {pushToast} from "@app/ui/toast"
+
+  type Props = {
+    email: string
+    peersByPrefix: Map<string, string>
+  }
+
+  const {email, peersByPrefix}: Props = $props()
+
+  const back = () => history.back()
+
+  const onSubmit = async () => {
+    loading = true
+
+    try {
+      const {ok, options, messages, clientSecret} = await Client.loginWithChallenge(
+        email,
+        peersByPrefix,
+        otps,
+      )
+
+      if (!ok || options.length === 0) {
+        console.error(messages)
+
+        return pushToast({
+          theme: "error",
+          message: getPomadeLoginFailureMessage(messages),
+        })
+      }
+
+      if (uniq(options.map(o => o.pubkey)).length > 1) {
+        pushModal(LogInSelect, {email, options, clientSecret})
+      } else {
+        const {client, peers} = options[0]
+        const {clientOptions, ...res} = await Client.selectLogin(clientSecret, client, peers)
+
+        if (res.ok && clientOptions) {
+          loginWithPomade(clientOptions, email)
+          deleteDeactivatedPomadeSessions()
+          setChecked("*")
+          clearModals()
+        } else {
+          console.error(res.messages)
+
+          pushToast({
+            theme: "error",
+            message: getPomadeLoginFailureMessage(res.messages),
+          })
+        }
+      }
+    } catch (error) {
+      console.error("Login error:", error)
+
+      pushToast({
+        theme: "error",
+        message: POMADE_NETWORK_ERROR_MESSAGE,
+      })
+    } finally {
+      loading = false
+    }
+  }
+
+  let otps = $state<string[]>([])
+  let loading = $state(false)
+</script>
+
+<Modal tag="form" onsubmit={preventDefault(onSubmit)}>
+  <ModalBody>
+    <ModalHeader>
+      <ModalTitle>Log In</ModalTitle>
+      <ModalSubtitle>Enter the login codes sent to your email</ModalSubtitle>
+    </ModalHeader>
+    <p>Your login codes have been sent!</p>
+    <p>
+      For security reasons, you may receive three or more emails with login codes in them. Please
+      paste <strong>all</strong> login codes into the text box below.
+    </p>
+    <StringMultiInput bind:value={otps} placeholder="Enter your login codes..." />
+  </ModalBody>
+  <ModalFooter>
+    <Button class="button button-link" onclick={back} disabled={loading}>
+      <Icon icon={AltArrowLeft} />
+      Go back
+    </Button>
+    <Button type="submit" class="button button-primary" disabled={loading || otps.length < 3}>
+      <Spinner {loading}>Log In</Spinner>
+      <Icon icon={AltArrowRight} />
+    </Button>
+  </ModalFooter>
+</Modal>

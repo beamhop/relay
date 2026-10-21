@@ -1,0 +1,89 @@
+@layer components {
+  .primary-nav {
+    @apply z-popover bg-surface border-line relative isolate w-14 shrink-0 flex-col border-r border-solid pt-2;
+  }
+
+  .drawer .primary-nav .tip[data-tip]::before {
+    @apply hidden;
+  }
+
+  .primary-nav__spaces {
+    @apply flex min-h-0 w-full flex-1 flex-col items-center self-start overflow-y-auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    /* Fades whichever end of the list has spaces past it */
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      black var(--fade-top, 0px),
+      black calc(100% - var(--fade-bottom, 0px)),
+      transparent 100%
+    );
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  /* Hover tooltips reach past the rail, and a scroll container clips whatever leaves it. The extra
+     width is padding, so it holds them without moving the items, and passes its pointer events to
+     the page underneath. Tooltips are a desktop affair, so the rail in the mobile drawer keeps the
+     width it draws in. */
+  @media (min-width: 768px) {
+    .primary-nav__spaces {
+      width: calc(100% + 12rem);
+      padding-right: 12rem;
+      pointer-events: none;
+
+      & > * {
+        pointer-events: auto;
+      }
+    }
+  }
+
+  .primary-nav__nav-item {
+    @apply text-content relative my-1 flex h-12 w-12 cursor-pointer items-center justify-center rounded-full transition-all select-none;
+    -webkit-touch-callout: none;
+  }
+
+  .primary-nav__nav-item:hover,
+  .primary-nav__nav-item--active {
+    @apply bg-surface-more rounded-2xl;
+  }
+
+  .primary-nav__nav-item::after {
+    content: "";
+    @apply absolute top-1/2 left-auto h-0 w-1 -translate-y-1/2 rounded-r max-md:hidden;
+    right: calc(100% + 6px);
+    background-color: var(--content);
+    transition: height 150ms ease;
+  }
+
+  .primary-nav__nav-item:hover::after {
+    @apply h-5;
+  }
+
+  .primary-nav__nav-item--active::after {
+    @apply h-10;
+  }
+
+  [data-fl-theme="clay"] .primary-nav {
+    .primary-nav__nav-item:hover {
+      background-color: color-mix(in srgb, var(--primary) 30%, transparent);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .primary-nav__nav-item--active {
+      background-color: var(--primary);
+      color: var(--primary-content);
+      box-shadow: var(--shadow-sm), var(--shadow-inset);
+    }
+
+    .primary-nav__nav-item:active {
+      background-color: color-mix(in srgb, var(--primary) 50%, transparent);
+      transform: translateY(1px);
+      box-shadow: none;
+    }
+  }
+}

@@ -1,0 +1,102 @@
+<script lang="ts">
+  import {Client} from "@pomade/core"
+  import {getPubkey} from "@welshman/util"
+  import {preventDefault} from "@lib/html"
+  import AltArrowLeft from "@assets/icons/alt-arrow-left.svg?dataurl"
+  import AltArrowRight from "@assets/icons/alt-arrow-right.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import Spinner from "@lib/components/Spinner.svelte"
+  import Modal from "@lib/components/Modal.svelte"
+  import ModalBody from "@lib/components/ModalBody.svelte"
+  import ModalHeader from "@lib/components/ModalHeader.svelte"
+  import ModalTitle from "@lib/components/ModalTitle.svelte"
+  import ModalSubtitle from "@lib/components/ModalSubtitle.svelte"
+  import ModalFooter from "@lib/components/ModalFooter.svelte"
+  import StringMultiInput from "@lib/components/StringMultiInput.svelte"
+  import KeyDownload from "@app/components/KeyDownload.svelte"
+  import {pushToast} from "@app/ui/toast"
+  import {pushModal, clearModals} from "@app/ui/modal"
+  import {session} from "@app/core/session"
+  import {requirePomadeSession} from "@app/core/pomade"
+
+  type Props = {
+    peersByPrefix: Map<string, string>
+  }
+
+  const {peersByPrefix}: Props = $props()
+
+  const {
+    email,
+    clientOptions: {secret, peers},
+  } = requirePomadeSession($session).data
+
+  const confirmRecovery = async () => {
+    const request = await Client.recoverWithChallenge(email, peersByPrefix, otps)
+
+    if (!request.ok) {
+      console.log(request.messages)
+
+      return pushToast({
+        theme: "error",
+        message: `Failed to recover: ${request.messages[0]?.res?.message.toLowerCase()}`,
+      })
+    }
+
+    const result = await Client.selectRecovery(request.clientSecret, getPubkey(secret), peers)
+
+    if (!result.ok) {
+      console.log(result.messages)
+
+      return pushToast({
+        theme: "error",
+        message: `Failed to recover: ${result.messages[0]?.res?.message.toLowerCase()}`,
+      })
+    }
+
+    pushModal(KeyDownload, {secret: result.userSecret, next: clearModals, submitText: "Done"})
+  }
+
+  const submit = async () => {
+    loading = true
+
+    try {
+      await confirmRecovery()
+    } catch (e) {
+      console.error(e)
+      pushToast({theme: "error", message: "Failed to recover your key."})
+    } finally {
+      loading = false
+    }
+  }
+
+  const back = () => history.back()
+
+  let loading = $state(false)
+  let otps = $state<string[]>([])
+</script>
+
+<Modal tag="form" onsubmit={preventDefault(submit)}>
+  <ModalBody>
+    <ModalHeader>
+      <ModalTitle>Recover your Key</ModalTitle>
+      <ModalSubtitle>Take control over your cryptographic identity</ModalSubtitle>
+    </ModalHeader>
+    <p>Your recovery codes have been sent!</p>
+    <p>
+      For security reasons, you may receive three or more emails with recovery codes in them. Please
+      paste <strong>all</strong> recovery codes into the text box below.
+    </p>
+    <StringMultiInput bind:value={otps} placeholder="Enter your recovery codes..." />
+  </ModalBody>
+  <ModalFooter>
+    <Button class="button button-link" onclick={back}>
+      <Icon icon={AltArrowLeft} />
+      Go back
+    </Button>
+    <Button type="submit" class="button button-primary" disabled={loading || otps.length < 2}>
+      <Spinner {loading}>Confirm recovery</Spinner>
+      <Icon icon={AltArrowRight} />
+    </Button>
+  </ModalFooter>
+</Modal>

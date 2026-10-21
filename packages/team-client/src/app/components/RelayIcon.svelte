@@ -1,0 +1,34 @@
+<script lang="ts">
+  import ImageIcon from "@lib/components/ImageIcon.svelte"
+  import {relays} from "@app/core/plugins"
+  import {relayIconColor, relayIconInitials} from "@app/core/relays"
+
+  type Props = {
+    url: string
+    icon?: string
+    size?: number
+    class?: string
+  }
+
+  const {url, icon, size = 7, ...props}: Props = $props()
+
+  const relay = $relays.one(url)
+
+  const src = $derived(icon || $relay?.icon)
+
+  const rem = $derived(size * 0.25)
+
+  const fallbackStyle = $derived(
+    `width: ${rem}rem; height: ${rem}rem; min-width: ${rem}rem; min-height: ${rem}rem; font-size: ${rem * 0.4}rem; background-color: ${relayIconColor(url)}; color: white`,
+  )
+</script>
+
+{#if src}
+  <ImageIcon {size} {src} alt="" class="rounded-full {props.class}" />
+{:else}
+  <div
+    class="flex select-none items-center justify-center rounded-full font-bold {props.class}"
+    style={fallbackStyle}>
+    {relayIconInitials(url)}
+  </div>
+{/if}

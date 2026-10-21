@@ -1,0 +1,80 @@
+<script lang="ts">
+  import {sleep} from "@welshman/lib"
+  import {preventDefault} from "@lib/html"
+  import {getKey} from "@lib/implicit"
+  import Spinner from "@lib/components/Spinner.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import FieldInline from "@lib/components/FieldInline.svelte"
+  import Key from "@assets/icons/key-minimalistic.svg?dataurl"
+  import AltArrowLeft from "@assets/icons/alt-arrow-left.svg?dataurl"
+  import AltArrowRight from "@assets/icons/alt-arrow-right.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Modal from "@lib/components/Modal.svelte"
+  import ModalBody from "@lib/components/ModalBody.svelte"
+  import ModalHeader from "@lib/components/ModalHeader.svelte"
+  import ModalTitle from "@lib/components/ModalTitle.svelte"
+  import ModalSubtitle from "@lib/components/ModalSubtitle.svelte"
+  import ModalFooter from "@lib/components/ModalFooter.svelte"
+  import ProgressBar from "@app/components/ProgressBar.svelte"
+
+  type Props = {
+    next: () => void
+    step?: number
+    totalSteps?: number
+  }
+
+  const {next, step, totalSteps}: Props = $props()
+
+  const email = getKey<string>("signup.email")
+
+  const back = () => history.back()
+
+  const onSubmit = async () => {
+    loading = true
+
+    // Just pretend we're validating, they clearly got a code from somewhere
+    await sleep(800)
+
+    next()
+  }
+
+  let challenge = $state("")
+  let loading = $state(false)
+</script>
+
+<Modal tag="form" onsubmit={preventDefault(onSubmit)}>
+  <ModalBody>
+    <ModalHeader>
+      <ModalTitle>Verify your Email Address</ModalTitle>
+      <ModalSubtitle>Enter the one-time confirmation code sent to your email</ModalSubtitle>
+    </ModalHeader>
+    <FieldInline>
+      {#snippet label()}
+        <p>Confirmation Code*</p>
+      {/snippet}
+      {#snippet input()}
+        <label class="input flex w-full items-center gap-2">
+          <Icon icon={Key} />
+          <input bind:value={challenge} />
+        </label>
+      {/snippet}
+    </FieldInline>
+    <p class="text-sm">
+      We just sent a one-time confirmation code to {email}. Once you receive it, you can enter it
+      above.
+    </p>
+  </ModalBody>
+  {#if step && totalSteps}
+    <ProgressBar current={step} total={totalSteps} />
+  {/if}
+  <ModalFooter>
+    <Button class="button button-link" onclick={back} disabled={loading}>
+      <Icon icon={AltArrowLeft} />
+      Go back
+    </Button>
+    <Button type="submit" class="button button-primary" disabled={loading || !challenge}>
+      <Spinner {loading}>Log In</Spinner>
+      <Icon icon={AltArrowRight} />
+    </Button>
+  </ModalFooter>
+</Modal>

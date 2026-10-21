@@ -1,0 +1,156 @@
+<script lang="ts">
+  import cx from "classnames"
+  import {fromNostrURI, tagValue, tagSpec} from "@welshman/util"
+  import {
+    parse,
+    truncate,
+    renderAsHtml,
+    isText,
+    isEmoji,
+    isEmail,
+    isTopic,
+    isCode,
+    isCashu,
+    isInvoice,
+    isLink,
+    isProfile,
+    isNewline,
+  } from "@welshman/content"
+  import type {Parsed} from "@welshman/content"
+  import Danger from "@assets/icons/danger-triangle.svg?dataurl"
+  import Icon from "@lib/components/Icon.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import ContentToken from "@app/components/ContentToken.svelte"
+  import ContentEmoji from "@app/components/ContentEmoji.svelte"
+  import ContentEmail from "@app/components/ContentEmail.svelte"
+  import ContentCode from "@app/components/ContentCode.svelte"
+  import ContentLinkInline from "@app/components/ContentLinkInline.svelte"
+  import ContentNewline from "@app/components/ContentNewline.svelte"
+  import ContentTopic from "@app/components/ContentTopic.svelte"
+  import ContentMention from "@app/components/ContentMention.svelte"
+  import {goToQuote, isQuote} from "@app/features/quotes"
+  import {userSettingsValues} from "@app/core/settings"
+
+  type Props = {
+    event: any
+    singleLine?: boolean
+    url?: string
+  }
+
+  const {event, singleLine = false, url}: Props = $props()
+
+  const fullContent = $derived(parse(event))
+
+  const isBoundary = (i: number) => {
+    const parsed = fullContent[i]
+
+    if (!parsed || isNewline(parsed)) {
+      return true
+    }
+    if (isText(parsed)) {
+      return Boolean(parsed.value.match(/^\s+$/))
+    }
+
+    return false
+  }
+
+  const isStart = (i: number) => isBoundary(i - 1)
+
+  const isEnd = (i: number) => isBoundary(i + 1)
+
+  const isStartAndEnd = (i: number) => isStart(i) && isEnd(i)
+
+  let warningDismissed = $state(false)
+
+  const ignoreWarning = () => {
+    warningDismissed = true
+  }
+
+  const warning = $derived(
+    warningDismissed
+      ? undefined
+      : $userSettingsValues.hide_sensitive && tagValue(tagSpec("content-warning"), event.tags),
+  )
+
+  const dropWhile = <T,>(f: (x: T) => boolean, xs: Iterable<T>) => {
+    const result: T[] = []
+
+    for (const x of xs) {
+      if (result.length === 0 && f(x)) {
+        continue
+      }
+
+      result.push(x)
+    }
+
+    return result
+  }
+
+  // A reply leads with a reference to its parent, which says nothing a preview can use.
+  const withoutParent = (content: Parsed[]) => {
+    const rest =
+      content.length > 0 && isQuote(content[0])
+        ? dropWhile(p => isQuote(p) || isNewline(p), content)
+        : content
+
+    return rest.length > 0 ? rest : content
+  }
+
+  const shortContent = $derived(
+    truncate(withoutParent(fullContent), {minLength: 200, maxLength: 300, mediaLength: 20}),
+  )
+</script>
+
+<div class="relative">
+  {#if warning}
+    <div class="card card-sm shadow-none flex gap-2">
+      <Icon icon={Danger} />
+      <p>
+        This note has been flagged by the author as "{warning}".<br />
+        <Button onclick={ignoreWarning} class="button button-link">Show anyway</Button>
+      </p>
+    </div>
+  {:else}
+    <div
+      class={cx(
+        "overflow-hidden text-ellipsis",
+        singleLine ? "whitespace-nowrap" : "wrap-break-word",
+      )}>
+      {#each shortContent as parsed, i (i)}
+        {#if isNewline(parsed)}
+          {#if singleLine}
+            <!-- eslint-disable-next-line svelte/no-useless-mustaches -->
+            {" "}
+          {:else}
+            <ContentNewline value={parsed.value} />
+          {/if}
+        {:else if isTopic(parsed)}
+          <ContentTopic value={parsed.value} />
+        {:else if isEmoji(parsed)}
+          <ContentEmoji value={parsed.value} />
+        {:else if isEmail(parsed)}
+          <ContentEmail value={parsed.value} />
+        {:else if isCode(parsed)}
+          <ContentCode
+            value={parsed.value}
+            {singleLine}
+            isBlock={!singleLine && (isStartAndEnd(i) || parsed.value.includes("\n"))} />
+        {:else if isCashu(parsed) || isInvoice(parsed)}
+          <ContentToken value={parsed.value} />
+        {:else if isLink(parsed)}
+          <ContentLinkInline url={parsed.value.url.toString()} {event} {singleLine} />
+        {:else if isProfile(parsed)}
+          <ContentMention value={parsed.value} {url} />
+        {:else if isQuote(parsed)}
+          <Button
+            class="max-w-full cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap underline"
+            onclick={() => goToQuote(parsed.value, event, url)}>
+            {fromNostrURI(parsed.raw).slice(0, 16) + "…"}
+          </Button>
+        {:else}
+          {@html renderAsHtml(parsed)}
+        {/if}
+      {/each}
+    </div>
+  {/if}
+</div>

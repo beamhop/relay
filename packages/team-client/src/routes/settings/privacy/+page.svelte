@@ -1,0 +1,218 @@
+<script lang="ts">
+  import {publish} from "@welshman/app"
+  import ShieldMinimalistic from "@assets/icons/shield-minimalistic.svg?dataurl"
+  import ForbiddenCircle from "@assets/icons/forbidden-circle.svg?dataurl"
+  import LetterUnread from "@assets/icons/letter-unread.svg?dataurl"
+  import {preventDefault} from "@lib/html"
+  import Field from "@lib/components/Field.svelte"
+  import FieldInline from "@lib/components/FieldInline.svelte"
+  import ToggleInput from "@lib/components/ToggleInput.svelte"
+  import Icon from "@lib/components/Icon.svelte"
+  import PageContent from "@lib/components/PageContent.svelte"
+  import Button from "@lib/components/Button.svelte"
+  import Spinner from "@lib/components/Spinner.svelte"
+  import RelayList from "@app/components/RelayList.svelte"
+  import {user} from "@app/core/app"
+  import {blockedRelayLists} from "@app/core/plugins"
+  import {pushModal} from "@app/ui/modal"
+  import {pushToast} from "@app/ui/toast"
+  import {PLATFORM_NAME} from "@app/core/env"
+  import {analyticsAvailable} from "@app/features/analytics"
+  import {sendLogs} from "@app/core/logger"
+  import {
+    RelayAuthMode,
+    userSettingsValues,
+    publishSettings,
+    createSettingsForm,
+  } from "@app/core/settings"
+
+  const reset = () => {
+    settings.set({...$userSettingsValues})
+  }
+
+  const send = async () => {
+    sendingLogs = true
+
+    try {
+      const publication = await sendLogs()
+      const error = await publication.getError()
+
+      if (error) {
+        pushToast({theme: "error", message: error})
+      } else {
+        pushToast({message: "Your logs have been sent. Thank you!"})
+      }
+    } catch (e) {
+      console.error(e)
+      pushToast({theme: "error", message: "Failed to send your logs."})
+    } finally {
+      sendingLogs = false
+    }
+  }
+
+  const onAuthModeChange = (checked: boolean) => {
+    $settings.relay_auth = checked ? RelayAuthMode.Aggressive : RelayAuthMode.Conservative
+  }
+
+  const showBlockedRelays = () =>
+    pushModal(RelayList, {
+      title: "Blocked Relays",
+      subtitle: "These relays won't be used unless explicitly requested.",
+      relays: blockedRelayUrls,
+      addRelay: (url: string) => $blockedRelayLists.addUrl(url).then(publish),
+      removeRelay: (url: string) => $blockedRelayLists.removeUrl(url).then(publish),
+    })
+
+  const onsubmit = preventDefault(async () => {
+    loading = true
+
+    try {
+      const publication = await publishSettings($settings)
+      const error = await publication.getError()
+
+      if (error) {
+        pushToast({theme: "error", message: error})
+      } else {
+        pushToast({message: "Your settings have been saved!"})
+      }
+    } catch (e) {
+      console.error(e)
+      pushToast({theme: "error", message: "Failed to save your settings."})
+    } finally {
+      loading = false
+    }
+  })
+
+  const settings = createSettingsForm()
+  const blockedRelayUrls = $blockedRelayLists.urls($user.pubkey).$
+
+  let loading = $state(false)
+  let sendingLogs = $state(false)
+</script>
+
+<form {onsubmit}>
+  <PageContent>
+    <div class="card flex flex-col gap-4">
+      <strong class="flex items-center gap-3 text-lg">
+        <Icon icon={ShieldMinimalistic} />
+        Privacy Settings
+      </strong>
+      <FieldInline>
+        {#snippet label()}
+          <p>Authenticate with unknown relays?</p>
+        {/snippet}
+        {#snippet input()}
+          <ToggleInput
+            checked={$settings.relay_auth === RelayAuthMode.Aggressive}
+            onchange={onAuthModeChange} />
+        {/snippet}
+        {#snippet info()}
+          <p>Controls whether {PLATFORM_NAME} will identify you to relays not in your lists.</p>
+        {/snippet}
+      </FieldInline>
+      <FieldInline>
+        {#snippet label()}
+          <p>Blocked relays</p>
+        {/snippet}
+        {#snippet input()}
+          <Button class="button button-neutral" onclick={showBlockedRelays}>
+            <Icon icon={ForbiddenCircle} />
+            {$blockedRelayUrls.length} Blocked
+          </Button>
+        {/snippet}
+        {#snippet info()}
+          <p>These relays won't be used unless explicitly requested.</p>
+        {/snippet}
+      </FieldInline>
+      {#if analyticsAvailable}
+        <FieldInline>
+          {#snippet label()}
+            <p>Report usage?</p>
+          {/snippet}
+          {#snippet input()}
+            <ToggleInput bind:checked={$settings.report_usage} />
+          {/snippet}
+          {#snippet info()}
+            <p>Allow {PLATFORM_NAME} to collect anonymous usage data.</p>
+          {/snippet}
+        </FieldInline>
+      {/if}
+      <FieldInline>
+        {#snippet label()}
+          <p>Something went wrong?</p>
+        {/snippet}
+        {#snippet input()}
+          <Button class="button button-neutral" onclick={send} disabled={sendingLogs}>
+            <Spinner loading={sendingLogs}>Send Logs</Spinner>
+          </Button>
+        {/snippet}
+        {#snippet info()}
+          <p>
+            Send a record of recent app activity to the {PLATFORM_NAME} team as a direct message.
+          </p>
+        {/snippet}
+      </FieldInline>
+    </div>
+    <div class="card flex flex-col gap-4">
+      <strong class="flex items-center gap-3 text-lg">
+        <Icon icon={LetterUnread} />
+        Message Requests
+      </strong>
+      <p class="text-sm opacity-50">
+        Messages from people you have no connection to appear in the Requests tab of your chat list.
+        A sender who meets either threshold below reaches your conversations instead.
+      </p>
+      <Field>
+        {#snippet label()}
+          <p>Proof of work</p>
+        {/snippet}
+        {#snippet secondary()}
+          <p>{$settings.min_dm_pow} bits</p>
+        {/snippet}
+        {#snippet input()}
+          <input
+            class="range w-full"
+            type="range"
+            min="1"
+            max="32"
+            step="1"
+            bind:value={$settings.min_dm_pow} />
+        {/snippet}
+        {#snippet info()}
+          <p>
+            A sender who spends this much proof of work reaches your conversations whether or not
+            you know them. Each step up doubles the work they have to do, and {PLATFORM_NAME} spends 16
+            bits on every message you send.
+          </p>
+        {/snippet}
+      </Field>
+      <Field>
+        {#snippet label()}
+          <p>Web of trust</p>
+        {/snippet}
+        {#snippet secondary()}
+          <p>{$settings.min_dm_wot} {$settings.min_dm_wot === 1 ? "person" : "people"}</p>
+        {/snippet}
+        {#snippet input()}
+          <input
+            class="range w-full"
+            type="range"
+            min="1"
+            max="10"
+            step="1"
+            bind:value={$settings.min_dm_wot} />
+        {/snippet}
+        {#snippet info()}
+          <p>A sender counts as known when this many of the people you follow also follow them.</p>
+        {/snippet}
+      </Field>
+    </div>
+    <div class="card sticky -bottom-3 flex flex-row items-center justify-between gap-4">
+      <Button class="button button-neutral" onclick={reset} disabled={loading}
+        >Discard Changes</Button>
+      <Button class="button button-primary" type="submit" disabled={loading}>
+        <Spinner {loading}>Save Changes</Spinner>
+      </Button>
+    </div>
+  </PageContent>
+</form>

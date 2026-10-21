@@ -1,0 +1,432 @@
+/* ============================================================================
+   base.css — Tailwind token registration (theme-independent)
+   ----------------------------------------------------------------------------
+   The @theme block below registers our semantic tokens with Tailwind so it
+   emits themed utilities (bg-surface, text-content, text-content-muted,
+   border-line-more, bg-primary-bold, shadow-lg, …).
+   ============================================================================ */
+
+@theme inline {
+  --color-primary: var(--primary);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-bold: var(--primary-bold);
+  --color-primary-content: var(--primary-content);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-soft: var(--secondary-soft);
+  --color-secondary-bold: var(--secondary-bold);
+  --color-secondary-content: var(--secondary-content);
+
+  --color-success: var(--success);
+  --color-success-content: var(--success-content);
+  --color-warning: var(--warning);
+  --color-warning-content: var(--warning-content);
+  --color-error: var(--error);
+  --color-error-content: var(--error-content);
+
+  --color-backdrop: var(--backdrop);
+  --color-surface: var(--surface);
+  --color-surface-more: var(--surface-more);
+  --color-surface-less: var(--surface-less);
+
+  --color-content: var(--content);
+  --color-content-muted: var(--content-muted);
+  --color-content-subtle: var(--content-subtle);
+
+  --color-line: var(--line);
+  --color-line-more: var(--line-more);
+  --color-line-less: var(--line-less);
+
+  --shadow: 6px 6px 0 color-mix(in srgb, var(--primary) 12%, transparent);
+  --shadow-sm: 4px 4px 0 color-mix(in srgb, var(--primary) 10%, transparent);
+  --shadow-lg: 8px 8px 0 color-mix(in srgb, var(--primary) 15%, transparent);
+  --shadow-inset: inset 0 -4px 0 rgba(0, 0, 0, 0.05);
+  --shadow-inset-strong: inset 0 -3px 0 rgba(0, 0, 0, 0.1);
+
+  --border-thin: 1px;
+  --border-thick: 1px;
+
+  --font-body: "Lato", sans-serif;
+  --font-heading: "Lato", sans-serif;
+  --font-fancy: "Lato", sans-serif;
+}
+
+:root {
+  --sait: var(--safe-area-inset-top, env(safe-area-inset-top));
+  --saib: var(--safe-area-inset-bottom, env(safe-area-inset-bottom));
+  --sail: var(--safe-area-inset-left, env(safe-area-inset-left));
+  --sair: var(--safe-area-inset-right, env(safe-area-inset-right));
+  --mobile-nav-height: 3.5rem;
+
+  text-size-adjust: 100%;
+  font-size: 110%;
+}
+
+@layer base {
+  body {
+    @apply text-content font-body bg-surface-less;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-heading font-bold;
+  }
+
+  button {
+    @apply cursor-pointer text-left;
+  }
+
+  :focus {
+    @apply outline-none;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   Layout helpers
+   ---------------------------------------------------------------------------- */
+
+@utility heading {
+  @apply font-heading text-center text-2xl font-bold;
+}
+@utility subheading {
+  @apply font-heading text-center text-xl font-bold;
+}
+@utility superheading {
+  @apply font-heading text-center text-4xl font-extrabold;
+}
+/* Applied by Cv.svelte, which pairs it with the observer that paints ahead of a fast scroll.
+   Nothing else should reach for it. */
+@utility cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 16rem;
+}
+/* The wash is an inset shadow because a row's hover rule sets a background that would cover it. */
+@utility highlight-target {
+  box-shadow:
+    inset 3px 0 0 var(--primary),
+    inset 0 0 0 9999px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+@utility pt-sai {
+  padding-top: var(--sait);
+}
+@utility pr-sai {
+  padding-right: var(--sair);
+}
+@utility pb-sai {
+  padding-bottom: var(--saib);
+}
+@utility pl-sai {
+  padding-left: var(--sail);
+}
+@utility px-sai {
+  padding-left: var(--sail);
+  padding-right: var(--sair);
+}
+@utility py-sai {
+  padding-top: var(--sait);
+  padding-bottom: var(--saib);
+}
+@utility p-sai {
+  padding: var(--sait) var(--sair) var(--saib) var(--sail);
+}
+@utility mt-sai {
+  margin-top: var(--sait);
+}
+@utility mr-sai {
+  margin-right: var(--sair);
+}
+@utility mb-sai {
+  margin-bottom: var(--saib);
+}
+@utility ml-sai {
+  margin-left: var(--sail);
+}
+@utility mx-sai {
+  margin-left: var(--sail);
+  margin-right: var(--sair);
+}
+@utility my-sai {
+  margin-top: var(--sait);
+  margin-bottom: var(--saib);
+}
+@utility m-sai {
+  margin: var(--sait) var(--sair) var(--saib) var(--sail);
+}
+@utility top-sai {
+  top: var(--sait);
+}
+@utility right-sai {
+  right: var(--sair);
+}
+@utility bottom-sai {
+  bottom: var(--saib);
+}
+@utility left-sai {
+  left: var(--sail);
+}
+
+/* ----------------------------------------------------------------------------
+   Keyboard-open adjustments — unlayered on purpose. Every element carrying
+   .hide-on-keyboard also carries display utilities (flex, md:hidden), and a
+   utility beats @layer components whatever the specificity.
+   ---------------------------------------------------------------------------- */
+
+body.keyboard-open {
+  --saib: 0px;
+  --mobile-nav-height: 0px;
+}
+body.keyboard-open .hide-on-keyboard {
+  @apply hidden;
+}
+
+/* ----------------------------------------------------------------------------
+   Fonts shared/default across all themes
+   ---------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: "Satoshis";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src:
+    local(""),
+    url("/fonts/Satoshi Symbol.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Lato";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src:
+    local(""),
+    url("/fonts/Lato-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Lato";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src:
+    local(""),
+    url("/fonts/Lato-Bold.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Lato";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src:
+    local(""),
+    url("/fonts/Lato-Italic.ttf") format("truetype");
+}
+
+/* ----------------------------------------------------------------------------
+   Integrations — third-party class names rewired onto the shared tokens.
+
+   These stay unlayered. Every library here ships its own stylesheet outside any
+   cascade layer, and an unlayered rule beats a layered one whatever the
+   specificity, so a layered override would lose to the default it overrides.
+   @welshman/editor sets `.tiptap {min-height: 0}`, which beats a layered
+   `.note-editor .tiptap`. Our own classes go in @layer components, in the file
+   that owns them.
+   ---------------------------------------------------------------------------- */
+
+/* tiptap editor */
+.input-editor,
+.note-editor {
+  @apply -m-1 p-1;
+}
+.chat-editor {
+  @apply -my-1 p-1;
+}
+.tiptap {
+  --tiptap-object-bg: var(--surface-more);
+  --tiptap-object-fg: var(--content);
+  --tiptap-active-bg: var(--primary);
+  --tiptap-active-fg: var(--primary-content);
+  @apply min-h-10 overflow-y-auto px-4 py-2;
+  max-height: 350px;
+}
+.tiptap-suggestions {
+  --tiptap-object-bg: var(--surface);
+  --tiptap-object-fg: var(--content);
+  --tiptap-active-bg: var(--surface-more);
+  --tiptap-active-fg: var(--content);
+}
+.tiptap-suggestions__item {
+  border-left: 2px solid var(--surface);
+}
+.tiptap-suggestions__selected {
+  border-left-color: var(--primary);
+}
+.tiptap p.is-editor-empty:first-child::before {
+  @apply opacity-40;
+}
+.chat-editor .tiptap {
+  @apply bg-surface rounded-3xl;
+  border: var(--border-thin) solid var(--line);
+}
+.chat-editor .tiptap:focus-within {
+  border-color: var(--primary);
+}
+.chat-editor .tiptap p.is-editor-empty:first-child::before {
+  @apply text-content-subtle opacity-100;
+}
+.note-editor .tiptap {
+  @apply bg-surface block h-auto min-h-32 w-full rounded-2xl;
+  border: var(--border-thin) solid var(--line);
+  padding: 0.65rem;
+  padding-bottom: 1.5rem;
+}
+/* the full-page article composer gets a taller writing surface than the note editor's default */
+.article-editor .tiptap {
+  @apply min-h-96;
+  max-height: none;
+}
+.article-editor .tiptap p.is-editor-empty:first-child::before {
+  @apply text-content-muted opacity-100;
+}
+.input-editor .tiptap {
+  @apply bg-surface block h-auto rounded-2xl;
+  border: var(--border-thin) solid var(--line);
+  padding: 0.65rem;
+}
+
+/* @svelte-plugins/datepicker — the library declares its variables on :root,
+   where chained var() references resolve immediately, and our theme tokens
+   only exist under .fl; so each color is overridden individually here. The
+   tripled selector out-specifies the component's scoped .datepicker rule. */
+.datepicker.datepicker.datepicker {
+  --datepicker-font-family: var(--font-body);
+  --datepicker-color: var(--content);
+  --datepicker-border-color: var(--line);
+  --datepicker-state-active: var(--primary);
+  --datepicker-state-hover: var(--surface-more);
+
+  --datepicker-container-background: var(--surface);
+  --datepicker-container-border: var(--border-thin) solid var(--line);
+
+  --datepicker-calendar-header-color: var(--content);
+  --datepicker-calendar-header-text-color: var(--content);
+  --datepicker-calendar-header-month-nav-color: var(--content);
+  --datepicker-calendar-header-month-nav-background-hover: var(--surface-more);
+  --datepicker-calendar-header-year-nav-color: var(--content);
+
+  --datepicker-calendar-dow-color: var(--content-muted);
+  --datepicker-calendar-day-color: var(--content);
+  --datepicker-calendar-day-color-hover: var(--content);
+  --datepicker-calendar-day-background-hover: var(--surface-more);
+  --datepicker-calendar-day-color-disabled: var(--content-subtle);
+  --datepicker-calendar-day-other-color: var(--content-subtle);
+  --datepicker-calendar-today-border: var(--border-thin) solid var(--line-more);
+
+  /* pale wash for in-range days and the square connectors that join the
+     endpoint circles; endpoints themselves get full primary + primary-content */
+  --fl-dp-wash: color-mix(in srgb, var(--primary) 14%, var(--surface));
+
+  --datepicker-calendar-range-color: var(--content);
+  --datepicker-calendar-range-background: var(--fl-dp-wash);
+  --datepicker-calendar-range-background-disabled: var(--fl-dp-wash);
+  --datepicker-calendar-range-start-box-shadow: inset -20px 0 0 var(--fl-dp-wash);
+  --datepicker-calendar-range-end-box-shadow: inset 20px 0 0 var(--fl-dp-wash);
+  --datepicker-calendar-range-start-box-shadow-selected: inset -20px 0 0 var(--fl-dp-wash);
+  --datepicker-calendar-range-end-box-shadow-selected: inset 20px 0 0 var(--fl-dp-wash);
+  --datepicker-calendar-range-start-end-background: var(--primary);
+  --datepicker-calendar-range-start-end-color: var(--primary-content);
+  --datepicker-calendar-range-selected-background: var(--primary);
+  --datepicker-calendar-range-selected-color: var(--primary-content);
+  --datepicker-calendar-range-included-background: var(--fl-dp-wash);
+  --datepicker-calendar-range-included-box-shadow: inset 20px 0 0 var(--fl-dp-wash);
+  --datepicker-calendar-range-included-color: var(--content);
+
+  --datepicker-timepicker-input-border: var(--border-thin) solid var(--line);
+}
+
+/* While only the start of a range is picked, the cell doesn't yet have the
+   .range class, so the library's generic day-hover rule (square, gray) paints
+   over the selected circle. Keep the selected look on hover instead. The :not()
+   chain exists to out-specify that hover rule, which carries five of its own. */
+.datepicker.datepicker.datepicker
+  .calendar
+  .date.start:not(.range):not(.other):not(.past):not(.future):not(.disabled)
+  span:hover,
+.datepicker.datepicker.datepicker
+  .calendar
+  .date.end:not(.range):not(.other):not(.past):not(.future):not(.disabled)
+  span:hover {
+  background-color: var(--primary);
+  color: var(--primary-content);
+  border-radius: var(--datepicker-calendar-range-selected-border-radius);
+}
+
+/* Hovering the picked start makes the cell both ends of a zero-width preview
+   range; the library's !important sibling rules still paint a square connector
+   shadow behind the circle, so remove it (their !important, out-specified) */
+.datepicker.datepicker.datepicker .calendars-container .calendar .date.rangehover.start.end {
+  box-shadow: none !important;
+}
+
+/* A freshly picked start with no end and no hover preview carries the same
+   classes as the start of a real range, so the library paints its half-cell
+   connector shadow toward a range that doesn't exist yet. The only reliable
+   distinguisher is whether the next day is in-range. */
+.datepicker.datepicker.datepicker
+  .calendars-container
+  .calendar
+  .date.range.start:not(:has(+ .range, + .rangehover)) {
+  box-shadow: none;
+}
+
+/* date picker. @svelte-plugins/datepicker renders its own markup, so these class
+   names appear nowhere in src/ — don't delete them on a grep. */
+.picker {
+  --date-picker-foreground: var(--content);
+  --date-picker-background: var(--surface-more);
+  --date-picker-highlight-border: var(--primary);
+  --date-picker-selected-color: var(--primary-content);
+  --date-picker-selected-background: var(--primary);
+}
+.date-time-field {
+  @apply bg-surface rounded-2xl px-0;
+  border: var(--border-thin) solid var(--line);
+}
+.date-time-field input {
+  height: 100% !important;
+  width: 100% !important;
+  border-radius: var(--radius-2xl) !important;
+  border: none !important;
+  background: inherit !important;
+  color: inherit !important;
+  padding: 0.7rem 1rem !important;
+}
+
+/* emoji picker — the .emoji-picker frame around it supplies the border */
+emoji-picker {
+  --background: var(--surface);
+  --border-size: 0;
+  --button-active-background: var(--surface-more);
+  --button-hover-background: var(--surface-more);
+  --indicator-color: var(--primary);
+  --input-border-color: var(--line);
+  --input-border-size: var(--border-thin);
+  --input-border-radius: var(--radius-xl);
+  --input-padding: 0.4rem 0.7rem;
+  --input-font-size: 0.85rem;
+  --input-font-color: var(--content);
+  --input-placeholder-color: var(--content-subtle);
+  --outline-color: var(--primary);
+  width: 100%;
+  height: 100%;
+}
+
+[data-tippy-root]:has([data-component="EmojiPicker"]) {
+  max-width: min(352px, calc(100vw - 2rem));
+}
+
+.tippy-box:has([data-component="EmojiPicker"]) {
+  overflow: visible;
+  max-width: none;
+}

@@ -1,0 +1,68 @@
+@layer components {
+  .card-button {
+    @apply flex w-full cursor-pointer flex-nowrap items-center gap-2 rounded-2xl px-5 py-4 text-left font-bold transition;
+    font-family: var(--font-heading);
+
+    &.card-button-neutral {
+      @apply text-content bg-surface border-line;
+
+      &:hover {
+        @apply border-primary;
+      }
+    }
+
+    &.card-button-primary {
+      @apply text-primary-content bg-primary border-primary;
+
+      &:hover {
+        @apply bg-primary-bold border-primary-bold;
+      }
+    }
+
+    .card-button__left {
+      @apply flex grow flex-row items-start gap-4;
+    }
+
+    .card-button__right {
+      @apply hidden h-14 w-14 items-center justify-end sm:flex;
+    }
+
+    .card-button__icon {
+      @apply flex h-14 w-12 shrink-0 items-center justify-center;
+    }
+
+    .card-button__content {
+      @apply flex flex-col gap-1;
+    }
+
+    .card-button__title {
+      @apply text-lg font-bold;
+    }
+
+    .card-button__info {
+      @apply text-sm;
+    }
+  }
+
+  [data-fl-theme="flat"] .card-button {
+    @apply border border-solid;
+  }
+
+  [data-fl-theme="navy"] .card-button {
+    @apply border border-solid;
+  }
+
+  [data-fl-theme="clay"] .card-button {
+    @apply border-2 border-solid shadow-sm;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg), var(--shadow-inset);
+    }
+
+    &:active {
+      transform: translateY(2px);
+      box-shadow: 2px 2px 0 rgba(var(--shadow-color), 0.3);
+    }
+  }
+}
