@@ -4,7 +4,8 @@
     "throughput floors": "local x 0.6 (one GitHub ubuntu-latest vCPU is roughly 0.6x one laptop core) x 0.6 (margin for runner noise) = about 0.36 x local, rounded down.",
     "latency/size ceilings": "local / 0.36, rounded up, then generous: they catch order-of-magnitude regressions (a sync call on the hot path, a leak), not 10% drifts.",
     "load": "The CI load profile publishes at a fixed 400 ev/s (1,000 readers, 15 s), well under the server's capacity even on 2 vCPUs, so accepted_eps must keep up with the schedule (95%), nothing may be lost (delivered/expected, errors), and the latencies/lag show queueing.",
-    "local overrides": "BENCH_<BENCH>_<METRIC>_<MIN|MAX>=n for one bound, BENCH_SCALE=f to multiply every min (and divide every max) by f, BENCH_THRESHOLDS=<file> for another file."
+    "local overrides": "BENCH_<BENCH>_<METRIC>_<MIN|MAX>=n for one bound, BENCH_SCALE=f to multiply every min (and divide every max) by f, BENCH_THRESHOLDS=<file> for another file.",
+    "after write-path work": "2026-10-21, same laptop, load average 4-6: load 3.6 ms OK p95, 1.0 ms lag p99, 219 MB RSS; verify inline 3,790 / pool 6,519 ev/s; storage ingest 6,105 ev/s, author feed 0.79 ms; fanout 74,208 / 3,706 ev/s. Bounds kept: most of the gain is the quieter machine (ingest alone varies 4.1k-6.1k here) and the load profile is a fixed 400 ev/s."
   },
   "load": {
     "_local": "accepted 500/500 ev/s target run, ok p95 7.8 ms, delivery p95 8.0 ms, ratio 1.0, 0 errors, RSS peak 133 MB, loop lag p99 6.3 ms",

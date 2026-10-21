@@ -24,8 +24,8 @@ Technical: `ports.verifier` (`SignatureVerifier` in `@beamhop/core`) is implemen
 `verify-worker.ts` (`@noble/curves` BIP-340), batches of up to 64 events (sent on the next
 event-loop turn when a thread is idle, otherwise when one frees up, at most 1 ms later),
 two batches in flight per thread, 10 s batch timeout = crash. Per-connection order of
-`OK` replies is kept because the relay engine handles each connection's messages in
-sequence. The single binary embeds the worker as an extra `bun build --compile`
+`OK` replies is kept: the relay engine answers each connection's messages in order, even
+though checks of queued EVENTs start early and their saves overlap (see the load test). The single binary embeds the worker as an extra `bun build --compile`
 entrypoint.
 
 ## Benchmark: signature checks
@@ -116,43 +116,90 @@ listen backlog is 128 (`kern.ipc.somaxconn`). For that reason the test opens at 
 ### Measured (2026-10-21)
 
 All runs: Apple M-series laptop, 10 cores, Bun 1.4.3, server from source (SQLite, 9
-signature threads), 8 client processes on the same machine. Other jobs were using the
-machine the whole time (load average 10–20 of 10 cores), so these numbers are low and
-should be repeated on a quiet machine or a dedicated server.
+signature threads) unless marked `--binary`, 8 client processes on the same machine.
+Other jobs were using the machine (the load average at the start of each run is
+shown), so treat single numbers as rough.
 
-| Run | Connections | Posts/s sent → accepted | OK p95 | Delivery p95 | Delivered | Server RSS peak | Loop lag p99 |
+**Before** the write-path work below (commit `efb2216`):
+
+| Run | Load avg | Posts/s sent → accepted | OK p95 | Delivered | Errors | Server RSS peak | Loop lag p99 |
 |---|---|---|---|---|---|---|---|
-| `--conns 2000 --rate 1000 --duration 10` | 2,000 | 1,000 → 1,000 | 13 ms | 13 ms | 100% | 157 MB | 11 ms |
-| same, `--binary` (compiled) | 2,000 | 1,000 → 999 | 11 ms | 11 ms | 100% | 299 MB | – |
-| `--conns 1000 --rate 3000 --duration 10 --history 0` | 1,000 | 3,000 → 2,445 | 2.3 s | 2.3 s | 100% | 225 MB | 19 ms |
-| `--conns 10000 --rate 2000 --duration 30` | 10,000 | 2,000 → 1,297 | 9.7 s | 9.7 s | 100% of accepted | 357 MB | 31 ms |
-| `bun run bench:load` (10k / 5k / 30 s) | 10,000 | 5,000 → 2,039 | 10.1 s | 10.1 s | 100% of accepted | 423 MB | 231 ms |
+| `--conns 2000 --rate 1000 --duration 10` | 4.4 | 1,000 → 1,000 | 9 ms | 100% | 0 | 168 MB | 8 ms |
+| `--conns 1000 --rate 3000 --duration 10 --history 0` | 7.6 | 3,000 → 2,122 | 4.0 s | 100% | 0 | 230 MB | 17 ms |
+| `bun run bench:load` (10k / 5k / 30 s) | 4.6 | 5,000 → 2,218 | 7.9 s | 100% of accepted | 131,888 | 395 MB | 142 ms |
 
-**The 10k connections / 5k posts per second target was not demonstrated.** What the runs
-show:
+**After:**
 
-- **Connections are not the limit.** 10,000 connections and 21,976 subscriptions open in
-  about 1.5 s with no failures, and the server stays under 450 MB. Every accepted post
-  reaches every matching subscription.
-- **Accepting posts is the limit.** On this shared machine the server accepts about
-  1.3–2.4k posts/s. A CPU profile of the server
-  (`BENCH_SERVER_PROFILE`, 3k posts/s run) shows where the main thread's time goes:
-  - **About 57% in synchronous `bun:sqlite` calls.** Most of it is the event store's group
-    commit (`EventStore.flush`, `packages/storage-sql/src/events.ts`). Policy state writes
-    for every post add more: `markSeen`/`markActive` → `docs.put`/`cas` in
-    `packages/policy/src/state.ts`.
-  - **About 14% in policy hooks.** This includes `PolicyModuleConfigSchema.parse` on every
-    post, which runs when the module's config section is not already parsed.
+| Run | Load avg | Posts/s sent → accepted | OK p95 | Delivered | Errors | Server RSS peak | Loop lag p99 |
+|---|---|---|---|---|---|---|---|
+| `--conns 2000 --rate 1000 --duration 10` | 8.3 | 1,000 → 1,000 | 4.4 ms | 100% | 0 | 262 MB | 1.2 ms |
+| `--conns 1000 --rate 3000 --duration 10 --history 0` | 8.0 | 3,000 → 2,991 | 30 ms | 100% | 0 | 254 MB | 7 ms |
+| `bun run bench:load` (10k / 5k / 30 s), 4 runs | 3.3 – 8.3 | 5,000 → 4,982 – 4,983 | 113 – 349 ms | 100% | 0 | 385 – 420 MB | 53 – 153 ms |
+| same, `--binary` (compiled) | 7.4 | 5,000 → 4,985 | 106 ms | 100% | 0 | 713 MB¹ | – |
+| `bun run bench:load -- --duration 60` | 6.7 – 8.5 | 5,000 → 4,326 – 4,864 | 0.8 – 4.6 s | 100% of accepted | 5,936 – 35,974 refused | 547 – 783 MB | 0.4 – 1 s |
 
-  Signature checking runs on threads and is not the limit.
-- **Beyond capacity, posts are lost without an answer.** Once a publisher connection has
-  `maxPendingMessages` (256) messages waiting, further posts get a NOTICE but no `OK`. That
-  is what `publisher_notice` / `missing_ok` count in the error detail.
-- Next steps, to be made in the storage and policy packages:
-  - move SQLite writes off the main thread (a writer worker);
-  - fold the per-post policy state writes into the event store's group commit, or batch
-    them in memory;
-  - answer every refused post with `OK false`.
+¹ The compiled binary's RSS is measured with `ps` and includes the mapped binary.
+
+**The 10k connections / 5k posts per second target is met for 30-second runs**
+(`target_met: true` in every 30 s run above: 99.7% accepted, `OK` p95 well under 1 s,
+everything delivered, no errors). **It is not sustained for 60 s on this shared
+laptop:** after about 40 s the main thread is fully busy and accepts 4.3–4.9k posts/s;
+the rest is refused with `OK false` (see below). A 60 s profile shows where the main
+thread goes once the database holds ~250k posts: SQLite inserts about 34%, commits 9%,
+the duplicate check before the signature check 8%, WebSocket sends to readers 16%, policy
+hooks 11%. Repeat on a quiet machine or a dedicated server before drawing a line.
+
+What changed, and why (each step measured with the 1k / 3k and 10k / 5k runs):
+
+1. **Signature checks are started early.** Posts are handled one at a time per
+   connection, and each waited ~15 ms for its round trip to the signature threads, so 50
+   busy connections could not post more than ~2k/s however idle the server was. Now a
+   post queued behind others has its check started on arrival (at most 2,048 such checks
+   at a time, so the thread pool never overflows onto the main thread).
+2. **Saves are pipelined per connection** (`modules.relay.pipelineSaves`, default 64):
+   a connection's next post is checked while earlier ones commit. Answers keep their
+   order; REQ, AUTH, COUNT, CLOSE and NEG-* wait for earlier posts; deletions and NIP-29
+   group events are never pipelined.
+3. **WAL checkpoints run on a background thread** (below). They were the biggest single
+   cost: with SQLite's default (a checkpoint every 1,000 pages inside a commit) insert
+   throughput fell from ~13k to ~4.4k events/s as the database grew to 60k events;
+   without them it stays at ~13k.
+4. **Group commit across stores, with a 2 ms window.** Event saves and doc writes of the
+   same window share one transaction; reads no longer force a commit of queued saves.
+5. **Policy bookkeeping is batched.** First-seen and last-activity writes wait in memory
+   and are written in one batch (every second or 256 entries); reads see the waiting
+   ones; `idle()` and module stop flush them. The exact-duplicate filter no longer scans
+   its 50,000 entries on every post once full (it was 14% of the main thread).
+6. **Small things on the hot path:** the recent-ids cache evicts in O(1) (6%), and
+   `PolicyModuleConfigSchema.parse` no longer runs per post (module config sections are
+   parsed once, see the config fix).
+
+**Beyond capacity, every post gets an answer.** Once a connection has
+`maxPendingMessages` (256) messages waiting, further EVENTs get
+`["OK", id, false, "rate-limited: too many messages waiting, slow down"]`, REQ and COUNT
+get `CLOSED`, NEG-OPEN gets `NEG-ERR`; only frames without an id get a NOTICE. The load
+test counts these as `refused:rate-limited`.
+
+## Database writes (SQLite)
+
+- **Background checkpoints.** The main connection runs with `wal_autocheckpoint = 0`; a
+  worker thread with its own connection (`packages/runtime-bun/src/sqlite-checkpointer.ts`)
+  runs a PASSIVE checkpoint every 250 ms, and a RESTART checkpoint once the log holds
+  8,192 frames (≈ 32 MB), so the log starts over instead of growing (max ~50 MB during a
+  150k-post ingest). If the thread cannot start or dies, the main connection goes back to
+  checkpointing itself (`wal_autocheckpoint = 1000`).
+- **Group commit.** `GroupCommitter` (`packages/storage-sql/src/group-commit.ts`) is shared
+  by the event store and the doc store of one connection. The Bun runtime uses a 2 ms
+  window; library users get the old behaviour (end of the current tick) unless they pass
+  `events.groupCommit.windowMs`. A save is visible to reads once its promise resolved;
+  deletes, stats and close commit queued saves first.
+- **Writer thread (opt-in prototype).** `BEAMHOP_SQLITE_WRITER_THREAD=1` moves every
+  event-store write to a dedicated SQLite writer thread
+  (`packages/runtime-bun/src/sqlite-writer.ts`; reads stay on the main thread; passes the
+  `eventStoreContract` suite). It frees the main thread (loop lag p50 0.2 ms) but was
+  slower end to end: 10k / 5k / 30 s accepted 4,892/s with `OK` p95 681 ms (inline:
+  4,982/s, 113 ms), 60 s accepted 4,181/s (inline 4,326–4,864/s). It is off by default
+  and runs from source only (not embedded in the single binary).
 
 ## Regression gate
 
@@ -185,12 +232,18 @@ laptop core, and another factor of 0.6 leaves room for noise. Ceilings are the l
 divided by the same factor, then rounded up generously. They catch big regressions, such
 as a synchronous call on the hot path or a memory leak, not 10% drift. The local values
 are in the `_local` keys of the file. It was measured with `bun run bench:gate` on
-2026-10-21:
+2026-10-21 (load average 12–13):
 
 - load test: 7.8 ms `OK` p95, 6.3 ms lag p99, 133 MB RSS;
 - signature checks: 2,486 posts/s inline;
 - SQLite ingest: 4,133 events/s;
 - fan-out: 56k events/s broadcast, 2,873 events/s engine ingest.
+
+After the write-path changes (load average 4–6): load test 3.6 ms `OK` p95, 1.0 ms lag
+p99, 219 MB RSS; signature checks 3,790/s inline, 6,519/s pool; SQLite ingest 6,105/s;
+fan-out 74k/s broadcast, 3,706/s engine ingest. The floors were not raised: most of the
+difference is the quieter machine (the unchanged ingest benchmark alone varies between
+4.1k and 6.1k/s here), and the gate's load profile runs at a fixed 400 posts/s.
 
 **Changing the thresholds locally:**
 
