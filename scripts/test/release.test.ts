@@ -95,7 +95,7 @@ describe('release.ts', () => {
     const io = new BufferIo();
     const ctx = {
       io,
-      env: { HOME: home },
+      env: { HOME: home, BEAMHOP_UPDATE_ALLOW_UNSIGNED: '1' }, // unsigned test release (developer override)
       cwd: home,
       home,
       fetch: (i: string | URL | Request, init?: RequestInit) => fetch(i, init),

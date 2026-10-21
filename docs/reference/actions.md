@@ -4,7 +4,7 @@
 
 Every admin operation is an action. The admin app, the CLI (`beamhop <group> <name>`), the admin API (`POST /api/v1/nodes/self[/relays/<relay>]/actions/<id>`, see `/api/v1/openapi.json`), the command palette and NIP-86 all run these same actions. Changes show a preview first and can be undone where marked.
 
-[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [logs](#logs) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
+[access](#access) · [admins](#admins) · [ai](#ai) · [alerts](#alerts) · [approvals](#approvals) · [backups](#backups) · [compliance](#compliance) · [config](#config) · [escrow](#escrow) · [experience](#experience) · [groups](#groups) · [insights](#insights) · [keyvault](#keyvault) · [lifecycle](#lifecycle) · [logs](#logs) · [media](#media) · [moderation](#moderation) · [modules](#modules) · [notes](#notes) · [plugins](#plugins) · [policy](#policy) · [portal](#portal) · [retention](#retention) · [status](#status) · [system](#system) · [tokens](#tokens) · [users](#users) · [webhooks](#webhooks)
 
 ## access
 
@@ -1560,6 +1560,77 @@ Post progress on an incident shown on the status page.
 | `state` | `investigating` \| `identified` \| `monitoring` |  |  |
 | `impact` | `minor` \| `major` \| `outage` |  |  |
 | `title` | string |  |  |
+
+## system
+
+### Resource advice
+
+Machine size and settings that fit your traffic and storage.
+
+- **id:** `system.advisor` · **CLI:** `beamhop system advisor` · **scope:** node · **permission:** `config.write`
+- read-only
+- *Technical:* insights live (connections, ev/s, storage.bytes), disk.free 7-day trend, media bytes (blob store scan, ≤20k files), runtime.host (cores, memory, node.verifyWorkers).
+
+### Apply resource advice
+
+Make the settings change a resource suggestion recommends.
+
+- **id:** `system.apply-advice` · **CLI:** `beamhop system apply-advice` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · undoable
+- *Technical:* Patches node.verifyWorkers via admin.config (revisioned, undoable).
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `id` | `verify-workers-off` \| `verify-workers-on` |  | Advice to apply |
+
+### Check this setup
+
+Check DNS, certificate, ports, proxy, WebSocket, disk, clock, storage and every health check.
+
+- **id:** `system.doctor` · **CLI:** `beamhop system doctor` · **scope:** node · **permission:** `config.write`
+- read-only
+- *Technical:* runtime.doctor (beamhop doctor checks: config.*, data.*, disk.free, storage.*, dns.*, tls.*, port.listen, proxy.*, clock.skew) + kernel.health checks; fixes are action ids, never auto-applied.
+
+### Go back to the previous version
+
+Put the version from before the last update back. Optionally restore the backup made before it.
+
+- **id:** `system.rollback` · **CLI:** `beamhop system rollback` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · needs a second approver when approvals are on
+- *Technical:* Swap <bin>.previous → <bin> (current kept as <bin>.rolled-back), optional backups.restore of the pre-update backup, restart.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `restoreBackup` | boolean | `false` | Also restore the data from before the update (newer changes are lost) |
+
+### Update Beamhop
+
+Back up, install the newest version and restart. If it is not healthy, Beamhop goes back by itself.
+
+- **id:** `system.update` · **CLI:** `beamhop system update` · **scope:** node · **permission:** `node.manage`
+- changes settings/data · undoable · needs a second approver when approvals are on
+- *Technical:* backups.run-now → download → SHA-256 + minisign → --version smoke test → atomic rename (previous kept) → restart → health self-test → automatic rollback on new critical health checks.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `version` | string |  | The version you saw (refuses if a newer one appeared) |
+| `skipBackup` | boolean | `false` | Do not back up first (not recommended) |
+
+### Check for updates
+
+See which version runs now, whether a newer one is out and what changed.
+
+- **id:** `system.update-check` · **CLI:** `beamhop system update-check` · **scope:** node · **permission:** `node.manage`
+- read-only
+- *Technical:* Release manifest (modules.updates.manifestUrl / BEAMHOP_UPDATE_MANIFEST) → version compare; minisign key from modules.updates.publicKey / BEAMHOP_UPDATE_PUBLIC_KEY; install kind decides self-update.
+
+### Update progress
+
+Where a running update is, and whether you can go back to the previous version.
+
+- **id:** `system.update-status` · **CLI:** `beamhop system update-status` · **scope:** node · **permission:** `node.manage`
+- read-only
+- *Technical:* DocStore system.update/state (survives the restart) + live download progress.
 
 ## tokens
 

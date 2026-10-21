@@ -16,6 +16,7 @@
   import Shield from '@lucide/svelte/icons/shield';
   import LifeBuoy from '@lucide/svelte/icons/life-buoy';
   import Building2 from '@lucide/svelte/icons/building-2';
+  import HeartPulse from '@lucide/svelte/icons/heart-pulse';
   import { app } from '$lib/stores/app.svelte';
   import { flow } from '$lib/stores/actions.svelte';
   import { prefs, type Theme } from '$lib/stores/prefs.svelte';
@@ -136,6 +137,16 @@
           <span class="min-w-0 flex-1">
             <span class="block text-sm">{m.settings_plugins_title()}</span>
             <span class="block text-xs text-muted-foreground">{m.settings_plugins_summary()}</span>
+          </span>
+          <ChevronRight class="size-4 text-muted-foreground" />
+        </a>
+      </li>
+      <li>
+        <a href={to('/settings/system')} class="flex items-center gap-3 p-3.5 hover:bg-muted/40" data-testid="system-link">
+          <HeartPulse class="size-4 text-muted-foreground" />
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm">{m.system_title()}</span>
+            <span class="block truncate text-xs text-muted-foreground">{m.system_summary()}</span>
           </span>
           <ChevronRight class="size-4 text-muted-foreground" />
         </a>

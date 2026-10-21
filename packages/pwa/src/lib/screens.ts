@@ -44,6 +44,11 @@ const ALIASES: Record<string, string> = {
   '/settings/recovery': '/settings/security',
   '/settings/sso': '/settings/company',
   '/settings/identity': '/settings/company',
+  '/settings/update': '/settings/system',
+  '/settings/updates': '/settings/system',
+  '/settings/doctor': '/settings/system#doctor',
+  '/settings/advisor': '/settings/system#advisor',
+  '/home/doctor': '/settings/system#doctor',
 };
 
 /**
@@ -73,6 +78,7 @@ const FIXED = new Set([
   '/settings/history',
   '/settings/plugins',
   '/settings/security',
+  '/settings/system',
 ]);
 
 export interface ResolvedScreen {

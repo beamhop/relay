@@ -14,4 +14,4 @@ export * from './storage.ts';
 export * from './team.ts';
 export * from './tls.ts';
 export * from './verify-pool.ts';
-export { main } from './main.ts';
+export { main, type MainOptions } from './main.ts';

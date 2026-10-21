@@ -145,12 +145,26 @@ describe('beamhop update: relative URLs and signatures', () => {
     expect(io.stdout).toContain('NOT signed');
   });
 
-  test('without a key, unsigned releases still install (signatures cannot be checked)', async () => {
+  test('without a key (placeholder), updates are refused unless the developer override is set', async () => {
     const bin = installed();
     const srv = server(script('0.2.0'));
+    const { ctx } = testContext({ fetch: srv.fetch as never, execPath: bin });
+    await expect(updateCommand(ctx as never, MANIFEST, {}, deps)).rejects.toThrow(
+      'cannot check that this download is genuine',
+    );
+    expect(readFileSync(bin, 'utf8')).toBe(script('0.1.0'));
+    expect(srv.hits).not.toContain('https://dl.example/files/beamhop-test-os');
+
     const io = new BufferIo();
-    const { ctx } = testContext({ io, fetch: srv.fetch as never, execPath: bin });
-    expect(await updateCommand(ctx as never, MANIFEST, {}, deps)).toBe(0);
-    expect(io.stdout).toContain('no release key is set');
+    expect(
+      await updateCommand({ ...ctx, io } as never, [...MANIFEST, '--allow-unsigned'], {}, deps),
+    ).toBe(0);
+    expect(io.stdout).toContain('signatures were NOT checked');
+
+    const bin2 = installed();
+    const { ctx: c2 } = testContext({ fetch: srv.fetch as never, execPath: bin2 });
+    (c2.env as Record<string, string>).BEAMHOP_UPDATE_ALLOW_UNSIGNED = '1';
+    expect(await updateCommand({ ...c2, io: new BufferIo() } as never, MANIFEST, {}, deps)).toBe(0);
+    expect(readFileSync(bin2, 'utf8')).toBe(script('0.2.0'));
   });
 });

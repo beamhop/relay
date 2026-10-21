@@ -21,6 +21,7 @@ import { homeActions } from './mocks/home.ts';
 import { registerMediaMocks } from './mocks/media.ts';
 import { registerPeopleMocks } from './mocks/people.ts';
 import { pluginWriterActions } from './mocks/plugins.ts';
+import { systemMockActions } from './mocks/system.ts';
 
 type Relay = z.infer<typeof RelaySchema>;
 type Diff = {
@@ -1289,6 +1290,7 @@ ACTIONS.push(
 );
 enterprise.annotate(nodeSchemaJson);
 ACTIONS.push(...homeActions(() => S).filter((a) => !ACTIONS.some((x) => x.id === a.id)));
+ACTIONS.push(...(systemMockActions(() => S) as Action[]));
 
 const catalog = (scope: 'node' | 'relay' | null) =>
   ACTIONS.filter((a) => scope !== 'relay' || a.scope === 'relay')

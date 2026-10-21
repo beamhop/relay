@@ -4,16 +4,36 @@
  * (runtime-bun `scripts/build.ts` generates an entry that calls this):
  * `beamhop` / `beamhop serve` / server flags start the server, anything else
  * is a CLI command.
+ *
+ * Serving also adds the in-app updater and doctor (`binarySystemModule`) and
+ * runs the crash-loop guard of a pending update.
  */
-import { main } from '@beamhop/runtime-bun';
+import { VERSION, main } from '@beamhop/runtime-bun';
 import { runCli } from './cli.ts';
+import { binarySystemModule } from './system.ts';
+import { bootGuard } from './updater.ts';
 
 export async function runBinary(argv = process.argv.slice(2)): Promise<void> {
   let serving = false;
   const code = await runCli(argv, {
     serve: async (args) => {
       serving = true;
-      return main(args);
+      const execPath = process.execPath;
+      try {
+        if (bootGuard(execPath, VERSION) === 'rolled-back') {
+          process.stderr.write(
+            'The new version kept failing to start, so the previous version was put back. Start Beamhop again.\n',
+          );
+          process.exit(1);
+        }
+      } catch {
+        // never block the start on the guard
+      }
+      const env = process.env as Record<string, string | undefined>;
+      // Restarts run `beamhop <server flags>` (server flags alone start the server too).
+      return main(args, process.env, {
+        modules: [binarySystemModule({ execPath, argv: args, env })],
+      });
     },
   });
   // The server keeps running until a signal; every other command exits now

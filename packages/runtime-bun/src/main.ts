@@ -7,6 +7,7 @@
  */
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { BeamhopModule } from '@beamhop/core';
 import { type Env, loadConfig, parseArgs, parseListen } from './config.ts';
 import { loadModules } from './modules.ts';
 import { JsonLogger } from './ports.ts';
@@ -51,9 +52,15 @@ async function healthcheck(listen = '127.0.0.1:3334'): Promise<boolean> {
   return false;
 }
 
+export interface MainOptions {
+  /** Extra modules the caller adds (the single binary adds its updater + doctor). */
+  modules?: BeamhopModule[];
+}
+
 export async function main(
   argv = process.argv.slice(2),
   env: Env = process.env,
+  opts: MainOptions = {},
 ): Promise<RunningServer | undefined> {
   const args = parseArgs(argv, env);
   if (args.help) {
@@ -86,7 +93,7 @@ export async function main(
   if (loaded.defaultRelay)
     logger.log('info', 'no relays configured; answering on every hostname', {});
 
-  const modules = await loadModules(loaded.config, logger);
+  const modules = [...(await loadModules(loaded.config, logger)), ...(opts.modules ?? [])];
   logger.log('info', 'modules loaded', { modules: modules.map((m) => m.id) });
 
   const devPwa = resolve(import.meta.dir, '../../pwa/build');
