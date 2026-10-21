@@ -5,7 +5,6 @@
   import AddCircle from "@assets/icons/add-circle.svg?dataurl"
   import Icon from "@lib/components/Icon.svelte"
   import Button from "@lib/components/Button.svelte"
-  import Link from "@lib/components/Link.svelte"
   import Modal from "@lib/components/Modal.svelte"
   import ModalBody from "@lib/components/ModalBody.svelte"
   import ModalTitle from "@lib/components/ModalTitle.svelte"
@@ -13,13 +12,9 @@
   import LogIn from "@app/components/LogIn.svelte"
   import SignUp from "@app/components/SignUp.svelte"
   import {parseInviteLink} from "@app/features/access"
-  import {
-    PLATFORM_ABOUT,
-    PLATFORM_TERMS,
-    PLATFORM_PRIVACY,
-    PLATFORM_NAME,
-    PLATFORM_DESCRIPTION,
-  } from "@app/core/env"
+  import {PLATFORM_ABOUT, PLATFORM_NAME, PLATFORM_DESCRIPTION} from "@app/core/env"
+  import LegalLinks from "@src/beamhop/components/LegalLinks.svelte" // beamhop: config.json links
+  import SsoButtons from "@src/beamhop/components/SsoButtons.svelte" // beamhop: company sign-in
   import {pushModal} from "@app/ui/modal"
 
   const invite = $derived(
@@ -42,6 +37,7 @@
         <p class="m-auto max-w-sm text-center">{PLATFORM_DESCRIPTION}</p>
       {/if}
     </div>
+    <SsoButtons /><!-- beamhop -->
     <Button aria-label="Log in" onclick={logIn}>
       <CardButton primary>
         {#snippet icon()}
@@ -68,11 +64,7 @@
         {/snippet}
       </CardButton>
     </Button>
-    <p class="text-center text-xs opacity-75">
-      By using <Link external class="link" href={PLATFORM_ABOUT}>{PLATFORM_NAME}</Link>, you consent
-      to our
-      <Link external class="link" href={PLATFORM_TERMS}>Terms of Service</Link> and
-      <Link external class="link" href={PLATFORM_PRIVACY}>Privacy Policy</Link>.
-    </p>
+    <!-- beamhop: legal links from config.json (hidden when absent) -->
+    <LegalLinks name={PLATFORM_NAME} about={PLATFORM_ABOUT} />
   </ModalBody>
 </Modal>

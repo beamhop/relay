@@ -26,7 +26,7 @@
   import {setupAnalytics} from "@app/features/analytics"
   import {setupLogging} from "@app/core/logger"
   import "@app/core/policies"
-  import {EscrowNotice} from "@src/beamhop" // beamhop: must follow @app/core/policies
+  import {BeamhopOverlay} from "@src/beamhop" // beamhop: must follow @app/core/policies
   import {base} from "$app/paths" // beamhop
   import * as coreSession from "@app/core/session"
   import {restoreSession} from "@app/core/session"
@@ -196,7 +196,7 @@
     <ModalContainer />
     <div class="tippy-target"></div>
     <NewNotificationSound />
-    <EscrowNotice /><!-- beamhop -->
+    <BeamhopOverlay /><!-- beamhop: escrow notice + company sign-in -->
   {:catch error}
     <Startup {error} />
   {/await}

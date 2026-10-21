@@ -8,8 +8,10 @@ import {installLinkBasePath} from "./base-path"
 import {loadBeamhopConfig} from "./config"
 import {federationPolicy} from "./federation"
 import {loadDirectory} from "./features/directory"
+import {installIntranetRelayHosts} from "./relay-url"
 
 appPolicies.push(federationPolicy)
+installIntranetRelayHosts()
 
 if (typeof window !== "undefined") {
   installLinkBasePath()
@@ -17,8 +19,17 @@ if (typeof window !== "undefined") {
 }
 
 export {default as EscrowNotice} from "./components/EscrowNotice.svelte"
+export {default as BeamhopOverlay} from "./components/BeamhopOverlay.svelte"
 export * from "./config"
-export {isRelayAllowed} from "./federation"
+export {isRelayAllowed, trustRelays} from "./federation"
 export {getHomeRelay} from "./env"
-export {requestTeamSession, isSsoEnabled} from "./features/sso"
-export {directory, isDirectoryEnabled} from "./features/directory"
+export {isIntranetHost} from "./relay-url"
+export {
+  requestTeamSession,
+  signInWithTeamSession,
+  isSsoEnabled,
+  TeamSessionError,
+  type TeamSession,
+} from "./features/sso"
+export {directory, directoryState, isDirectoryEnabled, loadDirectory} from "./features/directory"
+export {legalLinks} from "./features/links"
