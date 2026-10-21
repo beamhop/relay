@@ -18,7 +18,13 @@
   import type { FieldSpec } from '$lib/forms/json-schema';
   import type { SelfCheck } from '$lib/api/types';
   import { to } from '$lib/nav';
+  import { goto } from '$app/navigation';
+  import { resolveScreen } from '$lib/screens';
+  import { announceFallback } from '$lib/fallback';
   import GeneratedForm from '$lib/components/forms/GeneratedForm.svelte';
+  import ChannelsEditor from '$lib/components/settings/ChannelsEditor.svelte';
+  import type { AlertChannel } from '$lib/alert-channels';
+  import type { NodeConfig } from '$lib/api/types';
   import Sheet from '$lib/components/Sheet.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
   import Button from '$lib/components/ui/button.svelte';
@@ -28,6 +34,16 @@
 
   const id = $derived(page.params.section ?? '');
   const def = $derived(sectionById(id));
+
+  // Unknown section (old link, server-named screen): nearest screen + a toast, never a dead end.
+  let redirected = '';
+  $effect(() => {
+    if (def || !id || redirected === id) return;
+    redirected = id;
+    const target = resolveScreen(`/settings/${id}`, app.uiRoutes.map((r) => r.path));
+    if (target.fallback) announceFallback(target.tab);
+    void goto(to(target.href), { replaceState: true });
+  });
 
   let data = $state<LoadedSection | null>(null);
   let error = $state<unknown>(null);
@@ -56,6 +72,13 @@
       void load();
     }
   });
+
+  /** Settings with their own editor instead of a generated field. */
+  const CUSTOM = new Set(['alerts.channels']);
+  const simpleFields = $derived(data ? data.simple.filter((f) => !CUSTOM.has(f.path.join('.'))) : []);
+  const channels = $derived(
+    def?.id === 'alerts' && data ? (((data.doc as NodeConfig).alerts?.channels ?? []) as AlertChannel[]) : [],
+  );
 
   async function save(fields: FieldSpec[], values: Record<string, unknown>) {
     if (!data) return;
@@ -110,13 +133,16 @@
     {:else if !data}
       <div class="space-y-4">{#each def.simple as p (p)}<Skeleton class="h-14 w-full" />{/each}</div>
     {:else}
+      {#if def.id === 'alerts'}
+        <div class="mb-4"><ChannelsEditor {channels} onchanged={load} /></div>
+      {/if}
       {#key version}
         <div class="divide-y rounded-xl border px-4" data-testid="simple-screen" data-section={id}>
           <GeneratedForm
             id={`section-${id}`}
-            fields={data.simple}
+            fields={simpleFields}
             initial={data.initial}
-            onsubmit={(v) => save(data!.simple, v)}
+            onsubmit={(v) => save(simpleFields, v)}
           />
         </div>
       {/key}

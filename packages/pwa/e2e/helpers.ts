@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Locator, Page } from '@playwright/test';
 
-/** Reset the mock API. */
-export async function reset(page: Page, claimed: boolean): Promise<void> {
-  await page.request.post('/__reset', { data: { claimed } });
+/** Reset the mock API. `ai`: the assistant module is absent (default), installed but off, or on. */
+export async function reset(
+  page: Page,
+  claimed: boolean,
+  opts: { ai?: 'absent' | 'off' | 'on' } = {},
+): Promise<void> {
+  await page.request.post('/__reset', { data: { claimed, ai: opts.ai ?? 'absent' } });
 }
 
 export async function serverLog(page: Page): Promise<{
   log: Array<{ id: string; input: unknown }>;
   bans: string[];
   relay: { goals: Record<string, number>; persona: string };
+  channels: Array<{ type: string; id: string; [k: string]: unknown }>;
+  tests: string[];
+  assistant: Array<{ message: string; context?: Record<string, unknown> }>;
 }> {
   return (await page.request.get('/__log')).json();
 }

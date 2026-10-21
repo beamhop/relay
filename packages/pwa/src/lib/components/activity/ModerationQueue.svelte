@@ -3,6 +3,7 @@
    * Swipe triage (§5.3, §6.2): → keep, ← remove, ↑ block author, ↓ skip.
    * Every decision runs at once and shows an undo toast. Keyboard:
    * e keep · x remove · # block · j / s skip · k back · u undo.
+   * Desktop: split pane, the waiting items on the left (click to review one).
    */
   import { onMount } from 'svelte';
   import Check from '@lucide/svelte/icons/check';
@@ -18,6 +19,7 @@
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
+  import { assistant } from '$lib/stores/assistant.svelte';
   import { haptic } from '$lib/haptics';
   import { short, ago } from '$lib/utils';
   import SwipeCard from '../SwipeCard.svelte';
@@ -136,6 +138,21 @@
     restore(prev);
   }
 
+  /** Review this item next (desktop list). */
+  function pick(item: QueueItem) {
+    if (item.id === top?.id) return;
+    skipped = skipped.filter((s) => s.id !== item.id);
+    restore(item);
+  }
+
+  // The assistant gets the item under review as context.
+  $effect(() => {
+    assistant.setSelection(
+      top ? { queueItem: top.id, type: top.type, reason: top.reason, eventId: top.eventId, pubkey: top.pubkey } : undefined,
+    );
+    return () => assistant.setSelection(undefined);
+  });
+
   function onswipe(d: Direction) {
     const item = top;
     if (!item) return;
@@ -177,6 +194,26 @@
     </div>
   {:else}
     <p class="mb-3 text-xs text-muted-foreground" data-testid="queue-count">{m.mod_remaining({ count: items.length })}</p>
+    <div class="md:grid md:grid-cols-[minmax(220px,300px)_1fr] md:gap-6" data-testid="queue-split">
+    <nav class="hidden max-h-[70dvh] overflow-y-auto rounded-xl border md:block" aria-label={m.mod_list()} data-testid="queue-list">
+      <ul class="divide-y">
+        {#each items as item (item.id)}
+          <li>
+            <button
+              type="button"
+              class="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left text-sm hover:bg-muted/50 aria-[current=true]:bg-muted"
+              aria-current={item.id === top.id}
+              data-testid="queue-list-item"
+              onclick={() => pick(item)}
+            >
+              <span class="line-clamp-1 font-medium">{item.reason}</span>
+              <span class="line-clamp-1 text-xs text-muted-foreground">{typeLabel(item)} · {ago(item.createdAt)}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </nav>
+    <div>
     <div class="relative mx-auto max-w-lg">
       {#if items[1]}<div class="absolute inset-x-4 -bottom-2 h-full rounded-2xl border bg-card/50" aria-hidden="true"></div>{/if}
       {#key top.id}
@@ -242,5 +279,7 @@
       </div>
       <p class="mt-3 text-center text-[11px] text-muted-foreground">{m.mod_hint()}</p>
     {/if}
+    </div>
+    </div>
   {/if}
 </section>

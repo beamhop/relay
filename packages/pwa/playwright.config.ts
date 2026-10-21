@@ -20,6 +20,13 @@ export default defineConfig({
       name: 'iphone',
       // iPhone viewport, touch and mobile UA, rendered by Chromium (CDP touch input for swipes).
       use: { ...devices['iPhone 13'], browserName: 'chromium' },
+      testIgnore: /desktop\.e2e\.ts$/,
+    },
+    {
+      name: 'desktop',
+      // Desktop parity (§6.14): sidebar, split panes, ⌘K, keyboard shortcuts.
+      use: { browserName: 'chromium', viewport: { width: 1440, height: 900 } },
+      testMatch: /desktop\.e2e\.ts$/,
     },
   ],
   webServer: {

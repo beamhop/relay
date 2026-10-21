@@ -22,6 +22,7 @@
   import {userSpaceUrls} from "@app/features/rooms"
   import {goToChat, lastSpaceUrl, makeSpacePath} from "@app/ui/routes"
   import {deriveUserItem} from "@app/core/app"
+  import DirectoryNavItem from "@src/beamhop/components/DirectoryNavItem.svelte" // beamhop
 
   type Props = {
     children?: Snippet
@@ -82,6 +83,7 @@
     <PrimaryNavItem title="Bookmarks" href="/bookmarks">
       <ImageIcon alt="Bookmarks" src={Bookmark} size={8} />
     </PrimaryNavItem>
+    <DirectoryNavItem /><!-- beamhop: company directory -->
     <PrimaryNavItem title="Search" onclick={showSearch}>
       <ImageIcon alt="Search" src={Magnifier} size={8} />
     </PrimaryNavItem>
@@ -109,6 +111,7 @@
       <PrimaryNavItem href="/chat" onclick={chatHandler} notification={$notifications.has("/chat")}>
         <ImageIcon alt="Messages" src={Letter} size={8} />
       </PrimaryNavItem>
+      <DirectoryNavItem /><!-- beamhop: company directory -->
       {#if PLATFORM_RELAYS.length === 0}
         <PrimaryNavItem href="/spaces">
           <ImageIcon alt="All Spaces" src={Compass} size={8} />

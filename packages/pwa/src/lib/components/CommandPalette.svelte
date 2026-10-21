@@ -12,7 +12,7 @@
   import type { CatalogAction } from '$lib/api/types';
   import { m } from '$lib/paraglide/messages.js';
 
-  let { open = $bindable(false) }: { open?: boolean } = $props();
+  let { open = $bindable(false), onassistant }: { open?: boolean; onassistant?: () => void } = $props();
   let search = $state('');
 
   const pages = $derived([
@@ -118,6 +118,19 @@
               >
                 {prefs.lens ? m.lens_hide() : m.lens_show()}
               </Command.Item>
+              {#if onassistant}
+                <Command.Item
+                  value="ask-assistant"
+                  keywords={['ai', 'assistant', 'chat', 'ask', 'help']}
+                  onSelect={() => {
+                    close();
+                    onassistant();
+                  }}
+                  class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm data-selected:bg-muted"
+                >
+                  {m.assistant_open()}
+                </Command.Item>
+              {/if}
             </Command.GroupItems>
           </Command.Group>
           {#if actions.length}

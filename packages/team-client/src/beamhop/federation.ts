@@ -20,10 +20,20 @@ const normalize = (url: string) => {
   }
 }
 
+/** Relays Beamhop itself handed us at runtime (e.g. the NIP-46 bunker relays of a team session). */
+const trustedRelays = new Set<string>()
+
+export const trustRelays = (urls: string[]) => {
+  for (const url of urls) if (url) trustedRelays.add(normalize(url))
+}
+
 export const getAllowedRelays = () => {
   const home = getHomeRelay()
 
-  return new Set([...(home ? [home] : []), ...getBeamhopConfig().allowedRelays].map(normalize))
+  return new Set([
+    ...[...(home ? [home] : []), ...getBeamhopConfig().allowedRelays].map(normalize),
+    ...trustedRelays,
+  ])
 }
 
 export const isRelayAllowed = (url: string) =>

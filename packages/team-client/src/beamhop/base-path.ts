@@ -9,7 +9,10 @@ import {base} from "$app/paths"
 export {base}
 
 const isAppPath = (path: string) =>
-  path === base || path.startsWith(`${base}/`) || path.startsWith(`${base}?`) || path.startsWith(`${base}#`)
+  path === base ||
+  path.startsWith(`${base}/`) ||
+  path.startsWith(`${base}?`) ||
+  path.startsWith(`${base}#`)
 
 /** "/home" -> "/app/home". Leaves absolute URLs, protocol-relative, and already-based paths alone. */
 export const withBase = (path: string) => {

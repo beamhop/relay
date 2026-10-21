@@ -43,6 +43,8 @@ export interface HomeCard {
 
 const KEY = 'beamhop.snoozed';
 export const SNOOZE_SECONDS = 24 * 3600;
+/** Local "dismiss" without the experience module: hidden on this device for a year. */
+export const DISMISS_SECONDS = 365 * 24 * 3600;
 
 function read(): Record<string, number> {
   try {

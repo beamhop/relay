@@ -4,6 +4,8 @@
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import type { ChecklistItem } from '$lib/checklist';
   import { to } from '$lib/nav';
+  import { nearestTab } from '$lib/screens';
+  import { announceFallback } from '$lib/fallback';
   import { cn } from '$lib/utils';
   import { m } from '$lib/paraglide/messages.js';
 
@@ -41,10 +43,13 @@
             href={to(item.href)}
             class="flex items-center gap-3 py-2.5 text-sm"
             data-done={item.done}
+            data-fallback={item.fallback ? '' : undefined}
             onclick={(e) => {
               if (item.action && !item.done && onaction) {
                 e.preventDefault();
                 onaction(item);
+              } else if (item.fallback) {
+                announceFallback(nearestTab(item.href));
               }
             }}
           >

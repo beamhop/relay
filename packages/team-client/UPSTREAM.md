@@ -16,10 +16,16 @@ Beamhop-owned code (new files, AGPL-3.0-or-later):
 
 - `src/beamhop/` — runtime glue: base-path helpers + `$app/*` shims, runtime env defaults
   (home relay = same-origin WebSocket), `config.json` loader, federation socket policy, theme,
-  escrow banner, Wave 4 stubs (`features/sso.ts`, `features/directory.ts`), unit tests.
+  escrow banner, company sign-in (`features/sso.ts` + `sso-session.ts`, `TeamSessionGate`,
+  `SsoButtons`), company directory (`features/directory.ts`, `Directory.svelte`), legal links
+  (`features/links.ts`, `LegalLinks.svelte`), intranet relay hosts (`relay-url.ts`,
+  `relay-url-patch.ts`), unit tests (`*.test.ts`).
+- `src/routes/directory/+page.svelte` — new route, a thin wrapper around
+  `src/beamhop/components/Directory.svelte`.
 - `scripts/beamhop/` — `build.mjs` (static build), `dev.mjs`, `env.mjs` (build defaults),
-  `vite-plugin.ts` (redirects upstream `$app/stores|state|navigation` imports to the shims),
-  `logo.mjs`.
+  `vite-plugin.ts` (redirects upstream `$app/stores|state|navigation` imports to the shims;
+  patches `isRelayUrl` in `@welshman/util` so trusted dotless intranet hosts such as
+  `ws://relay:3334` work — the build warns if upstream changes that check), `logo.mjs`.
 - `static/beamhop-logo.{svg,png}` — placeholder mark (source for generated PWA icons).
 
 Upstream files touched (every change is marked with a `beamhop` comment; grep `beamhop`):
@@ -33,7 +39,10 @@ Upstream files touched (every change is marked with a `beamhop` comment; grep `b
 | `src/app/core/env.ts` | `env()` passes through `beamhopEnv()`; `DUFFLEPUD_URL` configurable |
 | `src/app/ui/app.css` | imports `src/beamhop/theme.css`; `@config` path fix for tailwind ≥ 4.3.3 |
 | `src/app/ui/theme.ts` | `beamhop` theme listed; dark-first default |
-| `src/routes/+layout.svelte` | `import "@src/beamhop"` (after policies), `<EscrowNotice />`, manifest href |
+| `src/routes/+layout.svelte` | `import "@src/beamhop"` (after policies), `<BeamhopOverlay />` (escrow notice + company sign-in), manifest href |
+| `src/app/components/Landing.svelte` | legal links from config.json via `<LegalLinks />` (hidden when absent; unused `Link`/`PLATFORM_TERMS`/`PLATFORM_PRIVACY` imports dropped); `<SsoButtons />` |
+| `src/app/components/PrimaryNav.svelte` | `<DirectoryNavItem />` (desktop + mobile nav) |
+| `src/app/features/hosting.ts` | `HOSTING_ENABLED` only with a configured `VITE_HOSTING_BACKEND_URL` (paid hosting UI hidden); `hostingRequest` refuses without it |
 | `src/app/core/session.ts`, `src/app/features/callEngine.ts`, `src/app/components/NewNotificationSound.svelte` | root-absolute asset/redirect paths prefixed with `base` |
 
 ## How to pull upstream changes
@@ -64,9 +73,21 @@ Simpler alternative for small upstream ranges: `git format-patch` from a Flotill
 ```json
 {
   "allowedRelays": [],
-  "features": {"sso": false, "escrowNotice": false, "directory": false}
+  "features": {"sso": false, "escrowNotice": false, "directory": false},
+  "escrowNotice": false,
+  "sso": {"providers": [{"id": "okta", "label": "Okta", "startUrl": "/api/v1/sso/okta/start?audience=team"}]},
+  "links": {"terms": "https://example.com/terms", "privacy": "https://example.com/privacy"}
 }
 ```
+
+- `features.sso` + `sso.providers`: "Sign in with …" buttons (same-origin start URLs only). After the
+  IdP, `POST /api/v1/team/session` decides: `managed` → NIP-46 login through Beamhop's bunker;
+  `self-custody` → the person's NIP-07/NIP-46 signer, pubkey must match; `link-required` →
+  `GET /api/v1/team/link` challenge, signed (kind 22242) and `POST`ed, then the session again.
+- `escrowNotice` (top level or under `features`): DM escrow disclosure banner.
+- `features.directory`: Directory screen at `<base>/directory` from `GET /api/v1/team/directory`.
+- `links.terms` / `links.privacy`: legal links on the welcome screen; hidden when absent
+  (build-time fallback `VITE_PLATFORM_TERMS` / `VITE_PLATFORM_PRIVACY`).
 
 - `allowedRelays`: extra relays the client may connect to. Empty (default) = home relay only.
   Build-time equivalent: `VITE_BEAMHOP_ALLOWED_RELAYS` (CSV).

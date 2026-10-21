@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** First-week setup checklist (§7): computed from live state, disappears when complete. */
 
+import { resolveScreen } from './screens.ts';
+
 const RECOVERY_KEY = 'beamhop.recoverySaved';
 
 export function markRecoverySaved(): void {
@@ -34,15 +36,11 @@ export interface ChecklistItem {
   title?: string;
   done: boolean;
   href: string;
+  /** The server named a screen this app does not have: `href` is the nearest tab. */
+  fallback?: boolean;
   /** Run this action instead of navigating (server checklist). */
   action?: { id: string; input: Record<string, unknown> };
 }
-
-/** Screens named by the server checklist that live elsewhere in this app. */
-const SCREEN_ALIASES: Record<string, string> = {
-  '/people/admins': '/people?tab=team',
-  '/home/launch-kit': '/',
-};
 
 /** Shape of `experience.checklist` output (subset). */
 export interface ServerChecklist {
@@ -56,18 +54,23 @@ export interface ServerChecklist {
   hidden: boolean;
 }
 
-/** Map the server checklist to app items (unavailable items are not counted). */
-export function fromServer(c: ServerChecklist): ChecklistItem[] {
+/**
+ * Map the server checklist to app items (unavailable items are not counted).
+ * Screens are resolved defensively: unknown ones point at the nearest tab.
+ */
+export function fromServer(c: ServerChecklist, modules: readonly string[] = []): ChecklistItem[] {
   if (c.hidden) return [];
   return c.items
     .filter((i) => i.available)
     .map((i) => {
+      const screen = resolveScreen(i.link.screen || '/settings', modules);
       const item: ChecklistItem = {
         id: i.id,
         title: i.title,
         done: i.done,
-        href: SCREEN_ALIASES[i.link.screen] ?? (i.link.screen || '/settings'),
+        href: screen.href,
       };
+      if (screen.fallback) item.fallback = true;
       if (i.link.actionId)
         item.action = {
           id: i.link.actionId,

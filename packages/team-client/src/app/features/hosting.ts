@@ -14,7 +14,8 @@ import {publishRoomList} from "@app/features/rooms"
 import {getHttpAuthHeader} from "@app/core/signer"
 
 // Apple doesn't allow selling hosting outside their payment system.
-export const HOSTING_ENABLED = Capacitor.getPlatform() !== "ios"
+// beamhop: paid hosting is not part of Beamhop; only on when a hosting backend is configured.
+export const HOSTING_ENABLED = Boolean(HOSTING_BACKEND_URL) && Capacitor.getPlatform() !== "ios"
 
 export type Plan = {
   id: string
@@ -185,8 +186,11 @@ export const hostingErrorMessage = (e: unknown, fallback: string) => {
 
 type HostingResponse<T> = {data: T; error?: string}
 
-const hostingRequest = async (method: string, path: string, init: RequestInit = {}) =>
-  fetch(new URL(path, HOSTING_BACKEND_URL).toString(), {
+const hostingRequest = async (method: string, path: string, init: RequestInit = {}) => {
+  // beamhop: never call a hosting backend that is not configured (direct links to /settings/hosting)
+  if (!HOSTING_ENABLED) throw new HostingError("Hosting is not available on this workspace", 404)
+
+  return fetch(new URL(path, HOSTING_BACKEND_URL).toString(), {
     ...init,
     method,
     headers: {
@@ -196,6 +200,7 @@ const hostingRequest = async (method: string, path: string, init: RequestInit = 
       ...init.headers,
     },
   })
+}
 
 const hostingJson = async <T>(response: Response): Promise<T> => {
   const payload: Maybe<HostingResponse<T>> = await response.json().catch(() => undefined)

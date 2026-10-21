@@ -6,10 +6,12 @@
   import Search from '@lucide/svelte/icons/search';
   import LogOut from '@lucide/svelte/icons/log-out';
   import Code from '@lucide/svelte/icons/code';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
   import { app } from '$lib/stores/app.svelte';
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
+  import { assistant } from '$lib/stores/assistant.svelte';
   import { to } from '$lib/nav';
   import TabBar from '$lib/components/shell/TabBar.svelte';
   import RelaySwitcher from '$lib/components/shell/RelaySwitcher.svelte';
@@ -20,8 +22,6 @@
   import ConfigDiffSheet from '$lib/components/ConfigDiffSheet.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
-  import Onboarding from '$lib/components/onboarding/Onboarding.svelte';
-  import SignIn from '$lib/components/onboarding/SignIn.svelte';
   import Skeleton from '$lib/components/ui/skeleton.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import { m } from '$lib/paraglide/messages.js';
@@ -30,6 +30,17 @@
   let paletteOpen = $state(false);
   let helpOpen = $state(false);
   let pendingG = false;
+  // The assistant panel is loaded on first open (keeps it out of the first-load bundle).
+  let assistantLoaded = $state(false);
+  $effect(() => {
+    if (assistant.open) assistantLoaded = true;
+  });
+
+  /** Floating button: the assistant when the AI module is installed, else the command palette. */
+  function fab() {
+    if (assistant.installed) assistant.show();
+    else paletteOpen = true;
+  }
 
   onMount(() => {
     prefs.applyTheme();
@@ -125,9 +136,13 @@
     <Button class="mt-6" onclick={() => app.boot()}>{m.common_retry()}</Button>
   </main>
 {:else if app.phase === 'claim' || (app.phase === 'ready' && app.onboarding)}
-  <Onboarding />
+  {#await import('$lib/components/onboarding/Onboarding.svelte') then { default: Onboarding }}
+    <Onboarding />
+  {/await}
 {:else if app.phase === 'signin'}
-  <SignIn />
+  {#await import('$lib/components/onboarding/SignIn.svelte') then { default: SignIn }}
+    <SignIn />
+  {/await}
 {:else}
   <div class="min-h-dvh md:grid md:grid-cols-[232px_1fr]">
     <aside class="sticky top-0 hidden h-dvh flex-col gap-4 border-r p-4 md:flex">
@@ -143,6 +158,16 @@
         <span class="flex-1">{m.palette_search()}</span>
         <kbd class="rounded border px-1 text-[10px]">⌘K</kbd>
       </button>
+      {#if assistant.installed}
+        <button
+          class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+          data-testid="assistant-open"
+          onclick={() => assistant.show()}
+        >
+          <Sparkles class="size-4 text-primary" />
+          <span class="flex-1">{m.assistant_open()}</span>
+        </button>
+      {/if}
       <TabBar variant="side" />
       <div class="mt-auto space-y-1">
         <button
@@ -194,15 +219,21 @@
 
     <button
       class="fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-40 flex size-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 active:scale-95 md:hidden"
-      aria-label={m.palette_open()}
+      aria-label={assistant.installed ? m.assistant_open() : m.palette_open()}
       data-testid="fab"
-      onclick={() => (paletteOpen = true)}
+      data-mode={assistant.installed ? 'assistant' : 'palette'}
+      onclick={fab}
     >
-      <Command class="size-5" />
+      {#if assistant.installed}<Sparkles class="size-5" />{:else}<Command class="size-5" />{/if}
     </button>
   </div>
 
-  <CommandPalette bind:open={paletteOpen} />
+  <CommandPalette bind:open={paletteOpen} onassistant={() => assistant.show()} />
+  {#if assistantLoaded}
+    {#await import('$lib/components/assistant/AssistantPanel.svelte') then { default: AssistantPanel }}
+      <AssistantPanel bind:open={assistant.open} onpalette={() => (paletteOpen = true)} />
+    {/await}
+  {/if}
   <KeyboardHelp bind:open={helpOpen} />
 {/if}
 

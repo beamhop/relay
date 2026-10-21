@@ -2,7 +2,8 @@
   /**
    * Inbox-zero attention cards (§6.8, §6.9): swipe right runs the card's
    * primary action (preview → confirm → undo toast); swipe left snoozes it.
-   * Nothing is ever applied without the admin's explicit approval.
+   * Dismiss hides a card for good (it returns only when something new joins
+   * it); keyboard `e`. Nothing is ever applied without explicit approval.
    */
   import CircleCheck from '@lucide/svelte/icons/circle-check';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -13,7 +14,8 @@
   import { asApiError, flow } from '$lib/stores/actions.svelte';
   import { toasts } from '$lib/stores/toasts.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
-  import { SNOOZE, type HomeCard, snoozeLocal, unsnoozeLocal } from '$lib/cards';
+  import { assistant } from '$lib/stores/assistant.svelte';
+  import { DISMISS, DISMISS_SECONDS, SNOOZE, type HomeCard, snoozeLocal, unsnoozeLocal } from '$lib/cards';
   import { to } from '$lib/nav';
   import SwipeCard from '../SwipeCard.svelte';
   import Button from '../ui/button.svelte';
@@ -74,6 +76,63 @@
     );
   }
 
+  /** Hide the card for good (server-side per admin; this device only without the experience module). */
+  async function dismissForGood(c: HomeCard) {
+    if (c.source === 'inbox' && app.hasAction(DISMISS)) {
+      try {
+        const r = await app.api.run(DISMISS, { key: c.key }, 'node');
+        onchange();
+        const token = r.undo?.token;
+        toasts.show(
+          {
+            message: m.cards_dismissed(),
+            kind: 'info',
+            ...(token
+              ? {
+                  undo: async () => {
+                    await app.api.undo(token);
+                    onchange();
+                  },
+                }
+              : {}),
+          },
+          6000,
+        );
+      } catch (err) {
+        toasts.error(asApiError(err).message);
+      }
+      return;
+    }
+    snoozeLocal(c.key, DISMISS_SECONDS);
+    onchange();
+    toasts.show(
+      {
+        message: m.cards_dismissed(),
+        kind: 'info',
+        undo: async () => {
+          unsnoozeLocal(c.key);
+          onchange();
+        },
+      },
+      6000,
+    );
+  }
+
+  // The assistant gets the card on screen as context.
+  $effect(() => {
+    assistant.setSelection(top ? { card: top.key, title: top.title } : undefined);
+    return () => assistant.setSelection(undefined);
+  });
+
+  function onkeydown(e: KeyboardEvent) {
+    const t = e.target as HTMLElement | null;
+    if (!top || e.key !== 'e' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (t?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (document.querySelector('[role="dialog"]')) return;
+    e.preventDefault();
+    void dismissForGood(top);
+  }
+
   function onswipe(d: Direction) {
     if (!top) return;
     if (d === 'right') approve(top);
@@ -83,6 +142,8 @@
   const icons = { info: Info, warning: TriangleAlert, critical: CircleAlert };
   const tones = { info: 'neutral', warning: 'warn', critical: 'critical' } as const;
 </script>
+
+<svelte:window {onkeydown} />
 
 <section aria-labelledby="attention-title" data-testid="attention">
   <div class="mb-2 flex items-baseline justify-between">
@@ -125,7 +186,8 @@
               {#if canApprove}
                 <Button size="sm" onclick={() => approve(top)} data-testid="card-primary">{top.primaryLabel ?? m.cards_approve()}</Button>
               {/if}
-              <Button size="sm" variant="secondary" onclick={() => card?.fling('left')}>{m.cards_snooze()}</Button>
+              <Button size="sm" variant="secondary" onclick={() => card?.fling('left')} data-testid="card-snooze">{m.cards_snooze()}</Button>
+              <Button size="sm" variant="ghost" onclick={() => dismissForGood(top)} data-testid="card-dismiss">{m.cards_dismiss()}</Button>
               {#if top.playbook}
                 <Button size="sm" variant="ghost" href={to(`/help?playbook=${top.playbook}`)}>{m.cards_guide()}</Button>
               {/if}
