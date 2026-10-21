@@ -38,13 +38,12 @@ export const beamhopBuildEnv = {
   VITE_DEFAULT_BLOSSOM_SERVERS: "",
   VITE_THUMBNAIL_URL: "",
 
-  // No third-party services by default (no telemetry, no hosted signers, no hosting backend).
+  // No third-party services by default (no telemetry, no hosted signers).
+  // beamhop: no-payments - the upstream VITE_HOSTING_* (paid hosting) env vars are gone.
   VITE_DEFAULT_PUBKEYS: "",
   VITE_POMADE_SIGNERS: "",
   VITE_PUSH_SERVER: "",
   VITE_PUSH_BRIDGE: "",
-  VITE_HOSTING_BACKEND_URL: "",
-  VITE_HOSTING_RELAY_DOMAIN: "",
   // Empty means `${origin}/api/v1/team/dufflepud` (not yet implemented by Beamhop).
   VITE_DUFFLEPUD_URL: "",
 }

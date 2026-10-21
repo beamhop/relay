@@ -33,7 +33,7 @@
   })
 
   const search = (term: string) =>
-    term ? options.searchValues(term) : ["BTC", "SAT", "USD", "GBP", "AUD", "CAD"]
+    term ? options.searchValues(term) : ["USD", "EUR", "GBP", "AUD", "CAD"] // beamhop: no-payments
 
   const selectCurrency = (code: string) => {
     value = code

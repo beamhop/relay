@@ -18,7 +18,8 @@
   {#if title}
     <p class="text-xl">
       {title} —
-      <CurrencySymbol code={price?.currency ?? "SAT"} />{price?.amount ?? 0}
+      <!-- beamhop: no-payments (default currency was SAT) -->
+      <CurrencySymbol code={price?.currency ?? "USD"} />{price?.amount ?? 0}
     </p>
   {/if}
   {#if props.event.content}

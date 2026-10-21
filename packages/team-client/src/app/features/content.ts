@@ -14,8 +14,6 @@ import {
   REPORT,
   REPOST,
   THREAD,
-  ZAP_GOAL,
-  ZAP_RECEIPT,
   matchTags,
   decryptFile,
   getIdOrAddress,
@@ -26,7 +24,6 @@ import {
 import type {Filter, TrustedEvent} from "@welshman/util"
 import {Comment} from "@welshman/domain"
 import {reader} from "@app/core/domain"
-import {ENABLE_ZAPS} from "@app/core/env"
 
 export const IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
 
@@ -139,18 +136,14 @@ export const partitionByActivity = (kind: number, events: TrustedEvent[]) => {
 
 export const REPOST_KINDS = [REPOST, GENERIC_REPOST]
 
-export const EVENT_CONTEXT_KINDS = [REPORT, REACTION, ZAP_RECEIPT, COMMENT]
+// beamhop: no-payments (zap receipts and zap goals are neither requested nor shown)
+export const EVENT_CONTEXT_KINDS = [REPORT, REACTION, COMMENT]
 
 export const REACTION_KINDS = [REPORT, DELETE, REACTION]
 
-if (ENABLE_ZAPS) {
-  REACTION_KINDS.push(ZAP_RECEIPT)
-}
-
-export const CONTENT_KINDS = [ZAP_GOAL, EVENT_TIME, THREAD, CLASSIFIED, POLL, PINBOARD, LONG_FORM]
+export const CONTENT_KINDS = [EVENT_TIME, THREAD, CLASSIFIED, POLL, PINBOARD, LONG_FORM]
 
 const CONTENT_NOUNS = new Map([
-  [ZAP_GOAL, ["goal", "goals"]],
   [EVENT_TIME, ["event", "events"]],
   [THREAD, ["thread", "threads"]],
   [CLASSIFIED, ["classified", "classifieds"]],

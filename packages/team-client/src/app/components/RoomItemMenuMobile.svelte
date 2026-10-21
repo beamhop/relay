@@ -2,7 +2,6 @@
   import type {TrustedEvent} from "@welshman/util"
   import * as nip19 from "nostr-tools/nip19"
   import {getIdOrAddress, tagSpec, tagValue, toNostrURI} from "@welshman/util"
-  import Bolt from "@assets/icons/bolt.svg?dataurl"
   import Pen from "@assets/icons/pen.svg?dataurl"
   import Reply from "@assets/icons/reply-2.svg?dataurl"
   import ShareCircle from "@assets/icons/share-circle.svg?dataurl"
@@ -24,7 +23,6 @@
   import Modal from "@lib/components/Modal.svelte"
   import ModalBody from "@lib/components/ModalBody.svelte"
   import EmojiPicker from "@lib/components/EmojiPicker.svelte"
-  import ZapButton from "@app/components/ZapButton.svelte"
   import BookmarkButton from "@app/components/BookmarkButton.svelte"
   import EventInfo from "@app/components/EventInfo.svelte"
   import Report from "@app/components/Report.svelte"
@@ -37,7 +35,6 @@
   import {deriveUserAdminDelete, deriveUserIsRoomAdmin} from "@app/features/rooms"
   import {toggleRoomPin} from "@app/features/roomPins"
   import {publishReaction} from "@app/features/reactions"
-  import {ENABLE_ZAPS} from "@app/core/env"
   import {makeContentPath} from "@app/ui/routes"
   import {shareEvent} from "@app/ui/share"
   import {readAloud} from "@app/features/speech"
@@ -122,13 +119,8 @@
 
 <Modal label="Message actions">
   <ModalBody>
-    <div class="grid gap-2 {ENABLE_ZAPS ? 'grid-cols-3' : 'grid-cols-2'}">
-      {#if ENABLE_ZAPS}
-        <ZapButton replaceState {url} {event} class="{tile} button-outline button-secondary">
-          <Icon size={6} icon={Bolt} />
-          Zap
-        </ZapButton>
-      {/if}
+    <!-- beamhop: no-payments (no zap tile) -->
+    <div class="grid grid-cols-2 gap-2">
       <Button class="{tile} button-outline button-primary" onclick={showEmojiPicker}>
         <Icon size={6} icon={SmileCircle} />
         React

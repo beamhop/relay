@@ -180,6 +180,7 @@ export const makeEditor = async ({
       WelshmanExtension.configure({
         submit,
         extensions: {
+          bolt11: false, // beamhop: no-payments (a pasted invoice stays plain text, no invoice node)
           placeholder: {
             config: {
               placeholder,

@@ -1,8 +1,6 @@
 <script lang="ts">
   import Login from "@assets/icons/login-3.svg?dataurl"
-  import AddCircle from "@assets/icons/add-circle.svg?dataurl"
   import Icon from "@lib/components/Icon.svelte"
-  import Link from "@lib/components/Link.svelte"
   import Button from "@lib/components/Button.svelte"
   import CardButton from "@lib/components/CardButton.svelte"
   import Modal from "@lib/components/Modal.svelte"
@@ -36,18 +34,6 @@
         {/snippet}
       </CardButton>
     </Button>
-    <Link href="/spaces/create">
-      <CardButton>
-        {#snippet icon()}
-          <div><Icon icon={AddCircle} size={7} /></div>
-        {/snippet}
-        {#snippet title()}
-          <div>Create a space</div>
-        {/snippet}
-        {#snippet info()}
-          <div>Just a few questions and you'll be on your way.</div>
-        {/snippet}
-      </CardButton>
-    </Link>
+    <!-- beamhop: no-payments (space creation was the paid-hosting plan picker) -->
   </ModalBody>
 </Modal>

@@ -1,8 +1,7 @@
 <script lang="ts">
   import {groupBy, removeUndefined, uniq} from "@welshman/lib"
-  import {REACTION, ZAP_RECEIPT, sortEventsDesc, tagSpec, tagValue} from "@welshman/util"
+  import {REACTION, sortEventsDesc} from "@welshman/util" // beamhop: no-payments
   import type {TrustedEvent} from "@welshman/util"
-  import Bolt from "@assets/icons/bolt.svg?dataurl"
   import Reply from "@assets/icons/reply.svg?dataurl"
   import Button from "@lib/components/Button.svelte"
   import HomeNetworkReason from "@app/components/HomeNetworkReason.svelte"
@@ -39,15 +38,6 @@
 
   const reposts = $derived(interactions.filter(e => REPOST_KINDS.includes(e.kind)))
 
-  // A zap receipt is signed by the lnurl server, so the zapper is in the `P` tag.
-  const zappers = $derived(
-    uniq(
-      removeUndefined(
-        interactions.filter(e => e.kind === ZAP_RECEIPT).map(e => tagValue(tagSpec("P"), e.tags)),
-      ),
-    ),
-  )
-
   const repliers = $derived(uniq(replies.map(e => e.pubkey)))
 
   const reactors = $derived(uniq(reactions.map(e => e.pubkey)))
@@ -56,7 +46,7 @@
 
   const displays = $derived(
     deriveDisplaysByPubkey(
-      uniq(removeUndefined([...repliers, ...reactors, ...reposters, ...zappers, $note?.pubkey])),
+      uniq(removeUndefined([...repliers, ...reactors, ...reposters, $note?.pubkey])),
     ),
   )
 
@@ -71,7 +61,6 @@
       repliers.length > 0 ? "replies" : undefined,
       reactors.length > 0 ? "reactions" : undefined,
       reposters.length > 0 ? "reposts" : undefined,
-      zappers.length > 0 ? "zaps" : undefined,
     ]),
   )
 
@@ -158,12 +147,6 @@
         {@render separator("reposts")}
         <HomeNetworkReason>
           {@render names(reposters)} reposted this
-        </HomeNetworkReason>
-      {/if}
-      {#if zappers.length > 0}
-        {@render separator("zaps")}
-        <HomeNetworkReason icon={Bolt}>
-          {@render names(zappers)} zapped this
         </HomeNetworkReason>
       {/if}
     </div>

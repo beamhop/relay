@@ -67,8 +67,9 @@ const post = async (page: Page, content: string) => {
   await expect(message(page, content)).toBeVisible()
 }
 
-// RoomItem's hover actions are icons with no accessible names, in a fixed order: zap, emoji, reply, edit, menu.
-const replyToMessage = (page: Page, text: string) => messageActions(page, text).nth(2).click()
+// RoomItem's hover actions are icons with no accessible names, in a fixed order: emoji, reply, edit, menu.
+// beamhop: no-payments (no zap action, so reply moved from nth(2) to nth(1))
+const replyToMessage = (page: Page, text: string) => messageActions(page, text).nth(1).click()
 
 // Chromium's own notifications are invisible to a test, and a tab playwright drives is never hidden.
 const captureNotifications = async (page: Page) => {
@@ -669,7 +670,7 @@ test("US-145 choose what the notifications tab includes", async ({seed, as}) => 
   // Bob answered once and reacted once, and each button says so.
   await expect(filter("Replies")).toHaveAccessibleName("Replies 1")
   await expect(filter("Reactions")).toHaveAccessibleName("Reactions 1")
-  await expect(filter("Zaps")).toHaveAccessibleName("Zaps 0")
+  // beamhop: no-payments (no zap filter)
 
   await filter("Reactions").click()
 

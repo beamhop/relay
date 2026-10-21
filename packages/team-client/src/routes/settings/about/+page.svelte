@@ -6,9 +6,8 @@
   import Planet from "@assets/icons/planet.svg?dataurl"
   import Pen from "@assets/icons/pen.svg?dataurl"
   import HeadphonesRound from "@assets/icons/headphones-round.svg?dataurl"
-  import Zap from "@app/components/Zap.svelte"
   import ProfileDetail from "@app/components/ProfileDetail.svelte"
-  import {ENABLE_ZAPS, PLATFORM_NAME, PLATFORM_ABOUT} from "@app/core/env"
+  import {PLATFORM_NAME, PLATFORM_ABOUT} from "@app/core/env"
   import {pushModal} from "@app/ui/modal"
   import {makeSpacePath} from "@app/ui/routes"
 
@@ -17,21 +16,13 @@
   const pubkey = "97c70a44366a6535c145b333f973ea86dfdc2d7a99da618c40c64705ad98e322"
 
   const openProfile = () => pushModal(ProfileDetail, {pubkey})
-
-  const zap = () => pushModal(Zap, {pubkey})
 </script>
 
 <div class="flex flex-col gap-6 p-8 max-w-2xl h-screen justify-center m-auto">
   <p class="text-center text-2xl">Thanks for using</p>
   <h1 class="mb-4 text-center text-5xl font-bold uppercase">{PLATFORM_NAME}</h1>
   <div class="grid grid-cols-1 gap-8 lg:grid-cols-2">
-    {#if ENABLE_ZAPS}
-      <div class="card flex flex-col gap-2 text-center">
-        <h3 class="text-2xl sm:h-12">Donate</h3>
-        <p class="sm:h-16">Funds will be used to support development.</p>
-        <Button onclick={zap} class="button button-primary">Zap the Developer</Button>
-      </div>
-    {/if}
+    <!-- beamhop: no-payments (donation card removed) -->
     <div class="card flex flex-col gap-2 text-center">
       <h3 class="text-2xl sm:h-12">Get in touch</h3>
       <p class="sm:h-16">Having problems? Let us know.</p>

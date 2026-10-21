@@ -1,6 +1,5 @@
 <script lang="ts">
   import CalendarMinimalistic from "@assets/icons/calendar-minimalistic.svg?dataurl"
-  import StarFallMinimalistic from "@assets/icons/star-fall-minimalistic.svg?dataurl"
   import NotesMinimalistic from "@assets/icons/notes-minimalistic.svg?dataurl"
   import CaseMinimalistic from "@assets/icons/case-minimalistic.svg?dataurl"
   import GallerySend from "@assets/icons/gallery-send.svg?dataurl"
@@ -13,7 +12,6 @@
   import CalendarEventCreate from "@app/components/CalendarEventCreate.svelte"
   import ThreadCreate from "@app/components/ThreadCreate.svelte"
   import ClassifiedCreate from "@app/components/ClassifiedCreate.svelte"
-  import GoalCreate from "@app/components/GoalCreate.svelte"
   import PollCreate from "@app/components/PollCreate.svelte"
 
   type Props = {
@@ -24,8 +22,6 @@
   }
 
   const {url, h, onClick, uploadFiles}: Props = $props()
-
-  const createGoal = () => pushModal(GoalCreate, {url, h, shareToChat: true})
 
   const createCalendarEvent = () => pushModal(CalendarEventCreate, {url, h, shareToChat: true})
 
@@ -51,12 +47,7 @@
       Ask a Question
     </Button>
   </li>
-  <li>
-    <Button onclick={createGoal}>
-      <Icon size={4} icon={StarFallMinimalistic} />
-      Funding Goal
-    </Button>
-  </li>
+  <!-- beamhop: no-payments (no funding goals) -->
   <li>
     <Button onclick={createCalendarEvent}>
       <Icon size={4} icon={CalendarMinimalistic} />

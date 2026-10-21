@@ -1,8 +1,6 @@
 <script lang="ts">
   import type {Snippet} from "svelte"
   import UserCircle from "@assets/icons/user-circle.svg?dataurl"
-  import Wallet from "@assets/icons/wallet.svg?dataurl"
-  import ServerPath from "@assets/icons/server-path.svg?dataurl"
   import Code2 from "@assets/icons/code-2.svg?dataurl"
   import Exit from "@assets/icons/logout-3.svg?dataurl"
   import GalleryMinimalistic from "@assets/icons/gallery-minimalistic.svg?dataurl"
@@ -14,8 +12,6 @@
   import SecondaryNavItem from "@lib/components/SecondaryNavItem.svelte"
   import SecondaryNavSection from "@lib/components/SecondaryNavSection.svelte"
   import LogOut from "@app/components/LogOut.svelte"
-  import {ENABLE_ZAPS} from "@app/core/env"
-  import {HOSTING_ENABLED} from "@app/features/hosting"
   import {pushModal} from "@app/ui/modal"
 
   type Props = {
@@ -38,16 +34,7 @@
     <SecondaryNavItem href="/settings/alerts">
       <Icon icon={Bell} /> Alerts
     </SecondaryNavItem>
-    {#if ENABLE_ZAPS}
-      <SecondaryNavItem href="/settings/wallet">
-        <Icon icon={Wallet} /> Wallet
-      </SecondaryNavItem>
-    {/if}
-    {#if HOSTING_ENABLED}
-      <SecondaryNavItem href="/settings/hosting">
-        <Icon icon={ServerPath} /> Hosting
-      </SecondaryNavItem>
-    {/if}
+    <!-- beamhop: no-payments (wallet and hosting settings removed) -->
     <SecondaryNavItem href="/settings/content">
       <Icon icon={GalleryMinimalistic} /> Content
     </SecondaryNavItem>

@@ -3,12 +3,10 @@ import {base} from "$app/paths" // beamhop: base path
 import type {ClientOptions} from "@pomade/core"
 import type {Maybe} from "@welshman/lib"
 import {withGetter} from "@welshman/store"
-import type {Wallet} from "@welshman/util"
 import {User, nip01, nip07, nip46, nip55, pomade, toSession} from "@welshman/app"
 import type {Session} from "@welshman/app"
 import {getTestEvents, maybeGetTestSession} from "@lib/test/session"
 import {app, replaceApp} from "@app/core/app"
-import {wallet} from "@app/features/lightning"
 import {hasCachedIdentity, kv, ss, storage} from "@app/core/storage"
 import {deactivateCurrentPomadeSession} from "@app/core/pomade"
 import {Push} from "@app/features/push"
@@ -34,8 +32,7 @@ type LegacySession = {
   signer?: string
   email?: string
   clientOptions?: ClientOptions
-  handler?: {pubkey: string; relays: string[]}
-  wallet?: Wallet
+  handler?: {pubkey: string; relays: string[]} // beamhop: no-payments (legacy wallet ignored)
 }
 
 const toCurrentSession = (legacy: LegacySession): Session | undefined => {
@@ -67,10 +64,6 @@ const readLegacySession = async () => {
   const pubkey = await kv.get<string>("pubkey")
   const sessions = await ss.get<Record<string, LegacySession>>("sessions")
   const legacy = pubkey ? sessions?.[pubkey] : undefined
-
-  if (legacy?.wallet) {
-    wallet.set(legacy.wallet)
-  }
 
   return legacy ? toCurrentSession(legacy) : undefined
 }

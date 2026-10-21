@@ -1,7 +1,7 @@
 import {identity, uniq} from "@welshman/lib"
-import {CLASSIFIED, EVENT_TIME, LONG_FORM, THREAD, ZAP_GOAL} from "@welshman/util"
+import {CLASSIFIED, EVENT_TIME, LONG_FORM, THREAD} from "@welshman/util" // beamhop: no-payments
 import type {TrustedEvent} from "@welshman/util"
-import {Article, Classified, Thread, ZapGoal, displayPubkey} from "@welshman/domain"
+import {Article, Classified, Thread, displayPubkey} from "@welshman/domain"
 import {makeRoomKey} from "@welshman/app"
 import {decodePubkey} from "@lib/util"
 import {getEventTitle} from "@app/features/calendar"
@@ -14,7 +14,6 @@ import {decodeRelay} from "@app/core/relays"
 const staticTitles = new Map<string, string>([
   ["/home", "Home"],
   ["/spaces", "Spaces"],
-  ["/spaces/create", "Create a Space"],
   ["/spaces/[relay]", "Space"],
   ["/spaces/[relay]/chat", "Space Chat"],
   ["/spaces/[relay]/threads", "Threads"],
@@ -22,24 +21,20 @@ const staticTitles = new Map<string, string>([
   ["/spaces/[relay]/articles", "Articles"],
   ["/spaces/[relay]/articles/create", "Write an Article"],
   ["/spaces/[relay]/calendar", "Calendar"],
-  ["/spaces/[relay]/goals", "Goals"],
   ["/spaces/[relay]/polls", "Polls"],
-  ["/spaces/[relay]/admin", "Space Administration"],
   ["/chat", "Messages"],
   ["/join", "Join Space"],
   ["/settings/about", "About"],
   ["/settings/profile", "Profile Settings"],
   ["/settings/content", "Content Settings"],
   ["/settings/privacy", "Privacy Settings"],
-  ["/settings/hosting", "Hosting"],
   ["/settings/alerts", "Alert Settings"],
-  ["/settings/wallet", "Wallet Settings"],
+  // beamhop: no-payments (wallet, hosting, goals and space-create routes removed)
   ["/[bech32]", "Opening Link"],
 ])
 
 const contentFallbackTitles = new Map<string, string>([
   ["/spaces/[relay]/threads/[id]", "Thread"],
-  ["/spaces/[relay]/goals/[id]", "Goal"],
   ["/spaces/[relay]/calendar/[address]", "Event"],
   ["/spaces/[relay]/classifieds/[address]", "Listing"],
   ["/spaces/[relay]/articles/[address]", "Article"],
@@ -80,8 +75,6 @@ const getContentTitle = (event: TrustedEvent) => {
       return reader(Classified)(event).title()
     case LONG_FORM:
       return reader(Article)(event).title()
-    case ZAP_GOAL:
-      return event.content || reader(ZapGoal)(event).summary()
   }
 }
 

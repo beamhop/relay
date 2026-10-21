@@ -18,9 +18,8 @@
   import SpaceTrustRelay from "@app/components/SpaceTrustRelay.svelte"
   import SpaceJoin from "@app/components/SpaceJoin.svelte"
   import SpaceNotify from "@app/components/SpaceNotify.svelte"
-  import SpacePaymentGate from "@app/components/SpacePaymentGate.svelte"
   import SpaceRedirect from "@app/components/SpaceRedirect.svelte"
-  import {derivePaidGated, deriveRelayAuthError} from "@app/features/access"
+  import {deriveRelayAuthError} from "@app/features/access" // beamhop: no-payments
   import {user} from "@app/core/app"
   import {relays, roomLists} from "@app/core/plugins"
   import {userSpaceUrls} from "@app/features/rooms"
@@ -36,13 +35,9 @@
 
   const authError = deriveRelayAuthError(url)
 
-  const paidGated = derivePaidGated(url)
-
   const showAuthError = once(() =>
     pushModal(SpaceAuthError, {url, error: $authError}, {noEscape: true}),
   )
-
-  const showPaymentGate = once(() => pushModal(SpacePaymentGate, {url}, {noEscape: true}))
 
   const showPendingTrust = once(() => pushModal(SpaceTrustRelay, {url}, {noEscape: true}))
 
@@ -88,8 +83,6 @@
     if (redirectUrl && redirectUrl !== url && !redirectPrompted.has(url)) {
       redirectPrompted.add(url)
       pushModal(SpaceRedirect, {url, newUrl: redirectUrl})
-    } else if ($paidGated) {
-      showPaymentGate()
     } else if (!$userSpaceUrls.includes(url) && !joinPrompted.has(url)) {
       if (spacesLoaded) {
         joinPrompted.add(url)

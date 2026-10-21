@@ -75,7 +75,8 @@
     <p class="line-clamp-2 wrap-break-word font-bold leading-snug">{title}</p>
     {#if hasPrice}
       <p class="text-xl leading-none font-bold text-primary">
-        <CurrencySymbol code={price?.currency ?? "SAT"} />{price?.amount.toLocaleString()}
+        <!-- beamhop: no-payments (default currency was SAT) -->
+        <CurrencySymbol code={price?.currency ?? "USD"} />{price?.amount.toLocaleString()}
       </p>
     {/if}
     {#if summary}

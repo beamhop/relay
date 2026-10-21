@@ -4,8 +4,5 @@
   export let code
 </script>
 
-{#if code.match(/^sats?$/i)}
-  <span style="font-family: Satoshis; font-size: 1.2em;">!</span>
-{:else}
-  {getCurrencyOption(code).symbol}
-{/if}
+<!-- beamhop: no-payments (no sats symbol; unknown codes show the code) -->
+{getCurrencyOption(code).symbol}

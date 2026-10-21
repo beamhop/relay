@@ -25,25 +25,14 @@
     context: FeedContext
     noun: string
     showRoom?: boolean
-    showActivity?: boolean
-    hideZap?: boolean
+    showActivity?: boolean // beamhop: no-payments (hideZap prop removed)
     editForm?: EditForm
     labels?: Snippet
     status?: Snippet
   }
 
-  const {
-    url,
-    event,
-    context,
-    noun,
-    showRoom,
-    showActivity,
-    hideZap,
-    editForm,
-    labels,
-    status,
-  }: Props = $props()
+  const {url, event, context, noun, showRoom, showActivity, editForm, labels, status}: Props =
+    $props()
 
   const h = $derived(tagValue(tagSpec("h"), event.tags))
 
@@ -67,18 +56,11 @@
     <span class="h-6 w-px shrink-0 bg-line"></span>
   {/if}
   <PublicationStatusOrDeleted {event} {context} {status}>
-    <ReactionSummary
-      {url}
-      {event}
-      {context}
-      {deleteReaction}
-      {createReaction}
-      hideZaps={hideZap}
-      placement="left" />
+    <ReactionSummary {url} {event} {context} {deleteReaction} {createReaction} placement="left" />
     {#if showActivity}
       <EventActivity {event} {context} />
     {/if}
-    <EventActions {url} {event} {hideZap} {noun}>
+    <EventActions {url} {event} {noun}>
       {#snippet customActions()}
         {#if editForm && event.pubkey === $user.pubkey}
           <li>

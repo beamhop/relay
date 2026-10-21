@@ -90,11 +90,7 @@
             <span>Auth Required</span>
           </p>
         {/if}
-        {#if limitation?.payment_required}
-          <p class="badge badge-warning">
-            <span>Payment Required</span>
-          </p>
-        {/if}
+        <!-- beamhop: no-payments (no payment badge) -->
         {#if limitation?.min_pow_difficulty}
           <p class="badge badge-warning">
             <span>Min PoW: {limitation?.min_pow_difficulty}</span>

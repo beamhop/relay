@@ -1,24 +1,12 @@
 <script lang="ts">
   import cx from "classnames"
-  import {derived, readable} from "svelte/store"
+  import {derived} from "svelte/store"
   import type {Snippet} from "svelte"
   import type {Placement} from "tippy.js"
-  import {
-    displayList,
-    filter,
-    groupBy,
-    map,
-    removeUndefined,
-    spec,
-    sum,
-    uniq,
-    uniqBy,
-  } from "@welshman/lib"
-  import {REPORT, REACTION, ZAP_RECEIPT, fromMsats, matchTag, tagSpec} from "@welshman/util"
+  import {displayList, filter, groupBy, map, spec, uniq, uniqBy} from "@welshman/lib"
+  import {REPORT, REACTION, matchTag, tagSpec} from "@welshman/util" // beamhop: no-payments
   import type {TrustedEvent, EventContent} from "@welshman/util"
   import {getEmojis} from "@welshman/domain"
-  import type {Zap} from "@welshman/domain"
-  import {Zappers} from "@welshman/app"
   import {isMobile, stopPropagation} from "@lib/html"
   import Danger from "@assets/icons/danger-triangle.svg?dataurl"
   import Icon from "@lib/components/Icon.svelte"
@@ -27,8 +15,7 @@
   import Reaction from "@app/components/Reaction.svelte"
   import ReportDetails from "@app/components/ReportDetails.svelte"
   import ProfileList from "@app/components/ProfileList.svelte"
-  import ZapModal from "@app/components/Zap.svelte"
-  import {app, user} from "@app/core/app"
+  import {user} from "@app/core/app"
   import type {FeedContext} from "@app/features/feeds"
   import {deriveSpacePermissions} from "@app/core/management"
   import {pushModal} from "@app/ui/modal"
@@ -40,7 +27,6 @@
     createReaction: (event: EventContent) => void
     url?: string
     placement?: Placement
-    hideZaps?: boolean
     noTooltip?: boolean
     innerEvent?: TrustedEvent
     context: FeedContext
@@ -53,7 +39,6 @@
     createReaction,
     url,
     placement = "top",
-    hideZaps = false,
     noTooltip = false,
     innerEvent = undefined,
     context,
@@ -68,27 +53,8 @@
 
   const reports = derived(ownRelated, $ownRelated => filter(spec({kind: REPORT}), $ownRelated))
   const reactions = derived(related, $related => filter(spec({kind: REACTION}), $related))
-  const receipts = derived(related, $related => filter(spec({kind: ZAP_RECEIPT}), $related))
-
-  // Validating each zapper's lnurl is wasted where zaps aren't shown.
-  const zaps = hideZaps
-    ? readable<Zap[]>([])
-    : derived<typeof receipts, Zap[]>(
-        receipts,
-        ($receipts, set) =>
-          derived(
-            removeUndefined([event, innerEvent]).map(
-              parent =>
-                $app.use(Zappers).validZapReceipts($receipts, parent, removeUndefined([url])).$,
-            ),
-            (zapsByParent: Zap[][]) => uniqBy(zap => zap.response.id, zapsByParent.flat()),
-          ).subscribe(set),
-        [],
-      )
-
-  const reactorPubkeys = $derived(
-    uniq([...$reactions.map(e => e.pubkey), ...$zaps.map(zap => zap.request.pubkey)]),
-  )
+  // beamhop: no-payments (zap receipts are not summarized)
+  const reactorPubkeys = $derived(uniq($reactions.map(e => e.pubkey)))
 
   const displays = $derived(deriveDisplaysByPubkey(reactorPubkeys, url))
 
@@ -122,14 +88,6 @@
     }
   }
 
-  const onZapClick = (pubkeys: string[], info: string) => {
-    if (isMobile) {
-      showReactors(pubkeys, info.replace(" zapped", ""), "Zapped this message")
-    } else {
-      pushModal(ZapModal, {url, pubkey: event.pubkey, event})
-    }
-  }
-
   const permissions = deriveSpacePermissions(url)
 
   const onReportClick = () => pushModal(ReportDetails, {url, event})
@@ -152,12 +110,10 @@
     ),
   )
 
-  const groupedZaps = $derived(groupBy(e => getReactionKey(e.request), $zaps.values()))
-
   const tooltipContent = (text: string) => (noTooltip || isMobile ? "" : text)
 </script>
 
-{#if $reactions.length > 0 || (!hideZaps && $zaps.length > 0) || $reports.length > 0 || children}
+{#if $reactions.length > 0 || $reports.length > 0 || children}
   <div class="flex min-w-0 flex-wrap gap-2">
     {#if url && $reports.length > 0 && $permissions.deleteContent}
       <Tooltip
@@ -173,30 +129,6 @@
           <span>{$reports.length}</span>
         </Button>
       </Tooltip>
-    {/if}
-    {#if !hideZaps}
-      {#each groupedZaps.entries() as [key, zaps] (key)}
-        {@const amount = fromMsats(sum(zaps.map(zap => zap.invoiceAmount)))}
-        {@const pubkeys = uniq(zaps.map(zap => zap.request.pubkey))}
-        {@const isOwn = pubkeys.includes($user.pubkey)}
-        {@const info = displayList(pubkeys.map(pubkey => $displays.get(pubkey) ?? ""))}
-        {@const tooltip = `${info} zapped`}
-        {@const onZapClickHandler = () => onZapClick(pubkeys, tooltip)}
-        <Tooltip content={tooltipContent(tooltip)} {placement} class="flex">
-          <Button
-            class={cx(
-              "button button-xs flex-inline flex items-center gap-1 rounded-full text-xs font-normal",
-              {
-                "button-primary": isOwn,
-                "button-neutral": !isOwn,
-              },
-            )}
-            onclick={stopPropagation(onZapClickHandler)}>
-            <Reaction event={zaps[0].request} />
-            <span>{amount}</span>
-          </Button>
-        </Tooltip>
-      {/each}
     {/if}
     {#each groupedReactions.entries() as [key, events] (key)}
       {@const pubkeys = events.map(e => e.pubkey)}

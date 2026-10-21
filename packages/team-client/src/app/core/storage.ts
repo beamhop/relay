@@ -50,9 +50,9 @@ import {
 import type {Handle, TrustedEvent} from "@welshman/util"
 import {withGetter} from "@welshman/store"
 import type {RepositoryUpdate, WrapItem} from "@welshman/net"
-import {Relay, Zapper} from "@welshman/domain"
-import type {RelayInfo, ZapperValues} from "@welshman/domain"
-import {Handles, Plaintext, Relays, RelayStats, User, Zappers} from "@welshman/app"
+import {Relay} from "@welshman/domain"
+import type {RelayInfo} from "@welshman/domain"
+import {Handles, Plaintext, Relays, RelayStats, User} from "@welshman/app"
 import type {AppPolicy, IApp, MapPlugin, RelayStatsItem} from "@welshman/app"
 import {IDB} from "@lib/indexeddb"
 import {appPolicies} from "@app/core/app"
@@ -150,7 +150,7 @@ const TABLES = [
   {name: "relays", keyPath: "url"},
   {name: "relayStats", keyPath: "url"},
   {name: "handles", keyPath: "nip05"},
-  {name: "zappers", keyPath: "lnurl"},
+  {name: "zappers", keyPath: "lnurl"}, // beamhop: no-payments (unused; kept so the IndexedDB schema is unchanged)
   {name: "plaintext", keyPath: "key"},
   {name: "wrapManager", keyPath: "id"},
 ]
@@ -287,7 +287,7 @@ class Storage {
 
     defer(this.initRelayStats)
     defer(this.initHandles)
-    defer(this.initZappers)
+    // beamhop: no-payments (zap recipient cache not persisted)
     defer(this.initPlaintext)
     defer(this.initWrapManager)
   }
@@ -477,16 +477,6 @@ class Storage {
       this.app.use(Handles),
       (row: Handle) => [row.nip05, row],
       (_nip05, handle) => handle,
-    )
-
-  // Validation is meaningless without pubkey and nostrPubkey, and rows cached before they were required lack them.
-  private initZappers = () =>
-    this.persistMapPlugin(
-      "zappers",
-      this.app.use(Zappers),
-      (row: ZapperValues) =>
-        row.pubkey && row.nostrPubkey ? [row.lnurl, new Zapper(row)] : undefined,
-      (_lnurl, zapper) => ({...zapper}),
     )
 
   private initPlaintext = () =>

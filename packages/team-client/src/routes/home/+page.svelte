@@ -10,9 +10,7 @@
   import HomeInbox from "@app/components/HomeInbox.svelte"
   import HomeNetwork from "@app/components/HomeNetwork.svelte"
   import HomeHealthChecks from "@app/components/HomeHealthChecks.svelte"
-  import HomeHosting from "@app/components/HomeHosting.svelte"
   import {goToSpace} from "@app/ui/routes"
-  import {HOSTING_ENABLED} from "@app/features/hosting"
   import {PLATFORM_RELAYS} from "@app/core/env"
 
   let element: Element | undefined = $state()
@@ -45,9 +43,7 @@
         </div>
         <div class="contents @3xl:flex @3xl:w-80 @3xl:shrink-0 @3xl:flex-col @3xl:gap-3">
           <HomeHealthChecks class="@max-3xl:hidden" />
-          {#if HOSTING_ENABLED}
-            <HomeHosting class="@max-3xl:hidden" />
-          {/if}
+          <!-- beamhop: no-payments (hosting card removed) -->
         </div>
       </div>
     </div>

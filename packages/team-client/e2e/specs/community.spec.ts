@@ -1,27 +1,10 @@
 import * as nip19 from "nostr-tools/nip19"
-import {DAY, HOUR, MINUTE, bech32ToHex, int} from "@welshman/lib"
-import {
-  MESSAGE,
-  POLL_RESPONSE,
-  getAddress,
-  getLnUrl,
-  tagSpec,
-  tagValues,
-  toMsats,
-} from "@welshman/util"
+// beamhop: no-payments (funding goal test US-050 removed)
+import {DAY, HOUR, MINUTE, int} from "@welshman/lib"
+import {MESSAGE, POLL_RESPONSE, getAddress, tagSpec, tagValues} from "@welshman/util"
 import type {SignedEvent} from "@welshman/util"
 import {ClientMessageType} from "@welshman/net"
-import {
-  Pin,
-  Pinboard,
-  Poll,
-  PollResponse,
-  Profile,
-  TimeEvent,
-  ZapGoal,
-  ZapReceipt,
-  ZapRequest,
-} from "@welshman/domain"
+import {Pin, Pinboard, Poll, PollResponse, TimeEvent} from "@welshman/domain"
 import type {Locator, Page} from "@playwright/test"
 import {
   GIF,
@@ -31,9 +14,7 @@ import {
   expect,
   getTranscript,
   longDate,
-  makeTestUser,
   menuButton,
-  mockDufflepud,
   modalForm,
   noteEditor,
   pickEmoji,
@@ -350,116 +331,6 @@ test("US-049 a closed poll shows final results only", async ({seed, as}) => {
   // The votes already cast still count, and there is nothing left to vote with.
   await expect(pollOption(page, "Blue")).toContainText("2 votes")
   await expect(page.locator("input[type=radio]")).toHaveCount(0)
-})
-
-test("US-050 create a funding goal and track its progress", async ({seed, as}) => {
-  // A receipt is only counted once the lnurl endpoint answers with the zapper that signed it.
-  const lud16 = "bob@zap.test"
-  const lnurl = getLnUrl(lud16)!
-  // A zap receipt is signed by the recipient's lightning provider rather than by either party.
-  const provider = makeTestUser("zapper")
-
-  let soundproofing!: Seeded
-
-  const scenario = await seed(({relay, user, at}) => {
-    const space = relay("space")
-
-    space.room("general", {name: "General"})
-    space.join(user.alice, "general")
-    space.join(user.bob, "general")
-    space.member(provider)
-    space.profile(user.alice, {name: "Alice Anderson"})
-    space.event(user.bob, () =>
-      space.kind(Profile).writer().update({name: "Bob Barker", lud16}).renderTemplate(),
-    )
-
-    soundproofing = space.event(
-      user.bob,
-      () =>
-        space
-          .kind(ZapGoal)
-          .writer()
-          .setTitle("Soundproofing")
-          .setSummary("The neighbours have opinions about band practice.")
-          .setAmount(toMsats(20000))
-          .setUrls([space.url])
-          .renderTemplate(),
-      at(30, HOUR),
-    )
-
-    // A receipt whose invoice disagrees with the amount its request asked for is thrown away.
-    const contribute = (from: TestUser, sats: number, createdAt: number) =>
-      space.event(
-        provider,
-        async () => {
-          const request = await from.signer.sign({
-            ...(await space
-              .kind(ZapRequest)
-              .writer()
-              .setAmount(toMsats(sats))
-              .setLnurl(lnurl)
-              .setRecipient(user.bob.pubkey)
-              .setEvent(soundproofing.event)
-              .renderTemplate()),
-            created_at: createdAt,
-          })
-
-          // What was paid is read out of the invoice's human-readable part, where an `n` is a tenth of a sat.
-          return space
-            .kind(ZapReceipt)
-            .writer()
-            .setBolt11(`lnbc${sats * 10}n1p${from.name}`)
-            .setDescription(JSON.stringify(request))
-            .setRecipient(user.bob.pubkey)
-            .setEventId(soundproofing.id)
-            .renderTemplate()
-        },
-        createdAt,
-      )
-
-    contribute(user.alice, 1000, at(20, HOUR))
-    contribute(user.carol, 500, at(10, HOUR))
-  })
-
-  const {url} = scenario.space("space")
-  const page = await as(users.alice, `${spacePath(url)}/goals`)
-
-  await page.getByRole("button", {name: "Create", exact: true}).click()
-
-  const composer = modalForm(page, "Create a Funding Goal")
-
-  await composer.getByPlaceholder("What do funds go towards?").fill("Repair the roof")
-  await noteEditor(composer).pressSequentially("Three tiles came off in the storm.")
-  await composer.locator('input[type="number"]').fill("5000")
-  await composer.getByRole("button", {name: "Create Goal"}).click()
-
-  await expect(page.getByRole("heading", {name: "Create a Funding Goal"})).toHaveCount(0)
-
-  const roof = page.getByRole("link").filter({hasText: "Repair the roof"})
-
-  await expect(roof).toBeVisible()
-
-  await openCard(roof, "Repair the roof")
-
-  // Amounts are localized, so the thousands separator is the environment's to decide.
-  await expect(page.locator(".card.z-feature").filter({hasText: /of 5,?000 sats/})).toBeVisible()
-
-  // Registered after the page opened, so it answers ahead of the empty dufflepud `as()` installs.
-  await mockDufflepud(page.context(), {
-    zappers: [
-      {
-        lnurl: bech32ToHex(lnurl),
-        info: {pubkey: users.bob.pubkey, nostrPubkey: provider.pubkey, allowsNostr: true},
-      },
-    ],
-  })
-
-  await page.goto(`${spacePath(url)}/goals/${soundproofing.id}`)
-
-  const soundCard = page.locator(".card.z-feature").filter({hasText: /of 20,?000 sats/})
-
-  await expect(soundCard.getByText(/^1,?500$/)).toBeVisible()
-  await expect(soundCard.getByText("backers", {exact: true}).locator("xpath=..")).toContainText("2")
 })
 
 test("US-051 post, edit, and close out a classified listing", async ({seed, as}) => {
