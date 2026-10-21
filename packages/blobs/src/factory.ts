@@ -14,7 +14,9 @@ export type BlobStoreFactoryOptions = BeamhopConfig['blobStorage'] & {
 export async function createBlobStore(opts: BlobStoreFactoryOptions): Promise<BlobStore> {
   switch (opts.driver) {
     case 'fs': {
-      const { FsBlobStore } = await import('./fs.ts');
+      // Variable specifier keeps Workers bundlers from pulling in `node:fs`.
+      const fsModule = './fs.ts';
+      const { FsBlobStore } = (await import(fsModule)) as typeof import('./fs.ts');
       return new FsBlobStore(opts.path ?? `${opts.dataDir.replace(/\/$/, '')}/blobs`);
     }
     case 's3':
