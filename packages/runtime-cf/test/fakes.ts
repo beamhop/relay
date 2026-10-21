@@ -203,6 +203,16 @@ export function testRelayModule(probe: TestRelayProbe): BeamhopModule {
               st(conn).subs.set(id, filters);
               conn.send(JSON.stringify(['EOSE', id]));
             });
+          } else if (msg[0] === 'CLOSE') {
+            // Like the relay engine: drop the sub once earlier work on the
+            // connection's chain is done (a macrotask later) and write the state
+            // back, without sending any frame.
+            const id = String(msg[1]);
+            setTimeout(() => {
+              const s = st(conn);
+              s.subs.delete(id);
+              conn.state.set(NS, s);
+            }, 0);
           } else if (msg[0] === 'AUTH') {
             conn.authed.add(String(msg[1]));
             conn.send(JSON.stringify(['OK', 'auth', true, '']));

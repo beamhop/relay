@@ -86,6 +86,32 @@ export function decodeState(encoded: string | undefined | null): Map<string, unk
 
 const utf8 = new TextEncoder();
 
+/**
+ * `conn.state` that reports writes. Handlers may change state without sending
+ * a frame (e.g. the relay engine on CLOSE / NEG-CLOSE, possibly after earlier
+ * messages on its per-connection chain finished); every `set`/`delete`/`clear`
+ * marks the connection dirty so the change is persisted before the object can
+ * hibernate and a closed subscription is never resurrected.
+ */
+export class ObservedStateMap extends Map<string, unknown> {
+  onChange?: () => void;
+  override set(key: string, value: unknown): this {
+    super.set(key, value);
+    this.onChange?.();
+    return this;
+  }
+  override delete(key: string): boolean {
+    const had = super.delete(key);
+    if (had) this.onChange?.();
+    return had;
+  }
+  override clear(): void {
+    const had = this.size > 0;
+    super.clear();
+    if (had) this.onChange?.();
+  }
+}
+
 export class HibernatableConnection implements Connection {
   readonly id: string;
   readonly relayId: RelayId;
@@ -114,7 +140,11 @@ export class HibernatableConnection implements Connection {
     this.openedAt = meta.openedAt;
     this.challenge = meta.challenge;
     this.authed = new Set(restored?.authed ?? []);
-    this.state = restored?.state ?? new Map();
+    const state = new ObservedStateMap(restored?.state ?? []);
+    state.onChange = () => {
+      if (!this.closed) this.onActivity?.(this);
+    };
+    this.state = state;
     this.ext = restored?.ext ?? false;
   }
 

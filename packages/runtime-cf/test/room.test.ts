@@ -92,6 +92,30 @@ describe('RelayRoom hibernation', () => {
     expect(att.state).toContain('s1');
   });
 
+  test('CLOSE persists state so hibernation does not resurrect the subscription', async () => {
+    const ctx = setup();
+    const a = await connect(ctx);
+    await a.room.webSocketMessage(a.ws, JSON.stringify(['REQ', 'gone', { kinds: [1] }]));
+    await tick();
+    await a.room.core.flush();
+    expect((a.ws.deserializeAttachment() as { state: string }).state).toContain('gone');
+
+    // The message-level flush runs before the handler's async CLOSE work lands.
+    await a.room.webSocketMessage(a.ws, JSON.stringify(['CLOSE', 'gone']));
+    await a.room.core.flush();
+    await tick();
+    // The state write itself marked the connection dirty (no frame was sent).
+    await a.room.core.flush();
+    expect((a.ws.deserializeAttachment() as { state: string }).state).not.toContain('gone');
+
+    ctx.ns.hibernate(a.name);
+    const woke = ctx.ns.instance(a.name);
+    await woke.core.ready;
+    const conn = [...woke.core.conns.values()][0] as HibernatableConnection;
+    const subs = (conn.state.get('test-relay') as { subs: Map<string, unknown> }).subs;
+    expect([...subs.keys()]).toEqual([]);
+  });
+
   test('cross-shard fan-out delivers events to the other shard', async () => {
     const ctx = setup({ env: { RELAY_SHARDS: '2' } });
     const sockets: Array<{ name: string; ws: FakeWebSocket }> = [];
