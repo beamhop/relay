@@ -2,6 +2,7 @@
 // Bun runtime: server, WebSocket, adapters wiring, TLS/ACME, single binary
 export * from './assets.ts';
 export * from './config.ts';
+export * from './config-writeback.ts';
 export * from './connection.ts';
 export * from './modules.ts';
 export * from './ports.ts';

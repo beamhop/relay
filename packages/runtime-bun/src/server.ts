@@ -28,6 +28,7 @@ import {
 } from '@beamhop/core';
 import type { Server } from 'bun';
 import { type AssetServer, createAssetServer } from './assets.ts';
+import { installConfigWriteBack } from './config-writeback.ts';
 import { type DataLayout, ensureDataDir, parseListen, withDataDirDefaults } from './config.ts';
 import { BunConnection, type WsData } from './connection.ts';
 import { optionalModuleSources } from './modules.ts';
@@ -90,6 +91,13 @@ export interface StartServerOptions {
   print?: (line: string) => void;
   /** Config file applied at boot; offered to `admin.config` as a new revision. */
   bootFile?: string;
+  /**
+   * Write settings changed in the admin app back to `bootFile` (GitOps, §3.4).
+   * Default true; off in safe mode.
+   */
+  configWriteBack?: boolean;
+  /** Config paths set by env vars / CLI flags; never written back to `bootFile`. */
+  overridePaths?: string[][];
   tls?: {
     publicIps?: () => string[];
     acmeBackend?: AcmeBackend;
@@ -276,6 +284,21 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       await svc?.adoptBootConfig?.(bootConfig, { source: 'file', path: opts.bootFile });
     } catch (err) {
       logger.log('error', 'could not record config file as a new revision', { err });
+    }
+  }
+  if (opts.bootFile) {
+    if (safe) {
+      logger.log('info', 'safe mode: app changes are not written to the settings file', {});
+    } else if (opts.configWriteBack === false) {
+      logger.log('info', 'writing app changes to the settings file is off', {
+        file: opts.bootFile,
+      });
+    } else {
+      installConfigWriteBack(kernel, {
+        path: opts.bootFile,
+        overridePaths: opts.overridePaths,
+        logger: logger.child({ component: 'config-file' }),
+      });
     }
   }
 

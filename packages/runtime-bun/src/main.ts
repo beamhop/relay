@@ -20,10 +20,15 @@ Usage: beamhop-server [options]
       --data-dir <dir>  Where Beamhop keeps its data (default: ./data)
       --listen <addr>   Address to listen on, e.g. 0.0.0.0:3334
       --safe            Start with plugins off and the last known good settings
+      --no-config-writeback
+                        Don't write changes made in the admin app back to the
+                        settings file (also BEAMHOP_CONFIG_WRITEBACK=false)
   -h, --help            Show this help
   -v, --version         Show the version
 
 Environment: BEAMHOP_* variables (e.g. BEAMHOP_NODE__TRUST_PROXY=true, BEAMHOP_DOMAIN=relay.example.com).
+The settings file may use \${VAR} or \${VAR:-default}; these references are kept when
+changes made in the admin app are written back to it.
 `;
 
 async function healthcheck(listen = '127.0.0.1:3334'): Promise<boolean> {
@@ -89,6 +94,8 @@ export async function main(
     logger,
     safe: args.safe,
     bootFile: loaded.file,
+    configWriteBack: args.configWriteBack,
+    overridePaths: loaded.overridePaths,
     pwaDir: env.BEAMHOP_PWA_DIR ?? (existsSync(devPwa) ? devPwa : undefined),
     teamDir: env.BEAMHOP_TEAM_DIR ?? (existsSync(devTeam) ? devTeam : undefined),
     tls: env.BEAMHOP_ACME_HTTP_PORT ? { httpPort: Number(env.BEAMHOP_ACME_HTTP_PORT) } : undefined,

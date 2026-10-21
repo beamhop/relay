@@ -12,6 +12,7 @@ export type Env = Record<string, string | undefined>;
 /** Env vars with a dedicated meaning that are not mapped into the config tree. */
 const RESERVED_ENV = new Set([
   'BEAMHOP_CONFIG',
+  'BEAMHOP_CONFIG_WRITEBACK',
   'BEAMHOP_SAFE',
   'BEAMHOP_PWA_DIR',
   'BEAMHOP_TEAM_DIR',
@@ -100,10 +101,18 @@ export interface BootArgs {
   /** Probe the local /healthz and exit 0/1 (Docker HEALTHCHECK; no shell needed). */
   healthcheck: boolean;
   listen?: string;
+  /** Write admin-app changes back to the settings file (default on; `--no-config-writeback`). */
+  configWriteBack: boolean;
 }
 
 export function parseArgs(argv: string[], env: Env = {}): BootArgs {
-  const args: BootArgs = { safe: false, help: false, version: false, healthcheck: false };
+  const args: BootArgs = {
+    safe: false,
+    help: false,
+    version: false,
+    healthcheck: false,
+    configWriteBack: !/^(0|false|no|off)$/i.test(env.BEAMHOP_CONFIG_WRITEBACK ?? ''),
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
     const [flag, inline] = a.includes('=')
@@ -135,6 +144,9 @@ export function parseArgs(argv: string[], env: Env = {}): BootArgs {
       case '--healthcheck':
         args.healthcheck = true;
         break;
+      case '--no-config-writeback':
+        args.configWriteBack = false;
+        break;
     }
   }
   if (!args.safe && /^(1|true|yes)$/i.test(env.BEAMHOP_SAFE ?? '')) args.safe = true;
@@ -149,6 +161,11 @@ export interface LoadedConfig {
   fileConfig?: Record<string, unknown>;
   /** Top-level config keys contributed by env. */
   envKeys: string[];
+  /**
+   * Config paths whose value comes from env vars or CLI flags rather than the file
+   * (arrays are whole paths). The settings-file write-back never writes these.
+   */
+  overridePaths: string[][];
   /** True when no relays were configured and a default catch-all relay was added. */
   defaultRelay: boolean;
 }
@@ -159,13 +176,67 @@ export interface LoadConfigOptions {
   cwd?: string;
 }
 
-export function readYamlFile(path: string): Record<string, unknown> {
+const ENV_REF = /\$\$\{|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/g;
+
+/**
+ * Resolve `${VAR}` / `${VAR:-default}` references in string values (`$${` is a literal `${`).
+ * A value that is exactly one reference is typed like a `BEAMHOP_*` env value (numbers,
+ * booleans, JSON). The file itself keeps the reference (see the settings-file write-back).
+ */
+export function interpolateEnv(value: unknown, env: Env, where = 'beamhop.yaml'): unknown {
+  if (typeof value === 'string') {
+    if (!value.includes('${')) return value;
+    let whole = false;
+    const out = value.replace(
+      ENV_REF,
+      (m, name: string | undefined, def: string | undefined, offset: number) => {
+        if (m === '$${') return '${';
+        whole = offset === 0 && m.length === value.length;
+        const v = env[name as string];
+        if (v !== undefined && (v !== '' || def === undefined)) return v;
+        if (def !== undefined) return def;
+        throw new Error(
+          `${where}: uses \${${name}} but the environment variable ${name} is not set`,
+        );
+      },
+    );
+    return whole ? parseEnvValue(out) : out;
+  }
+  if (Array.isArray(value)) return value.map((v) => interpolateEnv(v, env, where));
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = interpolateEnv(v, env, where);
+    return out;
+  }
+  return value;
+}
+
+/** Read a YAML settings file; with `env`, `${VAR}` references are resolved. */
+export function readYamlFile(path: string, env?: Env): Record<string, unknown> {
   const text = readFileSync(path, 'utf8');
   const parsed = text.trim() ? Bun.YAML.parse(text) : {};
   if (parsed !== null && !isPlainObject(parsed)) {
     throw new Error(`${path}: expected a YAML mapping at the top level`);
   }
-  return (parsed ?? {}) as Record<string, unknown>;
+  const obj = (parsed ?? {}) as Record<string, unknown>;
+  return env ? (interpolateEnv(obj, env, path) as Record<string, unknown>) : obj;
+}
+
+/** Leaf paths of a plain-object tree (arrays count as leaves). */
+function leafPaths(obj: unknown, prefix: string[] = [], out: string[][] = []): string[][] {
+  if (isPlainObject(obj) && (prefix.length === 0 || Object.keys(obj).length > 0)) {
+    for (const [k, v] of Object.entries(obj)) leafPaths(v, [...prefix, k], out);
+  } else if (prefix.length > 0) out.push(prefix);
+  return out;
+}
+
+function hasPath(obj: unknown, path: string[]): boolean {
+  let cur = obj;
+  for (const k of path) {
+    if (!isPlainObject(cur) || !(k in cur)) return false;
+    cur = cur[k];
+  }
+  return true;
 }
 
 /** Locate beamhop.yaml: --config, BEAMHOP_CONFIG, ./beamhop.yaml, <dataDir>/beamhop.yaml. */
@@ -198,7 +269,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   if (args.dataDir) setPath(fromEnv, ['node', 'dataDir'], args.dataDir);
   const envNode = (fromEnv.node ?? {}) as { dataDir?: string };
   const file = findConfigFile(args, env, cwd, envNode.dataDir ?? './data');
-  const fileConfig = file ? readYamlFile(file) : undefined;
+  const fileConfig = file ? readYamlFile(file, env) : undefined;
 
   let merged = deepMerge(fromEnv, fileConfig ?? {}) as Record<string, unknown>;
   // CLI flags are explicit operator intent for this boot only.
@@ -212,6 +283,10 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     defaultRelay = true;
   }
 
+  const overridePaths = leafPaths(fromEnv).filter((p) => !hasPath(fileConfig, p));
+  if (args.listen) overridePaths.push(['node', 'listen']);
+  if (args.dataDir) overridePaths.push(['node', 'dataDir']);
+
   const config = parseConfig(merged);
   const dataDir = isAbsolute(config.node.dataDir)
     ? config.node.dataDir
@@ -221,6 +296,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     file,
     fileConfig,
     envKeys: Object.keys(fromEnv),
+    overridePaths,
     defaultRelay,
   };
 }
