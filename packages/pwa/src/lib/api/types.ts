@@ -162,6 +162,8 @@ export interface AttentionCard {
   count: number;
   items?: AttentionCard[];
   primaryAllowed?: boolean;
+  /** False for informational cards: nothing to approve. */
+  approvable?: boolean;
 }
 
 export interface ConfigProposal {
@@ -326,6 +328,80 @@ export interface LimitExplanation {
   technical: string;
   source: string;
   goal?: keyof Goals;
+}
+
+/** `plugins.catalog` item (subset). */
+export interface PluginCatalogItem {
+  id: string;
+  name?: string;
+  version: string;
+  description?: string;
+  permissions: string[];
+  permissionText?: string[];
+  builtin?: boolean;
+  installed: boolean;
+  enabled: boolean;
+  compatible?: boolean;
+  minBeamhop?: string;
+  /** JSON Schema of the plugin settings, when the server publishes it. */
+  configSchema?: JsonSchema;
+}
+
+/** `plugins.status` row (subset). */
+export interface PluginStatusRow {
+  id: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  status: 'loading' | 'running' | 'error' | 'disabled' | 'tripped';
+  mode?: 'in-process' | 'sandbox';
+  permissions: string[];
+  error?: string;
+  tripped?: { reason: string; at: number };
+  config?: Record<string, unknown>;
+  configSchema?: JsonSchema;
+  stats: {
+    calls: number;
+    rejections: number;
+    errors: number;
+    timeouts: number;
+    p95Ms: number;
+    avgMs: number;
+    lastError?: string;
+  };
+}
+
+/** `media.usage-summary` output. */
+export interface UsageSummary {
+  totalUsedBytes: number;
+  people: number;
+  nearQuota: number;
+  overQuota: number;
+  largest: Array<{
+    pubkey: string;
+    usedBytes: number;
+    quotaBytes?: number | null;
+    files?: number;
+    overQuota?: boolean;
+  }>;
+}
+
+/** `experience.test-relay` step. */
+export interface TestStep {
+  id: string;
+  title: string;
+  status: 'pass' | 'fail' | 'warn' | 'skip';
+  message: string;
+  technical?: string;
+  ms?: number;
+}
+
+/** `experience.test-relay` output. */
+export interface TestRelayReport {
+  ok: boolean;
+  summary: string;
+  needsDomain?: boolean;
+  steps?: TestStep[];
 }
 
 export interface LiveMessage {

@@ -95,15 +95,33 @@ export function showsOutput(output: unknown): boolean {
   return !!output && typeof output === 'object' && SHOW_KEYS.some((k) => k in (output as object));
 }
 
+/** Actions that need the address this app is served from (relay tests, launch kit, company sign-in). */
+const NEEDS_ORIGIN = new Set([
+  'experience.test-relay',
+  'experience.launch-kit',
+  'enterprise.connect-idp',
+]);
+
+/** Add context the server cannot know by itself (the public origin the admin uses). */
+export function withContext(
+  actionId: string,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!NEEDS_ORIGIN.has(actionId) || input.baseUrl !== undefined || typeof location === 'undefined')
+    return input;
+  return { ...input, baseUrl: location.origin };
+}
+
 class ActionFlow {
   current = $state<FlowState | null>(null);
 
   /** Start a flow. `form`: show the generated input form first. */
   async start(
     action: CatalogAction,
-    input: Record<string, unknown> = {},
+    raw: Record<string, unknown> = {},
     opts: { form?: boolean; onDone?: (r: RunResult) => void; onUndo?: () => void } = {},
   ): Promise<void> {
+    const input = withContext(action.id, raw);
     const st: FlowState = { action, input, phase: 'form', diff: [], error: null, result: null };
     if (opts.onDone) st.onDone = opts.onDone;
     if (opts.onUndo) st.onUndo = opts.onUndo;
@@ -114,7 +132,7 @@ class ActionFlow {
   async preview(input: Record<string, unknown>): Promise<void> {
     const cur = this.current;
     if (!cur) return;
-    cur.input = input;
+    cur.input = withContext(cur.action.id, input);
     cur.error = null;
     if (cur.action.readOnly) {
       await this.confirm();

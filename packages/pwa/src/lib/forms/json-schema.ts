@@ -42,6 +42,21 @@ export interface FieldSpec {
   pattern?: string;
   format?: string;
   children?: FieldSpec[];
+  /** `x-example`: an example value or sentence for the ⓘ sheet. */
+  example?: string;
+  /** `x-recommended`: the value we recommend and why. */
+  recommended?: { value: unknown; why?: string };
+  /** `x-showWhen`: only show this field when another setting has a value. */
+  showWhen?: ShowWhen;
+  /** `x-technical`: technical note shown under the lens. */
+  technicalNote?: string;
+}
+
+export interface ShowWhen {
+  /** Dotted path of the other setting (relative to the document, a sibling, or a suffix). */
+  path: string;
+  /** Value (or list of values) that makes this field visible. */
+  equals: unknown;
 }
 
 const SECRET = /secret|password|apikey|api_key|privatekey|nsec|token|webhookurl|smtpurl/i;
@@ -158,7 +173,11 @@ export function fieldFromSchema(
   const field: Partial<FieldSpec> = {};
   if (s.enum?.every((v) => typeof v === 'string')) {
     kind = 'enum';
-    field.options = (s.enum as string[]).map((v) => ({ value: v, label: labelFromKey(v) }));
+    const labels = enumLabels(s) ?? enumLabels(raw);
+    field.options = (s.enum as string[]).map((v) => ({
+      value: v,
+      label: labels?.[v] ?? labelFromKey(v),
+    }));
   } else if (t === 'boolean') kind = 'boolean';
   else if (t === 'integer') kind = 'integer';
   else if (t === 'number') kind = 'number';
@@ -196,7 +215,65 @@ export function fieldFromSchema(
   if (s.pattern) spec.pattern = s.pattern;
   if (s.format) spec.format = s.format;
   if (kind === 'object') spec.children = fieldsFromSchema(s, { root, base: path });
+  const ext = (k: string): unknown => raw[k] ?? s[k];
+  const example = ext('x-example');
+  if (example !== undefined && example !== null && example !== '')
+    spec.example = typeof example === 'string' ? example : JSON.stringify(example);
+  const rec = ext('x-recommended');
+  if (rec && typeof rec === 'object' && 'value' in rec) {
+    const r = rec as { value: unknown; why?: unknown };
+    spec.recommended = { value: r.value, ...(typeof r.why === 'string' ? { why: r.why } : {}) };
+  }
+  const when = ext('x-showWhen');
+  if (when && typeof when === 'object' && typeof (when as ShowWhen).path === 'string')
+    spec.showWhen = { path: (when as ShowWhen).path, equals: (when as ShowWhen).equals };
+  const tech = ext('x-technical');
+  if (typeof tech === 'string' && tech) spec.technicalNote = tech;
   return spec;
+}
+
+function enumLabels(s: JsonSchema): Record<string, string> | undefined {
+  const l = s['x-enumLabels'];
+  return l && typeof l === 'object' ? (l as Record<string, string>) : undefined;
+}
+
+/** Does `value` satisfy a `x-showWhen.equals` (a value or a list of values)? */
+export function matchesShowWhen(value: unknown, equals: unknown): boolean {
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  return Array.isArray(equals) && !Array.isArray(value)
+    ? equals.some((e) => eq(e, value))
+    : eq(equals, value);
+}
+
+/**
+ * Is a field visible given the other values? `lookup(path)` returns the
+ * current value of a setting (undefined when unknown). The `x-showWhen` path
+ * is tried as a sibling, as given, and as a suffix (`relays[].` stripped);
+ * when the other setting cannot be found the field stays visible.
+ */
+export function isVisible(
+  field: FieldSpec,
+  fields: readonly FieldSpec[],
+  lookup: (path: string[]) => unknown,
+): boolean {
+  const w = field.showWhen;
+  if (!w) return true;
+  const target = w.path
+    .replace(/^relays\[\]\./, '')
+    .split('.')
+    .filter(Boolean);
+  const candidates: string[][] = [[...field.path.slice(0, -1), ...target], target];
+  for (const c of candidates) {
+    const v = lookup(c);
+    if (v !== undefined) return matchesShowWhen(v, w.equals);
+  }
+  const suffix = target.join('.');
+  const other = fields.find((f) => f !== field && `.${f.path.join('.')}`.endsWith(`.${suffix}`));
+  if (other) {
+    const v = lookup(other.path);
+    if (v !== undefined) return matchesShowWhen(v, w.equals);
+  }
+  return true;
 }
 
 /** Field specs for every property of an object schema (recursively for nested objects). */

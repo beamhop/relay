@@ -14,6 +14,7 @@
   import History from '@lucide/svelte/icons/history';
   import Shield from '@lucide/svelte/icons/shield';
   import LifeBuoy from '@lucide/svelte/icons/life-buoy';
+  import Building2 from '@lucide/svelte/icons/building-2';
   import { app } from '$lib/stores/app.svelte';
   import { flow } from '$lib/stores/actions.svelte';
   import { prefs, type Theme } from '$lib/stores/prefs.svelte';
@@ -49,10 +50,21 @@
   function choose(p: Persona) {
     pickPersona = false;
     const def = app.action('config.apply-persona');
-    if (def) void flow.start(def, { persona: p }, { onDone: () => app.reloadRelays(), onUndo: () => app.reloadRelays() });
+    // Organizations also get company sign-in: refresh the catalog and module screens too.
+    const refresh = () => Promise.all([app.reloadRelays(), app.refreshCatalog()]);
+    if (def) void flow.start(def, { persona: p }, { onDone: () => void refresh(), onUndo: () => void refresh() });
   }
 
-  const moduleSections = $derived(app.uiRoutes.filter((r) => r.placement === 'settings-section'));
+  /** Screens this app draws itself, even when a module also lists them. */
+  const OWN = new Set(['/settings/company']);
+  const moduleSections = $derived(
+    app.uiRoutes.filter((r) => r.placement === 'settings-section' && !OWN.has(r.path)),
+  );
+  /** Company sign-in: for organizations, or once the identity module is on. */
+  const companyOn = $derived(
+    app.hasAction('enterprise.connect-idp') || app.uiRoutes.some((r) => r.path === '/settings/company'),
+  );
+  const showCompany = $derived(persona === 'organization' || companyOn);
   const themes: Array<{ id: Theme; label: () => string }> = [
     { id: 'dark', label: () => m.theme_dark() },
     { id: 'light', label: () => m.theme_light() },
@@ -105,6 +117,18 @@
           </a>
         </li>
       {/each}
+      {#if showCompany}
+        <li>
+          <a href={to('/settings/company')} class="flex items-center gap-3 p-3.5 hover:bg-muted/40" data-testid="company-link">
+            <Building2 class="size-4 text-muted-foreground" />
+            <span class="min-w-0 flex-1">
+              <span class="block text-sm">{m.company_title()}</span>
+              <span class="block truncate text-xs text-muted-foreground">{companyOn ? m.company_summary_on() : m.company_summary_off()}</span>
+            </span>
+            <ChevronRight class="size-4 text-muted-foreground" />
+          </a>
+        </li>
+      {/if}
       <li>
         <a href={to('/settings/plugins')} class="flex items-center gap-3 p-3.5 hover:bg-muted/40">
           <Puzzle class="size-4 text-muted-foreground" />

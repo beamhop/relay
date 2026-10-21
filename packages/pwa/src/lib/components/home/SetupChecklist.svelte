@@ -2,6 +2,9 @@
   /** First-week checklist with a progress ring (§7); hidden once everything is done. */
   import Check from '@lucide/svelte/icons/check';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+  import X from '@lucide/svelte/icons/x';
+  import { prefs } from '$lib/stores/prefs.svelte';
   import type { ChecklistItem } from '$lib/checklist';
   import { to } from '$lib/nav';
   import { nearestTab } from '$lib/screens';
@@ -43,6 +46,8 @@
             href={to(item.href)}
             class="flex items-center gap-3 py-2.5 text-sm"
             data-done={item.done}
+            data-state={item.state}
+            data-testid={`checklist-${item.id}`}
             data-fallback={item.fallback ? '' : undefined}
             onclick={(e) => {
               if (item.action && !item.done && onaction) {
@@ -53,10 +58,25 @@
               }
             }}
           >
-            <span class={cn('flex size-5 items-center justify-center rounded-full border', item.done && 'border-success bg-success text-background')}>
-              {#if item.done}<Check class="size-3" />{/if}
+            <span
+              class={cn(
+                'flex size-5 shrink-0 items-center justify-center rounded-full border',
+                item.done && 'border-success bg-success text-background',
+                item.state === 'in-progress' && 'border-primary text-primary',
+                item.state === 'failed' && 'border-destructive bg-destructive/15 text-destructive',
+              )}
+            >
+              {#if item.done}<Check class="size-3" />
+              {:else if item.state === 'in-progress'}<LoaderCircle class="size-3 animate-spin" aria-label={m.checklist_in_progress()} />
+              {:else if item.state === 'failed'}<X class="size-3" aria-label={m.checklist_failed()} />{/if}
             </span>
-            <span class={cn('flex-1', item.done && 'text-muted-foreground line-through')}>{item.title ?? labels[item.id]?.() ?? item.id}</span>
+            <span class="min-w-0 flex-1">
+              <span class={cn('block', item.done && 'text-muted-foreground line-through')}>{item.title ?? labels[item.id]?.() ?? item.id}</span>
+              {#if item.detail && !item.done}
+                <span class={cn('block text-xs', item.state === 'failed' ? 'text-destructive' : 'text-muted-foreground')} data-testid="checklist-detail">{item.detail}</span>
+              {/if}
+              {#if prefs.lens && item.state !== 'todo' && item.state !== 'done'}<span class="block font-mono text-[10px] text-muted-foreground" data-lens>{item.state}</span>{/if}
+            </span>
             {#if !item.done}<ChevronRight class="size-4 text-muted-foreground" />{/if}
           </a>
         </li>

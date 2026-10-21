@@ -7,6 +7,7 @@
   import { toasts } from '$lib/stores/toasts.svelte';
   import { markRecoverySaved, recoverySaved } from '$lib/checklist';
   import { passkeysSupported, registerPasskey } from '$lib/auth/passkey';
+  import { forgetKey, rememberedKey } from '$lib/auth/local-key';
   import { to } from '$lib/nav';
   import Button from '$lib/components/ui/button.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
@@ -14,6 +15,13 @@
 
   let recovery = $state<{ remaining: number; owner: boolean } | null>(null);
   let saved = $state(recoverySaved());
+  let keyStored = $state(!!rememberedKey());
+
+  function forgetDevice() {
+    forgetKey();
+    keyStored = false;
+    toasts.show({ message: m.security_device_forgotten(), kind: 'info' });
+  }
 
   onMount(async () => {
     recovery = await app.api.recoveryStatus().catch(() => null);
@@ -76,6 +84,14 @@
       <Button size="sm" variant="secondary" class="mt-3" onclick={addPasskey}><KeyRound class="size-4" />{m.security_add_passkey()}</Button>
     </section>
   {/if}
+
+  <section class="rounded-xl border p-4" data-testid="device-key">
+    <h2 class="text-sm font-medium">{m.security_device()}</h2>
+    <p class="mt-1 text-sm text-muted-foreground">{keyStored ? m.security_device_stored() : m.security_device_none()}</p>
+    {#if keyStored}
+      <Button size="sm" variant="destructive" class="mt-3" onclick={forgetDevice} data-testid="forget-device">{m.key_forget_device()}</Button>
+    {/if}
+  </section>
 
   {#if app.hasAction('tokens.create')}
     <section class="rounded-xl border p-4">

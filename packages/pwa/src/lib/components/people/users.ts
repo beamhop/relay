@@ -18,6 +18,37 @@ export interface UserRow {
   banned?: boolean;
   muted?: boolean;
   admin?: boolean;
+  /** Storage limit for this person (bytes), when one applies. */
+  quotaBytes?: number | null;
+  /** Bytes used (same as storageBytes on servers that send both). */
+  usedBytes?: number;
+  remainingBytes?: number;
+  overQuota?: boolean;
+}
+
+export interface QuotaInfo {
+  used: number;
+  quota: number;
+  left: number;
+  over: boolean;
+  /** 0..1 for the bar. */
+  fraction: number;
+}
+
+/** Quota numbers for a person, or null when no limit applies. */
+export function quotaOf(u: {
+  storageBytes?: number;
+  usedBytes?: number;
+  quotaBytes?: number | null;
+  remainingBytes?: number;
+  overQuota?: boolean;
+}): QuotaInfo | null {
+  const quota = u.quotaBytes;
+  if (quota === undefined || quota === null || !(quota > 0)) return null;
+  const used = u.usedBytes ?? u.storageBytes ?? 0;
+  const over = u.overQuota ?? used > quota;
+  const left = u.remainingBytes ?? Math.max(0, quota - used);
+  return { used, quota, left, over, fraction: Math.min(1, used / quota) };
 }
 
 export function mergeUsers(

@@ -24,6 +24,8 @@ export interface InboxCard {
   createdAt: number;
   primary?: { label: string; actionId: string; inputs: unknown[] };
   playbook?: string;
+  /** False for informational cards: there is nothing to approve. */
+  approvable?: boolean;
 }
 
 export interface HomeCard {
@@ -105,7 +107,12 @@ export function fromInbox(c: InboxCard, catalog: CatalogAction[]): HomeCard {
   if (c.technical) h.technical = c.technical;
   if (c.playbook) h.playbook = c.playbook;
   const target = c.primary && catalog.find((a) => a.id === c.primary?.actionId);
-  if (c.primary && target?.allowed !== false && catalog.some((a) => a.id === APPROVE)) {
+  if (
+    c.approvable !== false &&
+    c.primary &&
+    target?.allowed !== false &&
+    catalog.some((a) => a.id === APPROVE)
+  ) {
     h.primaryLabel = c.primary.label;
     h.approve = { actionId: APPROVE, input: { key: c.key } };
   }
@@ -124,6 +131,7 @@ export function fromCard(c: AttentionCard, catalog: CatalogAction[]): HomeCard {
   if (c.technical) h.technical = c.technical;
   if (c.playbook) h.playbook = c.playbook;
   if (
+    c.approvable !== false &&
     c.primary &&
     c.primaryAllowed !== false &&
     catalog.some((a) => a.id === c.primary?.actionId)

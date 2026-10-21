@@ -1,13 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Locator, Page } from '@playwright/test';
 
-/** Reset the mock API. `ai`: the assistant module is absent (default), installed but off, or on. */
-export async function reset(
-  page: Page,
-  claimed: boolean,
-  opts: { ai?: 'absent' | 'off' | 'on' } = {},
-): Promise<void> {
-  await page.request.post('/__reset', { data: { claimed, ai: opts.ai ?? 'absent' } });
+export interface ResetOptions {
+  /** The assistant module is absent (default), installed but off, or on. */
+  ai?: 'absent' | 'off' | 'on';
+  /** A plugin the safety switch turned off. */
+  tripped?: boolean;
+  /** Home shows one informational card that cannot be approved. */
+  infoCard?: boolean;
+  /** Public host name of the relay. */
+  host?: string;
+  persona?: string;
+}
+
+/** Reset the mock API. */
+export async function reset(page: Page, claimed: boolean, opts: ResetOptions = {}): Promise<void> {
+  await page.request.post('/__reset', { data: { claimed, ...opts, ai: opts.ai ?? 'absent' } });
 }
 
 export async function serverLog(page: Page): Promise<{
@@ -17,6 +25,10 @@ export async function serverLog(page: Page): Promise<{
   channels: Array<{ type: string; id: string; [k: string]: unknown }>;
   tests: string[];
   assistant: Array<{ message: string; context?: Record<string, unknown> }>;
+  plugins: Record<string, { enabled: boolean; config: Record<string, unknown>; tripped?: unknown }>;
+  modules: Record<string, boolean>;
+  idp: { provider: string; clientId?: string } | null;
+  mappings: Array<Record<string, unknown>>;
 }> {
   return (await page.request.get('/__log')).json();
 }

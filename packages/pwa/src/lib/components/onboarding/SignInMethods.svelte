@@ -1,5 +1,8 @@
 <script lang="ts">
-  /** Sign in with a NIP-07 extension, a NIP-46 bunker, or a passkey (optionally redeeming a code). */
+  /**
+   * Sign in with a NIP-07 extension, a NIP-46 bunker, a private key held in
+   * memory, or a passkey (optionally redeeming a code).
+   */
   import KeyRound from '@lucide/svelte/icons/key-round';
   import Puzzle from '@lucide/svelte/icons/puzzle';
   import Link from '@lucide/svelte/icons/link';
@@ -9,6 +12,7 @@
   import { passkeysSupported, registerPasskey, signInWithPasskey } from '$lib/auth/passkey';
   import type { SessionResponse } from '$lib/api/types';
   import Button from '../ui/button.svelte';
+  import PrivateKeySignIn from './PrivateKeySignIn.svelte';
   import { m } from '$lib/paraglide/messages.js';
 
   let {
@@ -112,6 +116,13 @@
       <span class="flex-1 text-left">{m.signin_bunker()}</span>
     </Button>
   {/if}
+
+  <PrivateKeySignIn
+    {codes}
+    disabled={!!busy}
+    ondone={(res) => ondone(res)}
+    onbusy={(b) => (busy = b ? 'key' : null)}
+  />
 
   {#if passkeysSupported()}
     {#if newAccount || claimCode || inviteCode}

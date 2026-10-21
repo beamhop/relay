@@ -31,6 +31,8 @@ interface Pending {
 class ConfigFlow {
   current = $state<Pending | null>(null);
   busy = $state(false);
+  /** Bumped after every applied (or undone) change: screens derived from config refresh on it. */
+  applied = $state(0);
 
   /** Validate and describe a change. Returns false (with a toast) when nothing would change. */
   async propose(
@@ -66,11 +68,16 @@ class ConfigFlow {
     cur.phase = 'applying';
     try {
       const r = await app.api.commit(cur.proposal.id, cur.relay);
-      this.current = null;
+      // Close the review sheet first, so the undo toast never sits over its buttons.
+      if (this.current === cur) this.current = null;
+      this.applied++;
       const onApplied = cur.onApplied;
       announce(
         { summary: r.revision.summary || m.settings_saved(), ...(r.undo ? { undo: r.undo } : {}) },
-        () => onApplied?.(r),
+        () => {
+          this.applied++;
+          onApplied?.(r);
+        },
       );
       onApplied?.(r);
       return r;

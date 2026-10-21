@@ -5,6 +5,7 @@
   import { live } from '$lib/stores/live.svelte';
   import { prefs } from '$lib/stores/prefs.svelte';
   import { flow, query } from '$lib/stores/actions.svelte';
+  import { configFlow } from '$lib/stores/config.svelte';
   import type { BlobItem, Health, NodeConfig, RelayConfig } from '$lib/api/types';
   import {
     checklist,
@@ -99,6 +100,16 @@
       void loadCards(app.api, app.catalog, app.relayId)
         .then((c) => (cards = c))
         .catch(() => {});
+    }
+  });
+
+  // The checklist follows settings changes (e.g. backups turned on) without a reload.
+  let lastApplied = configFlow.applied;
+  $effect(() => {
+    const a = configFlow.applied;
+    if (a !== lastApplied) {
+      lastApplied = a;
+      void loadChecklist();
     }
   });
 

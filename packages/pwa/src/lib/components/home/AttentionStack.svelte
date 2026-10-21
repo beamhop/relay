@@ -17,6 +17,7 @@
   import { assistant } from '$lib/stores/assistant.svelte';
   import { DISMISS, DISMISS_SECONDS, SNOOZE, type HomeCard, snoozeLocal, unsnoozeLocal } from '$lib/cards';
   import { to } from '$lib/nav';
+  import { cn } from '$lib/utils';
   import SwipeCard from '../SwipeCard.svelte';
   import Button from '../ui/button.svelte';
   import Badge from '../ui/badge.svelte';
@@ -140,7 +141,7 @@
   }
 
   const icons = { info: Info, warning: TriangleAlert, critical: CircleAlert };
-  const tones = { info: 'neutral', warning: 'warn', critical: 'critical' } as const;
+  const tones = { info: 'accent', warning: 'warn', critical: 'critical' } as const;
 </script>
 
 <svelte:window {onkeydown} />
@@ -165,14 +166,25 @@
         <SwipeCard
           bind:this={card}
           directions={canApprove ? ['left', 'right'] : ['left']}
-          hints={{ right: { label: top.primaryLabel ?? m.cards_approve(), tone: 'ok' }, left: { label: m.cards_snooze(), tone: 'neutral' } }}
+          hints={canApprove
+            ? { right: { label: top.primaryLabel ?? m.cards_approve(), tone: 'ok' }, left: { label: m.cards_snooze(), tone: 'neutral' } }
+            : { left: { label: m.cards_snooze(), tone: 'neutral' } }}
           {onswipe}
           testid="attention-card"
         >
           {@const Icon = icons[top.severity]}
-          <article class="rounded-xl border bg-card p-4 shadow-sm">
+          <article
+            class={cn(
+              'rounded-xl border bg-card p-4 shadow-sm',
+              top.severity === 'info' && 'border-primary/30 bg-primary/5',
+              top.severity === 'warning' && 'border-warning/40',
+              top.severity === 'critical' && 'border-destructive/50',
+            )}
+            data-severity={top.severity}
+            data-approvable={canApprove}
+          >
             <div class="flex items-start gap-3">
-              <Icon class="mt-0.5 size-5 shrink-0 {top.severity === 'critical' ? 'text-destructive' : top.severity === 'warning' ? 'text-warning' : 'text-muted-foreground'}" />
+              <Icon class="mt-0.5 size-5 shrink-0 {top.severity === 'critical' ? 'text-destructive' : top.severity === 'warning' ? 'text-warning' : 'text-primary'}" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <h3 class="font-medium leading-snug">{top.title}</h3>
@@ -191,7 +203,9 @@
               {#if top.playbook}
                 <Button size="sm" variant="ghost" href={to(`/help?playbook=${top.playbook}`)}>{m.cards_guide()}</Button>
               {/if}
-              <span class="ml-auto hidden text-[11px] text-muted-foreground sm:inline">{m.cards_swipe_hint()}</span>
+              <span class="ml-auto hidden text-[11px] text-muted-foreground sm:inline" data-testid="card-swipe-hint">
+                {canApprove ? m.cards_swipe_hint() : m.cards_swipe_hint_later()}
+              </span>
             </div>
           </article>
         </SwipeCard>
