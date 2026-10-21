@@ -44,6 +44,7 @@ import { GIFT_WRAP_KINDS, giftWrapExtension } from './giftwrap.ts';
 import type { GroupsConfig } from './groups.ts';
 import { archiveHeld, deletionTargets, holdsOf, queryAll } from './holds.ts';
 import { type IndexedSub, SubscriptionIndex } from './subindex.ts';
+import { vanishPerson } from './vanish.ts';
 import { Negentropy, NegentropyStorageVector } from './vendor/negentropy.ts';
 
 export const RELAY_MODULE_ID = 'relay';
@@ -956,59 +957,13 @@ export class RelayEngine implements ConnectionHandler {
       this.rejectEvent(st, event, 'invalid', 'this request to vanish names a different relay');
       return;
     }
-    const store = this.kernel.ports.events;
-    const until = event.created_at;
-    // Stored gift-wrap kinds addressed to the vanishing user (NIP-62 SHOULD).
-    const wraps: Filter = {
-      kinds: [...GIFT_WRAP_KINDS].filter((k) => kindClass(k) !== 'ephemeral'),
-      '#p': [event.pubkey],
-      until,
-    };
-    // Collect (capped) ids before they are gone, for event.deleted consumers.
-    const cap = this.cfg.vanishIdCap;
-    let ids: string[] = [];
-    if (cap > 0) {
-      try {
-        const evs = await store.query(
-          st.relayId,
-          [
-            { authors: [event.pubkey], until, limit: cap },
-            { ...wraps, limit: cap },
-          ],
-          { maxLimit: cap },
-        );
-        ids = evs.slice(0, cap).map((e) => e.id);
-      } catch (err) {
-        this.fail(st, 'vanish', err);
-      }
-    }
-    // Legal hold: archive held events (the user's own and wraps addressed to
-    // them) before they are erased; the request itself is still honoured.
-    const holds = holdsOf(this.kernel);
-    if (holds) {
-      const own = await queryAll(this.kernel, st.relayId, { authors: [event.pubkey], until });
-      await archiveHeld(this.kernel, holds, st.relayId, own, 'nip62');
-      const received = await queryAll(this.kernel, st.relayId, wraps);
-      await archiveHeld(this.kernel, holds, st.relayId, received, 'nip62', () => event.pubkey);
-    }
-    const removed =
-      (await store.vanish(st.relayId, event.pubkey, until)) +
-      (await store.deleteMatching(st.relayId, wraps));
+    await vanishPerson(this.kernel, st.relayId, event.pubkey, event.created_at, {
+      scope: targets.includes('ALL_RELAYS') ? 'all' : 'relay',
+      idCap: this.cfg.vanishIdCap,
+      onError: (err) => this.fail(st, 'vanish', err),
+    });
     this.runtime(st.relayId).seen.add(event.id);
     this.ok(st, event.id, true, '');
-    this.kernel.bus.emit('event.deleted', {
-      relayId: st.relayId,
-      ids,
-      cause: 'nip62',
-      count: Math.max(removed, ids.length),
-    });
-    // Files and media of the person (blossom, media) follow the same request.
-    this.kernel.bus.emit('user.vanished', {
-      relayId: st.relayId,
-      pubkey: event.pubkey,
-      until,
-      scope: targets.includes('ALL_RELAYS') ? 'all' : 'relay',
-    });
     this.kernel.bus.emit('event.accepted', {
       relayId: st.relayId,
       event,

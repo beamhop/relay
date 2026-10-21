@@ -7,6 +7,7 @@ import { createGroupActions } from './groups-actions.ts';
 import { GROUPS_SERVICE, GroupsService } from './groups.ts';
 import { NIP11_CORS_HEADERS, relayInfo } from './nip11.ts';
 import { powHook } from './pow.ts';
+import { VANISH_SERVICE, type VanishPerson, vanishPerson } from './vanish.ts';
 
 export * from './config.ts';
 export * from './engine.ts';
@@ -21,6 +22,7 @@ export {
 export { createGroupActions } from './groups-actions.ts';
 export * from './nip11.ts';
 export * from './pow.ts';
+export * from './vanish.ts';
 export { SubscriptionIndex, matchLive, searchMatches } from './subindex.ts';
 export type { IndexedSub } from './subindex.ts';
 export { Negentropy, NegentropyStorageVector } from './vendor/negentropy.ts';
@@ -82,6 +84,12 @@ export const relayModule = defineModule({
     engines.set(kernel, engine);
     kernel.ws = engine;
     kernel.provide(RELAY_ENGINE_SERVICE, engine);
+    const vanish: VanishPerson = (relayId, pubkey, until, opts) =>
+      vanishPerson(kernel, relayId, pubkey, until, {
+        idCap: engine.config().vanishIdCap,
+        ...opts,
+      });
+    kernel.provide(VANISH_SERVICE, vanish);
     kernel.policy.add(powHook(kernel));
     let groups: GroupsService | null = null;
     if (engine.config().groups.enabled) {

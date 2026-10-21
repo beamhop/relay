@@ -13,7 +13,13 @@ import {
   finalizeEvent,
   parseConfig,
 } from '@beamhop/core';
-import { RELAY_ENGINE_SERVICE, type RelayEngine, relayModule } from '@beamhop/relay';
+import {
+  RELAY_ENGINE_SERVICE,
+  type RelayEngine,
+  VANISH_SERVICE,
+  type VanishPerson,
+  relayModule,
+} from '@beamhop/relay';
 import { FakeClock, type TestKey, makeKey, memoryPorts } from '@beamhop/testkit';
 import {
   type MediaService,
@@ -155,5 +161,19 @@ describe('right to vanish removes files and media variants', () => {
     expect(await s.status(h)).toBe(404);
     expect(await s.ports.blobIndex.usage('main', a.pk)).toBe(0);
     expect(await s.ports.blobs.head(h)).not.toBeNull();
+  });
+
+  test('the shared relay.vanish service (portal / admin path) removes files too', async () => {
+    const s = await setup();
+    const a = makeKey();
+    expect((await s.publish(s.sign(a, 1, [])))?.[2]).toBe(true);
+    const h = await s.upload(a, enc('portal picture'));
+    const vanish = s.kernel.use<VanishPerson>(VANISH_SERVICE)!;
+    const r = await vanish('main', a.pk, s.ports.clock.now());
+    expect(r.removed).toBe(1);
+    await s.kernel.use<BlossomService>('blossom')!.settled();
+    await s.kernel.use<MediaService>('media')!.cleanupsSettled();
+    expect(await s.status(h)).toBe(404);
+    expect(await s.ports.blobIndex.usage('main', a.pk)).toBe(0);
   });
 });

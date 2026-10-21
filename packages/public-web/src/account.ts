@@ -42,6 +42,14 @@ export interface BlossomLike {
 }
 
 export const VANISH_LOG = 'public.vanish';
+
+/** `kernel.use('relay.vanish')` from `@beamhop/relay` (shape only, no import). */
+const RELAY_VANISH_SERVICE = 'relay.vanish';
+type RelayVanish = (
+  relayId: RelayId,
+  pubkey: string,
+  until: number,
+) => Promise<{ removed: number }>;
 export const FILES_LIMIT = 100;
 const EXPORT_PAGE = 500;
 
@@ -227,17 +235,26 @@ export async function vanish(
   request?: NostrEvent,
 ): Promise<VanishResult> {
   const { ports } = kernel;
-  const events = await ports.events.vanish(relayId, pubkey, until);
+  const relayVanish = kernel.use<RelayVanish>(RELAY_VANISH_SERVICE);
+  let events: number;
   let files = 0;
-  for (let guard = 0; guard < 1000; guard++) {
-    const owned = await ports.blobIndex.listByOwner(relayId, pubkey, { limit: 200 });
-    if (owned.length === 0) break;
-    let removed = 0;
-    for (const b of owned) if (await deleteFile(kernel, relayId, b.sha256, pubkey)) removed++;
-    files += removed;
-    if (removed === 0) break;
+  if (relayVanish) {
+    // Same path as a NIP-62 request to the relay: legal holds, gift wraps
+    // addressed to the person, and their files/media via `user.vanished`.
+    files = (await ports.blobIndex.listByOwner(relayId, pubkey, { until, limit: 100_000 })).length;
+    events = (await relayVanish(relayId, pubkey, until)).removed;
+  } else {
+    events = await ports.events.vanish(relayId, pubkey, until);
+    for (let guard = 0; guard < 1000; guard++) {
+      const owned = await ports.blobIndex.listByOwner(relayId, pubkey, { limit: 200 });
+      if (owned.length === 0) break;
+      let removed = 0;
+      for (const b of owned) if (await deleteFile(kernel, relayId, b.sha256, pubkey)) removed++;
+      files += removed;
+      if (removed === 0) break;
+    }
+    kernel.bus.emit('event.deleted', { relayId, ids: [], cause: 'nip62' });
   }
-  kernel.bus.emit('event.deleted', { relayId, ids: [], cause: 'nip62' });
   await ports.docs.put(VANISH_LOG, `${relayId}:${pubkey}`, {
     at: ports.clock.now(),
     until,
