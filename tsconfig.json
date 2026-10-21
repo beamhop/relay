@@ -1,5 +1,14 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts"],
-  "exclude": ["packages/pwa", "packages/team-client", "packages/public-web", "**/node_modules"]
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
+    "packages/*/test/**/*.ts",
+    "packages/*/test/**/*.tsx"
+  ],
+  "exclude": ["packages/pwa", "packages/team-client", "**/node_modules"]
 }

@@ -5,7 +5,19 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "description": "Public pages: landing, self-service portal, status page (Hono JSX)",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@beamhop/core": "workspace:*" },
-  "devDependencies": { "@beamhop/testkit": "workspace:*" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@beamhop/core": "workspace:*",
+    "hono": "^4.13.13",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@beamhop/blossom": "workspace:*",
+    "@beamhop/policy": "workspace:*",
+    "@beamhop/relay": "workspace:*",
+    "@beamhop/testkit": "workspace:*",
+    "qrcode-generator": "^2.0.4"
+  }
 }
