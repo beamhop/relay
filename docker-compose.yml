@@ -1,0 +1,96 @@
+# docker compose up -d                          → beamhop with SQLite + filesystem blobs in ./data volume
+# docker compose --profile postgres up -d       → + PostgreSQL (set BEAMHOP_DB_DRIVER=postgres)
+# docker compose --profile s3 up -d             → + MinIO (set BEAMHOP_BLOSSOM_DRIVER=s3)
+# docker compose --profile observability up -d  → + OTel collector, Prometheus, Grafana
+services:
+  beamhop:
+    build: .
+    image: beamhop:latest
+    restart: unless-stopped
+    ports:
+      - "${BEAMHOP_PORT:-3334}:3334"
+    volumes:
+      - beamhop-data:/data
+    environment:
+      BEAMHOP_PUBLIC_URL: ${BEAMHOP_PUBLIC_URL:-http://localhost:3334}
+      BEAMHOP_OWNERS: ${BEAMHOP_OWNERS:-}
+      BEAMHOP_LOG_LEVEL: ${BEAMHOP_LOG_LEVEL:-info}
+      BEAMHOP_TRUST_PROXY: ${BEAMHOP_TRUST_PROXY:-false}
+      BEAMHOP_DB_DRIVER: ${BEAMHOP_DB_DRIVER:-sqlite}
+      BEAMHOP_DATABASE_URL: ${BEAMHOP_DATABASE_URL:-postgres://beamhop:beamhop@postgres:5432/beamhop}
+      BEAMHOP_BLOSSOM_DRIVER: ${BEAMHOP_BLOSSOM_DRIVER:-fs}
+      BEAMHOP_S3_ENDPOINT: ${BEAMHOP_S3_ENDPOINT:-http://minio:9000}
+      BEAMHOP_S3_BUCKET: ${BEAMHOP_S3_BUCKET:-beamhop}
+      BEAMHOP_S3_REGION: ${BEAMHOP_S3_REGION:-us-east-1}
+      BEAMHOP_S3_ACCESS_KEY_ID: ${BEAMHOP_S3_ACCESS_KEY_ID:-beamhop}
+      BEAMHOP_S3_SECRET_ACCESS_KEY: ${BEAMHOP_S3_SECRET_ACCESS_KEY:-beamhop-secret}
+      BEAMHOP_OTEL_ENABLED: ${BEAMHOP_OTEL_ENABLED:-false}
+      BEAMHOP_OTEL_ENDPOINT: ${BEAMHOP_OTEL_ENDPOINT:-http://otel-collector:4318/v1/metrics}
+      BEAMHOP_METRICS_TOKEN: ${BEAMHOP_METRICS_TOKEN:-}
+
+  postgres:
+    profiles: [postgres]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: beamhop
+      POSTGRES_PASSWORD: beamhop
+      POSTGRES_DB: beamhop
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U beamhop"]
+      interval: 10s
+      retries: 5
+
+  minio:
+    profiles: [s3]
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: beamhop
+      MINIO_ROOT_PASSWORD: beamhop-secret
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    profiles: [s3]
+    image: minio/mc:latest
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "until mc alias set local http://minio:9000 beamhop beamhop-secret; do sleep 1; done;
+      mc mb --ignore-existing local/beamhop"
+
+  otel-collector:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4318:4318"
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:latest
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    ports:
+      - "3000:3000"
+
+volumes:
+  beamhop-data:
+  postgres-data:
+  minio-data:

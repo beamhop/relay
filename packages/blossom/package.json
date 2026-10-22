@@ -16,5 +16,8 @@
   },
   "optionalDependencies": {
     "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@beamhop/storage": "workspace:*"
   }
 }

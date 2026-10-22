@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@beamhop/sdk-config": ["../sdk/src/config.ts"]
+    },
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["src", "vite.config.ts"]
+}

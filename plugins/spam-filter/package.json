@@ -1,0 +1,16 @@
+{
+  "name": "beamhop-plugin-spam-filter",
+  "version": "0.1.0",
+  "description": "Heuristic spam scoring for beamhop: duplicate content across pubkeys, link density, mention floods, new-account rate limits",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "files": ["src"],
+  "keywords": ["beamhop", "beamhop-plugin", "nostr", "spam"],
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@beamhop/sdk": "workspace:*"
+  }
+}

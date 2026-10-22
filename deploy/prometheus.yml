@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+  - job_name: beamhop
+    metrics_path: /metrics
+    # set bearer_token if BEAMHOP_METRICS_TOKEN is configured
+    static_configs:
+      - targets: ["beamhop:3334"]

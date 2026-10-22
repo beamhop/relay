@@ -1,0 +1,57 @@
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider, createRouter } from "@tanstack/react-router";
+import { routeTree } from "./routeTree.gen";
+import { queryClient } from "@/queries/client";
+import { onUnauthorized } from "@/lib/api";
+import { ThemeProvider } from "@/lib/theme";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
+import { ConfirmProvider } from "@/components/confirm";
+import { PageSkeleton } from "@/components/page-skeleton";
+import "./index.css";
+
+const router = createRouter({
+  routeTree,
+  basepath: import.meta.env.BASE_URL.replace(/\/$/, "") || "/",
+  context: { queryClient },
+  defaultPreload: "intent",
+  defaultPreloadStaleTime: 0,
+  defaultPendingComponent: PageSkeleton,
+  defaultPendingMs: 150,
+  scrollRestoration: true,
+});
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}
+
+onUnauthorized(() => {
+  if (router.state.location.pathname === "/login") return;
+  queryClient.removeQueries({ queryKey: ["me"] });
+  router.navigate({ to: "/login", search: { redirect: router.state.location.pathname } });
+});
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <TooltipProvider delayDuration={300}>
+          <ConfirmProvider>
+            <RouterProvider router={router} />
+          </ConfirmProvider>
+          <Toaster position="top-center" richColors={false} closeButton />
+        </TooltipProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
+  </StrictMode>,
+);
+
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch((e) => console.warn("SW registration failed", e));
+  });
+}

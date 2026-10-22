@@ -14,5 +14,8 @@
     "@opentelemetry/resources": "^3.0.0",
     "@opentelemetry/sdk-metrics": "^3.0.0",
     "maxmind": "^5.0.7"
+  },
+  "devDependencies": {
+    "@beamhop/storage": "workspace:*"
   }
 }

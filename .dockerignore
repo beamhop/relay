@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/.build
+.git
+.github
+.vscode
+.idea
+data
+*.db
+*.db-*
+.env
+.env.*
+.DS_Store
+packages/server/test/.tmp-*
+beamhop.config.json
+Dockerfile
+docker-compose.yml

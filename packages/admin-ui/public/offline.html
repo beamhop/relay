@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>beamhop admin — offline</title>
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+      body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: #fafafa; color: #18181b; }
+      @media (prefers-color-scheme: dark) { body { background: #111113; color: #fafafa; } p { color: #a1a1aa !important; } }
+      main { text-align: center; padding: 24px; max-width: 360px; }
+      img { width: 64px; height: 64px; }
+      h1 { font-size: 20px; margin: 16px 0 8px; }
+      p { color: #71717a; font-size: 14px; line-height: 1.5; margin: 0 0 20px; }
+      button { background: #7c3aed; color: white; border: 0; border-radius: 10px; padding: 12px 20px; font-size: 15px; font-weight: 600; min-height: 44px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/admin/favicon.svg" alt="" />
+      <h1>You’re offline</h1>
+      <p>The admin panel needs a connection to your relay. Check your network and try again.</p>
+      <button onclick="location.reload()">Retry</button>
+    </main>
+  </body>
+</html>

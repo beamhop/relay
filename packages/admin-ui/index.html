@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#7c3aed" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="/admin/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/admin/icons/icon-192.png" />
+    <title>beamhop admin</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("beamhop-theme") || "system";
+          var d = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          if (d) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+    <!-- Plugin UI bundles may import these bare specifiers; shims re-export window.__BEAMHOP_UI__ -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/admin/plugin-shims/react.js",
+          "react-dom": "/admin/plugin-shims/react-dom.js",
+          "react-dom/client": "/admin/plugin-shims/react-dom.js",
+          "react/jsx-runtime": "/admin/plugin-shims/jsx-runtime.js",
+          "@beamhop/ui": "/admin/plugin-shims/ui.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

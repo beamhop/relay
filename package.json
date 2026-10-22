@@ -2,15 +2,23 @@
   "name": "beamhop-monorepo",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "plugins/*"],
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "scripts": {
-    "dev": "bun run --filter @beamhop/server dev",
-    "build": "bun run build:ui && bun run build:node && bun run build:binary",
+    "dev": "bun --watch packages/server/src/cli.ts start",
+    "build": "bun run build:ui && bun run build:plugins && bun run build:node && bun run build:binary",
     "build:ui": "bun run --filter @beamhop/admin-ui build",
     "build:node": "bun run --filter @beamhop/server build:node",
     "build:binary": "bun run --filter @beamhop/server build:binary",
     "test": "bun test",
-    "typecheck": "tsc -b --noEmit || tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc -b --noEmit || tsc --noEmit -p tsconfig.json",
+    "start": "bun packages/server/src/cli.ts start",
+    "beamhop": "bun packages/server/src/cli.ts",
+    "build:plugins": "bun run --filter 'beamhop-plugin-*' build:ui",
+    "test:server": "bun test packages/server",
+    "docker:build": "docker build -t beamhop ."
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

@@ -1,0 +1,48 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3334,
+    "publicUrl": "https://relay.example.com",
+    "trustProxy": true,
+    "metricsToken": "change-me",
+    "prometheus": true
+  },
+  "database": {
+    "driver": "sqlite",
+    "sqlitePath": "./data/beamhop.db",
+    "postgresUrl": "postgres://beamhop:beamhop@localhost:5432/beamhop"
+  },
+  "blossom": {
+    "enabled": true,
+    "driver": "fs",
+    "fsPath": "./data/blobs",
+    "s3": {
+      "endpoint": "https://s3.example.com",
+      "region": "auto",
+      "bucket": "beamhop",
+      "accessKeyId": "AKIA...",
+      "secretAccessKey": "...",
+      "publicUrl": "https://cdn.example.com"
+    }
+  },
+  "metrics": {
+    "otel": {
+      "enabled": false,
+      "endpoint": "http://localhost:4318/v1/metrics",
+      "headers": {},
+      "intervalMs": 15000
+    },
+    "geoipDbPath": "./data/GeoLite2-City.mmdb",
+    "retentionDays": 30
+  },
+  "admin": {
+    "enabled": true,
+    "owners": []
+  },
+  "plugins": {
+    "dir": "./plugins",
+    "packages": [],
+    "enabled": ["hello", "spam-filter"]
+  },
+  "logLevel": "info"
+}

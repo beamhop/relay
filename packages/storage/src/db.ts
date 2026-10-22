@@ -2,6 +2,7 @@ import type { BeamhopConfig, Db, Dialect, Migration } from "@beamhop/sdk";
 import { isBun } from "@beamhop/sdk";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 interface SqliteDriver {
   all(sql: string, params: unknown[]): unknown[];
@@ -33,18 +34,22 @@ async function openSqlite(path: string): Promise<SqliteDriver> {
     return {
       all: (sql, p) => stmt(sql).all(...(p as never[])),
       get: (sql, p) => stmt(sql).get(...(p as never[])) ?? undefined,
-      run: (sql, p) => ({ changes: Number(stmt(sql).run(...(p as never[])).changes) }),
+      // bun's `changes` is a total_changes() delta (includes trigger side effects); use changes() instead
+      run: (sql, p) => {
+        stmt(sql).run(...(p as never[]));
+        return { changes: Number((stmt("SELECT changes() AS c").get() as { c: number }).c) };
+      },
       exec: (sql) => db.exec(sql),
       close: () => db.close(),
     };
   }
   const { default: Database } = await import("better-sqlite3");
   const db = new Database(path);
-  const cache = new Map<string, ReturnType<typeof db.prepare>>();
+  const cache = new Map<string, import("better-sqlite3").Statement<unknown[]>>();
   const stmt = (sql: string) => {
     let s = cache.get(sql);
     if (!s) {
-      s = db.prepare(sql);
+      s = db.prepare<unknown[]>(sql);
       if (cache.size > 500) cache.clear();
       cache.set(sql, s);
     }
@@ -98,7 +103,8 @@ abstract class BaseDb implements Db {
 class SqliteDb extends BaseDb {
   readonly dialect = "sqlite" as const;
   private chain: Promise<unknown> = Promise.resolve();
-  private inTx = false;
+  /** Tracks whether the current async context is inside a transaction (for nesting). */
+  private txContext = new AsyncLocalStorage<true>();
   constructor(private d: SqliteDriver) {
     super();
   }
@@ -114,23 +120,25 @@ class SqliteDb extends BaseDb {
   async exec(sql: string) {
     this.d.exec(sql);
   }
-  /** Transactions are serialized; nested tx() calls reuse the outer transaction. */
+  /**
+   * Transactions are serialized; tx() calls made from within a transaction's async context
+   * reuse the outer transaction (concurrent unrelated callers wait their turn).
+   */
   tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
-    if (this.inTx) return fn(this);
-    const next = this.chain.then(async () => {
-      this.inTx = true;
-      this.d.exec("BEGIN IMMEDIATE");
-      try {
-        const r = await fn(this);
-        this.d.exec("COMMIT");
-        return r;
-      } catch (e) {
-        this.d.exec("ROLLBACK");
-        throw e;
-      } finally {
-        this.inTx = false;
-      }
-    });
+    if (this.txContext.getStore()) return fn(this);
+    const next = this.chain.then(() =>
+      this.txContext.run(true, async () => {
+        this.d.exec("BEGIN IMMEDIATE");
+        try {
+          const r = await fn(this);
+          this.d.exec("COMMIT");
+          return r;
+        } catch (e) {
+          this.d.exec("ROLLBACK");
+          throw e;
+        }
+      }),
+    );
     this.chain = next.catch(() => {});
     return next;
   }
@@ -192,7 +200,12 @@ export async function createDb(config: Pick<BeamhopConfig, "database">): Promise
   if (driver === "postgres") {
     if (!postgresUrl) throw new Error("database.postgresUrl is required for postgres driver");
     const { default: postgres } = await import("postgres");
-    const sql = postgres(postgresUrl, { max: 20, onnotice: () => {} });
+    const sql = postgres(postgresUrl, {
+      max: 20,
+      onnotice: () => {},
+      // int8 (COUNT(*), BIGINT timestamps, BIGSERIAL) → JS number instead of string
+      types: { int8: { to: 20, from: [20], serialize: (x: unknown) => String(x), parse: (x: string) => Number(x) } },
+    });
     return new PostgresDb(sql);
   }
   const d = await openSqlite(sqlitePath);

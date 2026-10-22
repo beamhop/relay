@@ -1,0 +1,64 @@
+import { toast } from "sonner";
+import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { useConfirm } from "@/components/confirm";
+import { useUserActions } from "@/queries/users";
+import { usePluginRegistry } from "@/plugins/registry";
+import { displayName } from "@/lib/nostr";
+import type { Profile } from "@beamhop/sdk/admin-contract";
+
+/** Ban/unban flows with confirmation dialogs shared by the users list and detail pages. */
+export function useBanFlow(scope?: string) {
+  const confirm = useConfirm();
+  const actions = useUserActions(scope);
+  const ban = async (pubkey: string, profile?: Profile) => {
+    const r = await confirm({
+      title: `Ban ${displayName(pubkey, profile)}?`,
+      description: "Banned users can no longer publish to the relay or upload media.",
+      destructive: true,
+      confirmText: "Ban user",
+      input: { label: "Reason (optional)", placeholder: "spam, abuse…" },
+      options: [
+        { key: "disconnect", label: "Disconnect active sessions", default: true },
+        { key: "deleteEvents", label: "Delete all their events" },
+        { key: "deleteMedia", label: "Delete their uploaded media" },
+      ],
+    });
+    if (!r) return false;
+    await actions.ban.mutateAsync({
+      pubkey,
+      reason: r.input || undefined,
+      disconnect: r.options.disconnect,
+      deleteEvents: r.options.deleteEvents,
+      deleteMedia: r.options.deleteMedia,
+    });
+    return true;
+  };
+  return { ...actions, banWithConfirm: ban, confirm };
+}
+
+/** Plugin-provided user actions, rendered inside a DropdownMenuContent. */
+export function PluginUserActionItems({ pubkey }: { pubkey: string }) {
+  const { userActions } = usePluginRegistry();
+  if (!userActions.length) return null;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="text-xs text-muted-foreground">Plugins</DropdownMenuLabel>
+      {userActions.map((a) => (
+        <DropdownMenuItem
+          key={`${a.plugin}:${a.id}`}
+          variant={a.destructive ? "destructive" : "default"}
+          onSelect={async () => {
+            try {
+              await a.run(pubkey);
+            } catch (e) {
+              toast.error(`${a.label} failed`, { description: (e as Error).message });
+            }
+          }}
+        >
+          {a.label}
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}

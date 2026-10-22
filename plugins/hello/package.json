@@ -1,0 +1,22 @@
+{
+  "name": "beamhop-plugin-hello",
+  "version": "0.1.0",
+  "description": "Example beamhop plugin showing every plugin capability",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "files": ["src", "dist"],
+  "keywords": ["beamhop", "beamhop-plugin", "nostr"],
+  "scripts": {
+    "build:ui": "bun build ./ui/index.tsx --outfile ./dist/ui.js --format esm --target browser --minify"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@beamhop/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "hono": "^4"
+  }
+}
