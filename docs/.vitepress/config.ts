@@ -15,6 +15,7 @@ export default defineConfig({
     nav: [
       { text: 'Quickstart', link: '/quickstart' },
       { text: 'Reference', link: '/reference/' },
+      { text: 'CLI', link: '/reference/cli' },
     ],
     socialLinks: [{ icon: 'github', link: 'https://github.com/beamhop/relay' }],
     sidebar: [
@@ -35,6 +36,7 @@ export default defineConfig({
         text: 'Reference',
         items: [
           { text: 'Overview', link: '/reference/' },
+          { text: 'Command line', link: '/reference/cli' },
           { text: 'Actions', link: '/reference/actions' },
           { text: 'Config', link: '/reference/config' },
           { text: 'Plugin SDK', link: '/reference/plugin-sdk' },
