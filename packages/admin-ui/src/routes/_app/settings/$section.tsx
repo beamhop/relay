@@ -84,7 +84,7 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
   const dirty = form.formState.isDirty;
   return (
     <Form {...form}>
-      <form onSubmit={onSubmit} className="space-y-4">
+      <form onSubmit={onSubmit} noValidate className="space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>{title}</CardTitle>

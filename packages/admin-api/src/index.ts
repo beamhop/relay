@@ -130,6 +130,8 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   const reportListeners = new Set<(r: ReportView) => void>();
   const ctx = await buildContext(deps, opts, reportListeners);
   wireBus(ctx, reportListeners);
+  // config owners need a users row so they show up in user lists and role filters
+  for (const pk of ctx.roles.owners) if (!(await deps.stores.users.get(pk))) await deps.stores.users.upsert(pk, {});
 
   const app = new Hono<AdminEnv>();
   app.onError(createErrorHandler(ctx.logger));

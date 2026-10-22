@@ -129,7 +129,7 @@ function UsersPage() {
     <div className="space-y-4">
       <PageHeader
         title="Users"
-        description={total !== undefined ? `${formatNumber(total)} users` : "Everyone who has interacted with the relay"}
+        description={total !== undefined ? `${formatNumber(total)} ${total === 1 ? "user" : "users"}` : "Everyone who has interacted with the relay"}
         actions={
           can("users.edit") && (
             <Button onClick={() => setAdding(true)}>

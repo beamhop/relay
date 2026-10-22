@@ -147,7 +147,6 @@ describe("users", () => {
     const other = newKey();
     await h.stores.users.upsert(u.pk, {});
     await h.stores.users.upsert(other.pk, {});
-    await h.stores.users.upsert(h.owner.pk, {});
     await h.events.save(signEvent(u, 0, [], JSON.stringify({ name: "zebracorn" })));
     const pks = async (q: string) =>
       ((await (await h.asKey(h.owner, `/users?${q}`)).json()) as { items: { pubkey: string }[] }).items.map((x) => x.pubkey);
@@ -180,6 +179,9 @@ describe("settings", () => {
     expect(h.audit.entries.some((e) => e.action === "settings.update")).toBe(true);
     expect((await h.asKey(h.owner, "/settings", { method: "PATCH", body: "[1,2" })).status).toBe(400);
     expect((await h.asKey(h.owner, "/settings", { method: "PATCH", body: { bogus: {} } })).status).toBe(400);
+    for (const limits of [{ maxSubscriptions: -5 }, { maxLimit: 1.5 }, { eventsPerMinute: -1 }, { maxFilters: 0 }])
+      expect((await h.asKey(h.owner, "/settings", { method: "PATCH", body: { limits } })).status).toBe(400);
+    expect((await h.asKey(h.owner, "/settings", { method: "PATCH", body: { limits: { connectionsPerIp: 0 } } })).status).toBe(200);
     const regex = await h.asKey(h.owner, "/settings", {
       method: "PATCH",
       body: { moderation: { wordFilters: [{ id: "r", pattern: "(", isRegex: true }] } },

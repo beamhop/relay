@@ -179,10 +179,31 @@ describe("auth: password", () => {
     const code = () => totpCode(secret, Math.floor(h.clock.now / 30_000));
     expect((await h.withCookie(cookie, "/auth/totp/enable", { method: "POST", body: { code: code() } })).status).toBe(200);
     const login = () => h.req("/auth/password", { method: "POST", body: JSON.stringify({ login: h.owner.pk, password: "the-password", totp: code() }) });
+    expect((await login()).status).toBe(401); // the enabling code is already spent
+    h.clock.now += 30_000;
     expect((await login()).status).toBe(200);
     expect((await login()).status).toBe(401);
     h.clock.now += 30_000;
     expect((await login()).status).toBe(200);
+  });
+
+  test("re-enabling TOTP with a new secret resets replay tracking", async () => {
+    const h = await createHarness();
+    const cookie = await h.login(h.owner);
+    await h.withCookie(cookie, "/auth/password/set", { method: "POST", body: { password: "the-password" } });
+    const enable = async () => {
+      const { secret } = (await (await h.withCookie(cookie, "/auth/totp/setup", { method: "POST", body: { password: "the-password" } })).json()) as { secret: string };
+      expect((await h.withCookie(cookie, "/auth/totp/enable", { method: "POST", body: { code: totpCode(secret, Math.floor(h.clock.now / 30_000)) } })).status).toBe(200);
+      return secret;
+    };
+    const login = (totp: string) => h.req("/auth/password", { method: "POST", body: JSON.stringify({ login: h.owner.pk, password: "the-password", totp }) });
+    const s1 = await enable();
+    const step = Math.floor(h.clock.now / 30_000);
+    expect((await login(totpCode(s1, step + 1))).status).toBe(200); // drift window: next step accepted
+    expect((await h.withCookie(cookie, "/auth/totp/disable", { method: "POST", body: { code: totpCode(s1, step) } })).status).toBe(200);
+    const s2 = await enable();
+    expect((await login(totpCode(s2, step))).status).toBe(401); // the enabling code is spent
+    expect((await login(totpCode(s2, step + 1))).status).toBe(200);
   });
 });
 

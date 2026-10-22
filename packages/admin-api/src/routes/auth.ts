@@ -167,6 +167,8 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
     if (!verifyTotp(secret, code, ctx.nowSec())) throw badRequest("invalid TOTP code", "invalid_totp");
     pendingTotp.delete(p.pubkey);
     await ctx.credentials.setTotp(p.pubkey, secret);
+    // the enabling code counts as used; earlier steps belonged to the previous secret
+    lastTotpStep.set(p.pubkey, totpStep(secret, code, ctx.nowSec()) ?? -1);
     await ctx.audit(c, "auth.totp.enable", p.pubkey);
     return c.json({ ok: true });
   });
@@ -177,6 +179,7 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
     if (!cred?.totpSecret) throw badRequest("TOTP not enabled");
     if (!verifyTotp(cred.totpSecret, code, ctx.nowSec())) throw badRequest("invalid TOTP code", "invalid_totp");
     await ctx.credentials.setTotp(p.pubkey, null);
+    lastTotpStep.delete(p.pubkey);
     await ctx.audit(c, "auth.totp.disable", p.pubkey);
     return c.json({ ok: true });
   });

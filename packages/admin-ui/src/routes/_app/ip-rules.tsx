@@ -19,7 +19,18 @@ import { timeAgo } from "@/lib/format";
 
 export const Route = createFileRoute("/_app/ip-rules")({ component: IpRulesPage });
 
-const IP_RE = /^(?:(?:\d{1,3}\.){3}\d{1,3}(?:\/(?:3[0-2]|[12]?\d))?|[0-9a-fA-F:]*:[0-9a-fA-F:.]*(?:\/(?:12[0-8]|1[01]\d|\d{1,2}))?)$/;
+const OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+const V4 = new RegExp(`^(?:${OCTET}\\.){3}${OCTET}(?:/(?:3[0-2]|[12]?\\d))?$`);
+const isIpv6 = (s: string) => {
+  const [addr, prefix, ...rest] = s.split("/");
+  if (rest.length || (prefix !== undefined && !/^(?:12[0-8]|1[01]\d|[1-9]?\d)$/.test(prefix))) return false;
+  try {
+    return new URL(`http://[${addr}]/`).hostname.length > 2;
+  } catch {
+    return false;
+  }
+};
+const IP_RE = { test: (s: string) => V4.test(s) || (s.includes(":") && isIpv6(s)) };
 
 function IpRulesPage() {
   const { data, isLoading, error, refetch } = useIpRules();

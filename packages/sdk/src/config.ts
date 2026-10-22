@@ -137,22 +137,22 @@ export const RuntimeSettingsSchema = z.object({
     .prefault({}),
   limits: z
     .object({
-      maxMessageBytes: z.number().default(131072),
-      maxEventBytes: z.number().default(65536),
-      maxSubscriptions: z.number().default(30),
-      maxFilters: z.number().default(10),
-      maxLimit: z.number().default(500),
-      defaultLimit: z.number().default(100),
-      maxEventTags: z.number().default(2000),
-      maxContentLength: z.number().default(65536),
-      minPowDifficulty: z.number().default(0),
+      maxMessageBytes: z.number().int().min(1).default(131072),
+      maxEventBytes: z.number().int().min(1).default(65536),
+      maxSubscriptions: z.number().int().min(1).default(30),
+      maxFilters: z.number().int().min(1).default(10),
+      maxLimit: z.number().int().min(1).default(500),
+      defaultLimit: z.number().int().min(1).default(100),
+      maxEventTags: z.number().int().min(0).default(2000),
+      maxContentLength: z.number().int().min(0).default(65536),
+      minPowDifficulty: z.number().int().min(0).max(256).default(0),
       /** reject events with created_at more than N seconds in the future */
-      createdAtUpperSec: z.number().default(900),
+      createdAtUpperSec: z.number().int().min(0).default(900),
       /** reject events older than N seconds (0 = disabled) */
-      createdAtLowerSec: z.number().default(0),
-      eventsPerMinute: z.number().default(120),
-      reqPerMinute: z.number().default(240),
-      connectionsPerIp: z.number().default(20),
+      createdAtLowerSec: z.number().int().min(0).default(0),
+      eventsPerMinute: z.number().int().min(0).default(120),
+      reqPerMinute: z.number().int().min(0).default(240),
+      connectionsPerIp: z.number().int().min(0).default(20),
     })
     .prefault({}),
   moderation: z

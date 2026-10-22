@@ -77,18 +77,6 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
             )}
           </CommandGroup>
         )}
-        {!pubkey && !eventId && q.trim().length > 1 && can("users.view") && (
-          <CommandGroup heading="Search">
-            <CommandItem value={`search-users ${q}`} onSelect={() => run(() => navigate({ to: "/users", search: { search: q.trim() } }))}>
-              <UserSearch /> Search users for “{q.trim()}”
-            </CommandItem>
-            {can("content.view") && (
-              <CommandItem value={`search-events ${q}`} onSelect={() => run(() => navigate({ to: "/content", search: { f: JSON.stringify({ search: q.trim() }) } }))}>
-                <FileSearch /> Full-text search events for “{q.trim()}”
-              </CommandItem>
-            )}
-          </CommandGroup>
-        )}
         {NAV.map((g) => {
           const items = g.items.filter((i) => can(i.perm));
           if (!items.length) return null;
@@ -116,6 +104,19 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
           </CommandGroup>
         )}
         <CommandSeparator />
+        {!pubkey && !eventId && q.trim().length > 1 && can("users.view") && (
+          // forceMount + query-free values: always shown, but ranked below matching pages
+          <CommandGroup heading="Search" forceMount>
+            <CommandItem forceMount value="zz-search-users" onSelect={() => run(() => navigate({ to: "/users", search: { search: q.trim() } }))}>
+              <UserSearch /> Search users for “{q.trim()}”
+            </CommandItem>
+            {can("content.view") && (
+              <CommandItem forceMount value="zz-search-events" onSelect={() => run(() => navigate({ to: "/content", search: { f: JSON.stringify({ search: q.trim() }) } }))}>
+                <FileSearch /> Full-text search events for “{q.trim()}”
+              </CommandItem>
+            )}
+          </CommandGroup>
+        )}
         <CommandGroup heading="Preferences">
           <CommandItem value="theme light" onSelect={() => run(() => setTheme("light"))}><Sun /> Light theme</CommandItem>
           <CommandItem value="theme dark" onSelect={() => run(() => setTheme("dark"))}><Moon /> Dark theme</CommandItem>
