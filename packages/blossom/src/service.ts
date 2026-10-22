@@ -284,6 +284,14 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
       return row ? (await withOwners([row]))[0] : undefined;
     },
 
+    async read(sha256, opts) {
+      const row = await core.repo.get(sha256);
+      if (!row) return undefined;
+      const obj = opts?.thumbnail ? await driver.getThumbnail(sha256) : await driver.get(sha256);
+      if (!obj) return undefined;
+      return { body: obj.body, size: obj.size, type: opts?.thumbnail ? "image/webp" : row.type };
+    },
+
     async setStatus(sha256: string, status: BlobStatus, actor: string) {
       if (!(await core.repo.setStatus(sha256, status))) throw new Error(`blob ${sha256} not found`);
       await audit(actor, "blob.status", sha256, { status });

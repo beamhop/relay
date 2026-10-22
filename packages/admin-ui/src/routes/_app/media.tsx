@@ -23,6 +23,7 @@ import { useMedia, useMediaActions, useMediaStats } from "@/queries/content";
 import { useCan } from "@/queries/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { formatBytes, formatDate, formatNumber, timeAgo } from "@/lib/format";
+import { mediaUrl } from "@/lib/api";
 import { parsePubkey } from "@/lib/nostr";
 import { cn } from "@/lib/utils";
 
@@ -228,7 +229,7 @@ function StatTile({ label, value, highlight, onClick }: { label: string; value?:
 
 function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: MediaItem; selected: boolean; selectable: boolean; selecting: boolean; onSelect: (v: boolean) => void; onOpen: () => void }) {
   const k = kindOf(b.type);
-  const thumb = b.thumbnailUrl ?? (k === "image" ? b.url : undefined);
+  const thumb = b.hasThumbnail ? mediaUrl(b, true) : k === "image" ? mediaUrl(b) : undefined;
   return (
     <div className={cn("group relative aspect-square overflow-hidden rounded-xl border bg-muted", selected && "ring-2 ring-primary")}>
       <button className="absolute inset-0 size-full" onClick={() => (selecting ? onSelect(!selected) : onOpen())} aria-label={`Open ${b.sha256.slice(0, 8)}`}>
@@ -297,11 +298,11 @@ function Lightbox({
               }}
             >
               {kindOf(b.type) === "image" ? (
-                <img src={b.url} alt="" className="max-h-[65dvh] max-w-full object-contain" />
+                <img src={mediaUrl(b)} alt="" className="max-h-[65dvh] max-w-full object-contain" />
               ) : kindOf(b.type) === "video" ? (
-                <video src={b.url} controls playsInline className="max-h-[65dvh] max-w-full" />
+                <video src={mediaUrl(b)} controls playsInline className="max-h-[65dvh] max-w-full" />
               ) : kindOf(b.type) === "audio" ? (
-                <audio src={b.url} controls className="m-8 w-full max-w-md" />
+                <audio src={mediaUrl(b)} controls className="m-8 w-full max-w-md" />
               ) : (
                 <div className="flex flex-col items-center gap-2 p-10 text-white/70">
                   <File className="size-12" />
@@ -339,7 +340,7 @@ function Lightbox({
             )}
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" asChild>
-                <a href={b.url} target="_blank" rel="noreferrer" download>
+                <a href={mediaUrl(b)} target="_blank" rel="noreferrer" download>
                   <Download /> Open
                 </a>
               </Button>

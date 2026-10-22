@@ -114,6 +114,8 @@ export interface BlossomService {
   delete(sha256: string, actor: string, opts?: { block?: boolean }): Promise<void>;
   deleteByPubkey(pubkey: string, actor: string): Promise<number>;
   usage(pubkey: string): Promise<{ count: number; bytes: number }>;
+  /** Raw blob (or its thumbnail) regardless of moderation status — for authenticated admin previews. */
+  read(sha256: string, opts?: { thumbnail?: boolean }): Promise<{ body: ReadableStream<Uint8Array>; size: number; type: string } | undefined>;
   stats(): Promise<{ count: number; bytes: number; byType: { type: string; count: number; bytes: number }[] }>;
 }
 export type CreateBlossom = (deps: CoreDeps) => Promise<BlossomService>;

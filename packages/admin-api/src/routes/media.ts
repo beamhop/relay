@@ -44,6 +44,21 @@ export function registerMediaRoutes(app: AdminApp, ctx: ApiContext) {
     return c.json(out);
   });
 
+  // Admin preview: serves pending/blocked blobs too (public blossom routes hide them).
+  app.get("/media/:sha256/raw", requirePermission("media.view"), async (c) => {
+    const blob = await blossom().read(sha(c.req.param("sha256")), { thumbnail: c.req.query("thumb") === "1" });
+    if (!blob) throw notFound("blob not found");
+    return new Response(blob.body, {
+      headers: {
+        "content-type": blob.type,
+        "content-length": String(blob.size),
+        "cache-control": "private, max-age=300",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+      },
+    });
+  });
+
   app.get("/media/:sha256", requirePermission("media.view"), async (c) => {
     const rec = await blossom().get(sha(c.req.param("sha256")));
     if (!rec) throw notFound("blob not found");

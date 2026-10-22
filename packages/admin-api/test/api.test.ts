@@ -275,6 +275,18 @@ describe("media / misc", () => {
     expect(s).toMatchObject({ count: 1, pending: 1 });
   });
 
+  test("raw preview serves pending blobs to admins only", async () => {
+    const h = await createHarness();
+    const sha = "d".repeat(64);
+    h.blossom!.blobs.set(sha, { sha256: sha, size: 5, type: "image/png", owners: [], createdAt: 1, status: "pending", hasThumbnail: false, url: "" });
+    const res = await h.asKey(h.owner, `/media/${sha}/raw`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(await res.text()).toBe("blob:" + sha);
+    expect((await h.asKey(h.owner, `/media/${"e".repeat(64)}/raw`)).status).toBe(404);
+    expect((await h.api.app.request(`/media/${sha}/raw`)).status).toBe(401);
+  });
+
   test("system, metrics, connections, invites, ip-rules, groups, plugins", async () => {
     const h = await createHarness();
     const sys = (await (await h.asKey(h.owner, "/system")).json()) as { version: string; nips: number[]; runtime: string; dbDialect: string; pushEnabled: boolean };

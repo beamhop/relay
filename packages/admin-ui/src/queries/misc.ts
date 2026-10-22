@@ -74,6 +74,6 @@ export function useAudit(q: AuditQuery) {
     queryKey: ["audit", q],
     queryFn: ({ pageParam }) => api.get<{ items: AuditView[] }>("/audit", { ...q, before: pageParam || undefined, limit }).then((r) => r.items ?? []),
     initialPageParam: 0,
-    getNextPageParam: (last) => (last.length < limit ? undefined : last[last.length - 1].at),
+    getNextPageParam: (last) => (last.length < limit ? undefined : last[last.length - 1].id),
   });
 }

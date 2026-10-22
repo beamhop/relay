@@ -297,6 +297,12 @@ export function fakeBlossom(): BlossomService & { blobs: Map<string, BlobRecord>
     async get(s) {
       return blobs.get(s);
     },
+    async read(s) {
+      const b = blobs.get(s);
+      if (!b) return undefined;
+      const data = new TextEncoder().encode("blob:" + s);
+      return { body: new Blob([data]).stream(), size: data.length, type: b.type };
+    },
     async setStatus(s, status: BlobStatus) {
       const b = blobs.get(s);
       if (!b) throw new Error("not found");

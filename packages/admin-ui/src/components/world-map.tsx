@@ -1,9 +1,13 @@
 import * as React from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// maplibre resolves its worker relative to import.meta.url, which breaks after bundling; point it at the emitted asset.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { GeoPoint } from "@beamhop/sdk/admin-contract";
 import { useTheme } from "@/lib/theme";
 import { formatNumber } from "@/lib/format";
+
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 const TILES = "https://demotiles.maplibre.org/tiles/tiles.json";
 

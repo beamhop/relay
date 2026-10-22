@@ -24,6 +24,7 @@ import { useUser, useUserEvents } from "@/queries/users";
 import { useMedia, useDeleteEvents } from "@/queries/content";
 import { useCan, useMe } from "@/queries/auth";
 import { formatBytes, formatDate, formatNumber, timeAgo } from "@/lib/format";
+import { mediaUrl } from "@/lib/api";
 import { displayName, kindName, parsePubkey, toNpub } from "@/lib/nostr";
 
 export const Route = createFileRoute("/_app/users/$pubkey")({
@@ -394,9 +395,9 @@ function UserMedia({ pubkey }: { pubkey: string }) {
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
         {items.map((b) => (
-          <a key={b.sha256} href={b.url} target="_blank" rel="noreferrer" className="group relative aspect-square overflow-hidden rounded-lg border bg-muted">
+          <a key={b.sha256} href={mediaUrl(b)} target="_blank" rel="noreferrer" className="group relative aspect-square overflow-hidden rounded-lg border bg-muted">
             {b.type.startsWith("image/") || b.thumbnailUrl ? (
-              <img src={b.thumbnailUrl ?? b.url} alt="" loading="lazy" className="size-full object-cover transition-transform group-hover:scale-105" />
+              <img src={mediaUrl(b, true)} alt="" loading="lazy" className="size-full object-cover transition-transform group-hover:scale-105" />
             ) : (
               <div className="flex size-full items-center justify-center text-xs text-muted-foreground">{b.type}</div>
             )}

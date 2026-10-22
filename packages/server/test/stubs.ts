@@ -149,7 +149,7 @@ export function stubBlossom(): BlossomService {
   app.put("/upload", (c) => c.json({ ok: true }));
   return {
     app,
-    async list() { return { items: [], total: 0 }; }, async get() { return undefined; }, async setStatus() {}, async delete() {},
+    async list() { return { items: [], total: 0 }; }, async get() { return undefined; }, async read() { return undefined; }, async setStatus() {}, async delete() {},
     async deleteByPubkey() { return 0; }, async usage() { return { count: 0, bytes: 0 }; }, async stats() { return { count: 0, bytes: 0, byType: [] }; },
   };
 }

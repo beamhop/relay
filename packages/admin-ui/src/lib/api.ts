@@ -96,3 +96,8 @@ export const api = {
 export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export const enc = encodeURIComponent;
+
+/** Session-authenticated blob URL (works for pending/blocked blobs, unlike the public Blossom URL). */
+export function mediaUrl(b: { sha256: string; hasThumbnail?: boolean }, thumbnail = false): string {
+  return `${API_BASE}/media/${b.sha256}/raw${thumbnail && b.hasThumbnail ? "?thumb=1" : ""}`;
+}
