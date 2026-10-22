@@ -88,8 +88,7 @@ export function registerMediaRoutes(app: AdminApp, ctx: ApiContext) {
     const s = sha(c.req.param("sha256"));
     const { status } = await readBody(c, z.object({ status: STATUS }));
     if (!(await b.get(s))) throw notFound("blob not found");
-    await b.setStatus(s, status, principalOf(c).pubkey);
-    await ctx.audit(c, "media.status", s, { status });
+    await b.setStatus(s, status, principalOf(c).pubkey); // blossom records the audit entry
     return c.json((await b.get(s)) ?? { ok: true });
   });
 
@@ -97,8 +96,7 @@ export function registerMediaRoutes(app: AdminApp, ctx: ApiContext) {
     const b = blossom();
     const s = sha(c.req.param("sha256"));
     const block = c.req.query("block") === "true" || c.req.query("block") === "1";
-    await b.delete(s, principalOf(c).pubkey, { block });
-    await ctx.audit(c, "media.delete", s, { block });
+    await b.delete(s, principalOf(c).pubkey, { block }); // blossom records the audit entry
     return c.json({ ok: true });
   });
 }

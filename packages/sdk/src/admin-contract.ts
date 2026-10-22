@@ -54,6 +54,8 @@ export interface Me {
   role: AdminRole;
   permissions: Permission[];
   hasPassword: boolean;
+  /** password logins also require a TOTP code (POST /auth/totp/setup → /auth/totp/enable; /auth/totp/disable {code}) */
+  hasTotp: boolean;
   passkeys: { id: string; name: string; createdAt: number; lastUsedAt: number | null }[];
   profile?: Profile;
 }

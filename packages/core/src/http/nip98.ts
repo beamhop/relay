@@ -40,5 +40,18 @@ export function verifyNip98(req: Request, opts: { publicUrl: string; verifier: V
     if (hash !== payload.toLowerCase()) return { ok: false, status: 401, error: "authorization payload hash mismatch" };
   }
   if (!opts.verifier.verify(ev)) return { ok: false, status: 401, error: "invalid authorization signature" };
+  if (!markUsed(ev.id)) return { ok: false, status: 401, error: "authorization event already used" };
   return { ok: true, pubkey: ev.pubkey };
+}
+
+/** Auth event ids seen within the validity window (replay protection). */
+const used = new Map<string, number>();
+
+function markUsed(id: string): boolean {
+  const now = nowSec();
+  if (used.size > 10_000) for (const [k, exp] of used) if (exp < now) used.delete(k);
+  const exp = used.get(id);
+  if (exp !== undefined && exp >= now) return false;
+  used.set(id, now + HTTP_AUTH_WINDOW_SEC * 2);
+  return true;
 }

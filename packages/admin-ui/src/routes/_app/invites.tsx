@@ -146,10 +146,18 @@ function CreateInvites({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   const [days, setDays] = React.useState("");
   const [note, setNote] = React.useState("");
   const [created, setCreated] = React.useState<InviteView[] | null>(null);
+  const isInt = (v: string, lo: number, hi = Infinity) => /^\d+$/.test(v.trim()) && Number(v) >= lo && Number(v) <= hi;
+  const errors = {
+    count: isInt(count, 1, 500) ? null : "Enter a whole number from 1 to 500.",
+    maxUses: isInt(maxUses, 0) ? null : "Enter a whole number (0 = unlimited).",
+    days: !days.trim() || isInt(days, 1) ? null : "Enter a whole number of days, or leave empty.",
+  };
+  const invalid = Object.values(errors).some(Boolean);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (invalid) return;
     const r = await create.mutateAsync({
-      count: Math.max(1, Math.min(500, Number(count) || 1)),
+      count: Number(count),
       maxUses: Number(maxUses) || 0,
       expiresAt: days ? nowSec() + Number(days) * 86400 : null,
       note: note || undefined,
@@ -175,7 +183,7 @@ function CreateInvites({ open, onOpenChange }: { open: boolean; onOpenChange: (o
             <Button onClick={() => close(false)}>Done</Button>
           </>
         ) : (
-          <Button type="submit" form="create-invites" disabled={create.isPending}>
+          <Button type="submit" form="create-invites" disabled={create.isPending || invalid}>
             Create
           </Button>
         )
@@ -194,16 +202,18 @@ function CreateInvites({ open, onOpenChange }: { open: boolean; onOpenChange: (o
         <form id="create-invites" onSubmit={submit} className="grid gap-4 pb-2 sm:grid-cols-3">
           <div className="space-y-2">
             <Label htmlFor="inv-count">How many</Label>
-            <Input id="inv-count" type="number" min={1} max={500} value={count} onChange={(e) => setCount(e.target.value)} />
+            <Input id="inv-count" type="number" min={1} max={500} value={count} onChange={(e) => setCount(e.target.value)} aria-invalid={!!errors.count} />
+            {errors.count && <p className="text-xs text-destructive">{errors.count}</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="inv-uses">Uses each</Label>
-            <Input id="inv-uses" type="number" min={0} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} />
-            <p className="text-xs text-muted-foreground">0 = unlimited</p>
+            <Input id="inv-uses" type="number" min={0} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} aria-invalid={!!errors.maxUses} />
+            {errors.maxUses ? <p className="text-xs text-destructive">{errors.maxUses}</p> : <p className="text-xs text-muted-foreground">0 = unlimited</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="inv-days">Expires in (days)</Label>
-            <Input id="inv-days" type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} placeholder="never" />
+            <Input id="inv-days" type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} placeholder="never" aria-invalid={!!errors.days} />
+            {errors.days && <p className="text-xs text-destructive">{errors.days}</p>}
           </div>
           <div className="space-y-2 sm:col-span-3">
             <Label htmlFor="inv-note">Note</Label>

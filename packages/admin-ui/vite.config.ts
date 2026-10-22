@@ -27,7 +27,8 @@ export default defineConfig({
       scope: "/admin/",
       injectRegister: false,
       registerType: "autoUpdate",
-      includeAssets: ["favicon.svg", "icons/*.png", "offline.html", "plugin-shims/*.js"],
+      // everything else in public/ is matched by injectManifest.globPatterns; listing it here too duplicates precache entries
+      includeAssets: ["plugin-shims/*.js"],
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
         globIgnores: ["**/plugin-shims/**", "**/world-map-*"],

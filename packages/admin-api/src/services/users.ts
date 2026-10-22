@@ -49,6 +49,11 @@ export class UserService {
   }
 
   /** Throws 403 if the actor may not moderate (ban/mute/delete) the target. */
+  /** Editing user records (notes, tags, allow-list…): yourself, or users ranked below you. */
+  async assertCanEdit(actor: Actor, target: string): Promise<void> {
+    if (target !== actor.pubkey) await this.assertCanModerate(actor, target);
+  }
+
   async assertCanModerate(actor: Actor, target: string): Promise<void> {
     if (target === actor.pubkey) throw forbidden("cannot moderate yourself");
     if (this.roles.isConfigOwner(target)) throw forbidden("cannot moderate a configured owner");

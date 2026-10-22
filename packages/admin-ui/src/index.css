@@ -123,6 +123,10 @@
   html {
     -webkit-tap-highlight-color: transparent;
   }
+  /* grid items default to min-width:auto, letting long npubs/tables widen the page on mobile */
+  .grid > * {
+    min-width: 0;
+  }
   body {
     @apply bg-background text-foreground antialiased;
     overscroll-behavior-y: none;

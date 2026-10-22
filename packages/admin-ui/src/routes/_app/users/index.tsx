@@ -324,7 +324,7 @@ function UserCardRow({ u, selected, onSelect, selecting }: { u: UserView; select
         <div className="mt-2 flex flex-wrap items-center gap-1 pl-[50px]">
           <StatusBadges u={u} />
           <span className="ml-auto text-xs text-muted-foreground">
-            {formatNumber(u.eventCount)} events · {timeAgo(u.lastSeenAt)}
+            {formatNumber(u.eventCount)} {u.eventCount === 1 ? "event" : "events"} · {timeAgo(u.lastSeenAt)}
           </span>
         </div>
       </Link>

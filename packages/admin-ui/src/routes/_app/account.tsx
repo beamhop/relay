@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, BellOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Plus, Sun, Trash2 } from "lucide-react";
+import { Bell, BellOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Plus, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { PushTopic } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
@@ -56,6 +56,7 @@ function AccountPage() {
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <PasswordCard hasPassword={me.hasPassword} />
+        <TotpCard hasPassword={me.hasPassword} enabled={me.hasTotp} />
         <PasskeysCard passkeys={me.passkeys} />
         <PushCard />
         <ThemeCard />
@@ -122,6 +123,110 @@ function PasswordCard({ hasPassword }: { hasPassword: boolean }) {
           {hasPassword ? "Change password" : "Set password"}
         </Button>
       </CardFooter>
+    </Card>
+  );
+}
+
+function TotpCard({ hasPassword, enabled }: { hasPassword: boolean; enabled: boolean }) {
+  const [setup, setSetup] = React.useState<{ secret: string; uri: string } | null>(null);
+  const [disabling, setDisabling] = React.useState(false);
+  const [code, setCode] = React.useState("");
+  const close = () => {
+    setSetup(null);
+    setDisabling(false);
+    setCode("");
+  };
+  const start = useApiMutation({
+    fn: () => api.post<{ secret: string; uri: string }>("/auth/totp/setup", {}),
+    onSuccess: (d) => setSetup(d),
+  });
+  const enable = useApiMutation({
+    fn: (c: string) => api.post("/auth/totp/enable", { code: c }),
+    invalidate: [["me"]],
+    success: "Two-factor authentication enabled",
+    onSuccess: close,
+  });
+  const disable = useApiMutation({
+    fn: (c: string) => api.post("/auth/totp/disable", { code: c }),
+    invalidate: [["me"]],
+    success: "Two-factor authentication disabled",
+    onSuccess: close,
+  });
+  const pending = enable.isPending || disable.isPending;
+  const validCode = /^\d{6}$/.test(code.replace(/\s+/g, ""));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="size-4" /> Two-factor authentication
+        </CardTitle>
+        <CardDescription>Require a code from an authenticator app when signing in with your password.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">
+          {!hasPassword ? "Set a password first to enable two-factor authentication." : enabled ? "Enabled — password sign-ins ask for a 6-digit code." : "Not enabled."}
+        </p>
+      </CardContent>
+      <CardFooter className="justify-end">
+        {enabled ? (
+          <Button variant="outline" onClick={() => setDisabling(true)}>
+            Disable
+          </Button>
+        ) : (
+          <Button variant="outline" onClick={() => start.mutate()} disabled={!hasPassword || start.isPending}>
+            <ShieldCheck /> Set up
+          </Button>
+        )}
+      </CardFooter>
+      <ResponsiveDialog
+        open={!!setup || disabling}
+        onOpenChange={(o) => !o && close()}
+        title={disabling ? "Disable two-factor authentication" : "Set up authenticator app"}
+        description={disabling ? "Enter a current code from your authenticator app." : "Add this account to your authenticator app, then enter the 6-digit code it shows."}
+        footer={
+          <Button type="submit" form="totp-form" disabled={!validCode || pending}>
+            {disabling ? "Disable" : "Verify and enable"}
+          </Button>
+        }
+      >
+        <form
+          id="totp-form"
+          className="space-y-3 pb-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!validCode) return;
+            const c = code.replace(/\s+/g, "");
+            if (disabling) disable.mutate(c);
+            else enable.mutate(c);
+          }}
+        >
+          {setup && (
+            <div className="space-y-2">
+              <Label>Secret key</Label>
+              <div className="flex min-w-0 items-center gap-1 rounded-md border bg-muted/40 px-3 py-2">
+                <code className="min-w-0 flex-1 truncate text-sm tracking-wider">{setup.secret.replace(/(.{4})/g, "$1 ").trim()}</code>
+                <CopyButton value={setup.secret} />
+              </div>
+              <a href={setup.uri} className="text-sm text-primary underline-offset-4 hover:underline">
+                Open in authenticator app
+              </a>
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="totp-code">Code</Label>
+            <Input
+              id="totp-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={7}
+              placeholder="123456"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              autoFocus
+            />
+          </div>
+        </form>
+      </ResponsiveDialog>
     </Card>
   );
 }

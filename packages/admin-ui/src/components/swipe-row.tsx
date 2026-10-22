@@ -26,12 +26,13 @@ export function SwipeRow({
   const [dragging, setDragging] = React.useState(false);
   const [transition, setTransition] = React.useState(SPRING);
   const busy = React.useRef(false);
+  const swiped = React.useRef(false);
 
   const width = () => ref.current?.offsetWidth ?? 320;
   const threshold = () => Math.min(120, width() * 0.33);
 
   const bind = useDrag(
-    ({ down, movement: [mx], velocity: [vx], direction: [dx], last, event }) => {
+    ({ down, movement: [mx], velocity: [vx], direction: [dx], last }) => {
       if (disabled || busy.current) return;
       const action = mx > 0 ? right : mx < 0 ? left : undefined;
       // rubber-band when there's no action for this direction
@@ -45,7 +46,9 @@ export function SwipeRow({
       setDragging(false);
       const passed = Math.abs(mx) > threshold() || (vx > 0.6 && Math.abs(mx) > 48 && Math.sign(dx) === Math.sign(mx));
       if (action && passed) {
-        event?.preventDefault?.();
+        // touch listeners are passive, so swallow the trailing click instead of calling preventDefault
+        swiped.current = true;
+        setTimeout(() => (swiped.current = false), 400);
         busy.current = true;
         setTransition(OUT);
         setX(Math.sign(mx) * width());
@@ -89,6 +92,11 @@ export function SwipeRow({
       )}
       <div
         {...bind()}
+        onClickCapture={(e) => {
+          if (!swiped.current) return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
         className="relative touch-pan-y bg-card"
         style={{ transform: `translate3d(${x}px,0,0)`, transition: dragging ? "none" : transition }}
       >

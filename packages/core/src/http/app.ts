@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { RelayContext } from "../context";
 import { toWsUrl } from "../util/url";
 import { buildNip11 } from "./nip11";
+import { invitePage } from "./invite-page";
 import { verifyNip98 } from "./nip98";
 
 const CORS = {
@@ -65,6 +66,14 @@ export function createHttp(ctx: RelayContext): Hono {
     const user = await ctx.stores.users.get(auth.pubkey);
     if (user) ctx.bus.emit("user.updated", { pubkey: auth.pubkey, user, actor: "invite" });
     return c.json({ ok: true, pubkey: auth.pubkey }, 200, CORS);
+  });
+
+  app.get("/invite/:code", (c) => {
+    const code = c.req.param("code");
+    if (code === "redeem" || code.length > 256) return c.notFound();
+    const base = ctx.config.server.publicUrl.replace(/\/+$/, "");
+    const html = invitePage({ code, relayName: ctx.s().info.name, relayUrl: toWsUrl(base), redeemUrl: `${base}/invite/redeem` });
+    return c.html(html, 200, { "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
   });
 
   return app;

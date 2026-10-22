@@ -49,15 +49,20 @@ export function totpCode(secret: string, counter: number): string {
 
 /** RFC 6238 (SHA-1, 30s, 6 digits), ±1 step window. */
 export function verifyTotp(secret: string, code: string, nowSec: number): boolean {
+  return totpStep(secret, code, nowSec) !== null;
+}
+
+/** Like verifyTotp but returns the matched time step (for replay protection), or null. */
+export function totpStep(secret: string, code: string, nowSec: number): number | null {
   const c = code.replace(/\s+/g, "");
-  if (!/^\d{6}$/.test(c)) return false;
+  if (!/^\d{6}$/.test(c)) return null;
   const step = Math.floor(nowSec / 30);
-  let ok = false;
+  let matched: number | null = null;
   for (const d of [-1, 0, 1]) {
     const expected = Buffer.from(totpCode(secret, step + d));
-    if (timingSafeEqual(expected, Buffer.from(c))) ok = true;
+    if (timingSafeEqual(expected, Buffer.from(c))) matched = step + d;
   }
-  return ok;
+  return matched;
 }
 
 export const totpUri = (secret: string, label: string, issuer: string) =>

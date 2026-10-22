@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Logo } from "@/components/layout/logo";
 import { CopyButton } from "@/components/copy-button";
-import { errorMessage } from "@/lib/api";
+import { HttpError, errorMessage } from "@/lib/api";
 import { loginWithBunker, loginWithExtension, loginWithPasskey, loginWithPassword, startNostrConnect } from "@/lib/auth";
 
 export const Route = createFileRoute("/login")({
@@ -28,7 +28,7 @@ function LoginPage() {
   const run = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
     try {
-      await fn();
+      if ((await fn()) === false) return; // more input needed (e.g. TOTP code)
       toast.success("Signed in");
       navigate({ to: (redirect && redirect.startsWith("/") && redirect !== "/login" ? redirect : "/") as "/" });
     } catch (e) {
@@ -164,8 +164,13 @@ function PasswordLogin({ busy, run }: { busy: string | null; run: RunFn }) {
         e.preventDefault();
         run("password", async () => {
           try {
-            await loginWithPassword(login.trim(), password, totp);
+            return await loginWithPassword(login.trim(), password, totp);
           } catch (err) {
+            // first step of a 2FA login: just reveal the code field instead of reporting a failure
+            if (err instanceof HttpError && err.code === "totp_required") {
+              setNeedTotp(true);
+              return false;
+            }
             if (/totp|2fa|code/i.test(errorMessage(err))) setNeedTotp(true);
             throw err;
           }

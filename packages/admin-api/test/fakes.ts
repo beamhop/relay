@@ -36,6 +36,7 @@ import {
   type RuntimeSettings,
   type SettingsService,
   type Stores,
+  type UserQuery,
   type UserRecord,
   type UserStore,
 } from "@beamhop/sdk";
@@ -72,7 +73,7 @@ export class FakeEventStore implements EventStore {
       const cap = Math.min(limit ?? 500, opts?.maxLimit ?? 500);
       for (const ev of this.sorted()) {
         if (n >= cap) break;
-        if (matchFilter(rest as never, ev)) {
+        if (matchFilter(rest as never, ev) && (!f.search || ev.content.toLowerCase().includes(f.search.toLowerCase()))) {
           out.set(ev.id, ev);
           n++;
         }
@@ -126,13 +127,13 @@ export class FakeUserStore implements UserStore {
     this.users.set(pubkey, next);
     return next;
   }
-  async list(q: { status?: string; role?: string; allowed?: boolean; tag?: string; search?: string; limit?: number; offset?: number }) {
+  async list(q: UserQuery) {
     let items = [...this.users.values()];
     if (q.status) items = items.filter((u) => u.status === q.status);
-    if (q.role) items = items.filter((u) => u.role === q.role);
+    if (q.role) items = items.filter((u) => u.role === q.role || q.rolePubkeys?.includes(u.pubkey));
     if (q.allowed !== undefined) items = items.filter((u) => u.allowed === q.allowed);
     if (q.tag) items = items.filter((u) => u.tags.includes(q.tag!));
-    if (q.search) items = items.filter((u) => u.pubkey.startsWith(q.search!) || u.notes.includes(q.search!));
+    if (q.search) items = items.filter((u) => u.pubkey.startsWith(q.search!) || u.notes.includes(q.search!) || q.searchPubkeys?.includes(u.pubkey));
     const off = q.offset ?? 0;
     return { items: items.slice(off, off + (q.limit ?? 50)), total: items.length };
   }

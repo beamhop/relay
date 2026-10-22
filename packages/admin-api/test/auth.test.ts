@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { nip19 } from "nostr-tools";
 import { cookieFrom, createHarness, newKey, nip98Header, signEvent } from "./fakes";
+import { totpCode } from "../src/util/totp";
 
 describe("auth: nostr login", () => {
   test("challenge login creates a session usable for /auth/me", async () => {
@@ -160,6 +161,28 @@ describe("auth: password", () => {
     expect(Number(locked.headers.get("retry-after"))).toBeGreaterThan(0);
     h.clock.now += 61_000;
     expect((await attempt("the-password")).status).toBe(200);
+  });
+
+  test("lockout is shared between npub and hex spellings", async () => {
+    const h = await createHarness();
+    await h.withCookie(await h.login(h.owner), "/auth/password/set", { method: "POST", body: { password: "the-password" } });
+    const attempt = (login: string, password: string) => h.req("/auth/password", { method: "POST", body: JSON.stringify({ login, password }) });
+    for (let i = 0; i < 5; i++) expect((await attempt(nip19.npubEncode(h.owner.pk), "wrong")).status).toBe(401);
+    expect((await attempt(h.owner.pk, "the-password")).status).toBe(429);
+  });
+
+  test("a TOTP code cannot be reused", async () => {
+    const h = await createHarness();
+    const cookie = await h.login(h.owner);
+    await h.withCookie(cookie, "/auth/password/set", { method: "POST", body: { password: "the-password" } });
+    const { secret } = (await (await h.withCookie(cookie, "/auth/totp/setup", { method: "POST" })).json()) as { secret: string };
+    const code = () => totpCode(secret, Math.floor(h.clock.now / 30_000));
+    expect((await h.withCookie(cookie, "/auth/totp/enable", { method: "POST", body: { code: code() } })).status).toBe(200);
+    const login = () => h.req("/auth/password", { method: "POST", body: JSON.stringify({ login: h.owner.pk, password: "the-password", totp: code() }) });
+    expect((await login()).status).toBe(200);
+    expect((await login()).status).toBe(401);
+    h.clock.now += 30_000;
+    expect((await login()).status).toBe(200);
   });
 });
 

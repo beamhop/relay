@@ -48,7 +48,14 @@ const kindParam = (params: Params, i = 0) => {
 
 /** Builds the NIP-86 relay management handler (JSON-RPC-like over HTTP with NIP-98 auth). */
 export function createNip86Handler(ctx: ApiContext) {
-  const { stores, settings, relay, bus } = ctx.deps;
+  const { stores, settings, relay, bus, hooks } = ctx.deps;
+  // banned event ids are enforced on write so a banned event can't simply be republished
+  const bannedEvents = new Set<string>();
+  void stores.db
+    .all<{ id: string }>("SELECT id FROM admin_banned_events")
+    .then((rows) => rows.forEach((r) => bannedEvents.add(r.id)))
+    .catch((err) => ctx.logger.warn("failed to load banned events", { err: String(err) }));
+  hooks.onWrite((event) => (bannedEvents.has(event.id) ? { action: "reject", reason: "blocked: this event was banned by the relay operator" } : undefined), "admin", 0);
   const audit = (caller: Caller, action: string, target: string | null, details: Record<string, unknown> = {}) =>
     ctx.auditAs(caller.pubkey, null, action, target, { via: "nip86", ...details });
 
@@ -144,6 +151,7 @@ export function createNip86Handler(ctx: ApiContext) {
           n++;
         }
         await stores.db.run("DELETE FROM admin_banned_events WHERE id = ?", [id]);
+        bannedEvents.delete(id);
         await audit(caller, "event.allow", id, { reason, dismissedReports: n });
         return true;
       },
@@ -159,6 +167,7 @@ export function createNip86Handler(ctx: ApiContext) {
            ON CONFLICT (id) DO UPDATE SET reason = excluded.reason, by = excluded.by, at = excluded.at`,
           [id, reason, caller.pubkey, ctx.nowSec()],
         );
+        bannedEvents.add(id);
         const open = await ctx.reports.open(5000);
         for (const { event, parsed } of open) {
           if (parsed.targetEventId === id) await ctx.reports.setStatus(event.id, "resolved", "delete-event", caller.pubkey, reason || undefined);
@@ -217,6 +226,7 @@ export function createNip86Handler(ctx: ApiContext) {
         if (!isValidCidr(ip)) throw new RpcError("invalid ip");
         const reason = str(params, 1, "reason", true);
         await stores.ipRules.add({ cidr: ip, action: "block", reason });
+        bus.emit("ip.rules.changed", { actor: caller.pubkey });
         const disconnected = ip.includes("/") ? 0 : relay.disconnect({ ip });
         await audit(caller, "ip.add", ip, { action: "block", reason, disconnected });
         return true;
@@ -227,6 +237,7 @@ export function createNip86Handler(ctx: ApiContext) {
       async run(params, caller) {
         const ip = str(params, 0, "ip").trim();
         await stores.ipRules.remove(ip);
+        bus.emit("ip.rules.changed", { actor: caller.pubkey });
         await audit(caller, "ip.remove", ip, {});
         return true;
       },

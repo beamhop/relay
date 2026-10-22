@@ -25,7 +25,7 @@ sw.addEventListener("install", (event: any) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-      const urls = MANIFEST.map((e) => new URL(e.url, SCOPE).href);
+      const urls = [...new Set(MANIFEST.map((e) => new URL(e.url, SCOPE).href))]; // addAll rejects duplicates
       await cache.addAll(urls);
       await sw.skipWaiting();
     })(),

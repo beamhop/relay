@@ -21,6 +21,8 @@ export const GROUP_KIND = {
 
 const METADATA_KINDS = [GROUP_KIND.METADATA, GROUP_KIND.ADMINS, GROUP_KIND.MEMBERS, GROUP_KIND.ROLES];
 const GROUP_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+/** How many recent group events `previous` tags may reference (NIP-29 suggests the last 50). */
+const PREVIOUS_WINDOW = 100;
 
 export const DEFAULT_ROLES: Record<string, string> = {
   admin: "Full control over the group",
@@ -94,6 +96,19 @@ export class GroupsService {
     return true;
   }
 
+  /** Groups whose content (private) or metadata (hidden) the authed pubkeys may not read. */
+  unreadable(authed: ReadonlySet<string>): { privateIds: string[]; hiddenIds: string[] } {
+    const privateIds: string[] = [];
+    const hiddenIds: string[] = [];
+    for (const g of this.groups.values()) {
+      if (!g.private && !g.hidden) continue;
+      if (this.anyMember(g, authed)) continue;
+      if (g.private) privateIds.push(g.id);
+      if (g.hidden) hiddenIds.push(g.id);
+    }
+    return { privateIds, hiddenIds };
+  }
+
   /** Whether a filter explicitly targets a private group (used for COUNT gating). */
   isPrivateGroup(id: string): boolean {
     return !!this.groups.get(id)?.private;
@@ -120,7 +135,17 @@ export class GroupsService {
     // regular group content
     const member = g.members.has(event.pubkey);
     if (!member && (g.private || g.closed || g.restricted) && !actor.isStaff) return { reject: "restricted: not a member of this group" };
-    return undefined;
+    return this.checkPrevious(event, g);
+  }
+
+  /** NIP-29 timeline references: every `previous` id prefix must match one of the group's recent events. */
+  private async checkPrevious(event: NostrEvent, g: GroupState): Promise<GroupWriteDecision> {
+    const prev = event.tags.filter((t) => t[0] === "previous").flatMap((t) => t.slice(1)).filter(Boolean);
+    if (!prev.length) return undefined;
+    if (prev.some((p) => !/^[0-9a-f]{8,64}$/.test(p))) return { reject: "invalid: malformed previous tag" };
+    const recent = await this.ctx.stores.events.query([{ "#h": [g.id], limit: PREVIOUS_WINDOW }], { maxLimit: PREVIOUS_WINDOW });
+    const ok = prev.every((p) => recent.some((ev) => ev.id.startsWith(p)));
+    return ok ? undefined : { reject: "invalid: previous tag references an event not in this group's recent history" };
   }
 
   // ------------------------------------------------------------ handlers

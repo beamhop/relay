@@ -54,8 +54,9 @@ export function NumberField({ placeholder, min, step, suffix, optional, ...p }: 
                 name={field.name}
                 ref={field.ref}
                 onBlur={field.onBlur}
-                value={field.value ?? ""}
-                onChange={(e) => field.onChange(e.target.value === "" ? (optional ? undefined : 0) : Number(e.target.value))}
+                value={field.value === undefined || Number.isNaN(field.value) ? "" : field.value}
+                // empty required fields become NaN so validation flags them instead of silently saving 0
+                onChange={(e) => field.onChange(e.target.value === "" ? (optional ? undefined : Number.NaN) : Number(e.target.value))}
                 className={cn(suffix && "pr-14")}
               />
             </FormControl>

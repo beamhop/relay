@@ -23,7 +23,7 @@ export function buildNip11(ctx: RelayContext): Record<string, unknown> {
       max_event_tags: limits.maxEventTags,
       max_content_length: limits.maxContentLength,
       min_pow_difficulty: limits.minPowDifficulty,
-      auth_required: access.authForRead,
+      auth_required: access.authForRead || access.mode === "auth-required",
       payment_required: false,
       restricted_writes: access.mode !== "public" || access.authForWrite,
       created_at_lower_limit: limits.createdAtLowerSec,

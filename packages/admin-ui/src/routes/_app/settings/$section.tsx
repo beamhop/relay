@@ -73,7 +73,9 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
   const Fields: React.ComponentType<{ control: Control<any>; disabled: boolean }> = FIELDS[sectionKey];
   const onSubmit = form.handleSubmit(async (values) => {
     if (sectionKey === "moderation") {
-      const bad = (values.wordFilters as RuntimeSettings["moderation"]["wordFilters"]).find((w) => w.isRegex && regexError(w.pattern));
+      const filters = values.wordFilters as RuntimeSettings["moderation"]["wordFilters"];
+      if (filters.some((w) => !w.pattern.trim())) return void form.setError("root", { message: "Word filters need a pattern" });
+      const bad = filters.find((w) => w.isRegex && regexError(w.pattern));
       if (bad) return void form.setError("root", { message: `Invalid regex: ${bad.pattern}` });
     }
     await save.mutateAsync({ [sectionKey]: values } as any);
@@ -104,7 +106,7 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
             )}
           >
             <span className="mr-auto pl-2 text-sm text-muted-foreground">Unsaved changes</span>
-            <Button type="button" variant="ghost" onClick={() => form.reset(value as any)}>
+            <Button type="button" variant="ghost" onClick={() => form.reset(structuredClone(value) as any, { keepDirtyValues: false, keepDefaultValues: false })}>
               <Undo2 /> Discard
             </Button>
             <Button type="submit" disabled={save.isPending}>

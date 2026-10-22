@@ -105,6 +105,20 @@ describe("users", () => {
     expect(h.audit.entries.some((e) => e.action === "user.bulk.ban")).toBe(true);
   });
 
+  test("bulk unmute leaves banned users banned; moderators can't edit higher roles", async () => {
+    const h = await createHarness();
+    const a = newKey();
+    await h.asKey(h.owner, "/users/bulk", { method: "POST", body: { pubkeys: [a.pk], action: "ban" } });
+    await h.asKey(h.owner, "/users/bulk", { method: "POST", body: { pubkeys: [a.pk], action: "unmute" } });
+    expect((await h.stores.users.get(a.pk))!.status).toBe("banned");
+    const mod = await h.addAdmin("moderator");
+    const admin = await h.addAdmin("admin");
+    const r = (await (await h.asKey(mod, "/users/bulk", { method: "POST", body: { pubkeys: [admin.pk], action: "add-tag", tag: "x" } })).json()) as { ok: number };
+    expect(r.ok).toBe(0);
+    expect((await h.asKey(mod, `/users/${admin.pk}`, { method: "PATCH", body: { notes: "x" } })).status).toBe(403);
+    expect((await h.asKey(mod, `/users/${mod.pk}`, { method: "PATCH", body: { notes: "me" } })).status).toBe(200);
+  });
+
   test("list enriched with profiles; detail stats; patch validation", async () => {
     const h = await createHarness();
     const u = newKey();
@@ -125,6 +139,21 @@ describe("users", () => {
     expect(ok.status).toBe(200);
     expect(((await ok.json()) as { nip05Name: string }).nip05Name).toBe("alice");
     expect((await h.asKey(h.owner, "/users/not-a-pubkey")).status).toBe(400);
+  });
+
+  test("search by npub and profile name; role=owner includes config owners", async () => {
+    const h = await createHarness();
+    const u = newKey();
+    const other = newKey();
+    await h.stores.users.upsert(u.pk, {});
+    await h.stores.users.upsert(other.pk, {});
+    await h.stores.users.upsert(h.owner.pk, {});
+    await h.events.save(signEvent(u, 0, [], JSON.stringify({ name: "zebracorn" })));
+    const pks = async (q: string) =>
+      ((await (await h.asKey(h.owner, `/users?${q}`)).json()) as { items: { pubkey: string }[] }).items.map((x) => x.pubkey);
+    expect(await pks(`search=${nip19.npubEncode(u.pk)}`)).toEqual([u.pk]);
+    expect(await pks("search=zebracorn")).toEqual([u.pk]);
+    expect(await pks("role=owner")).toContain(h.owner.pk);
   });
 
   test("admins list includes config owners", async () => {
@@ -150,6 +179,12 @@ describe("settings", () => {
     expect(((await ok.json()) as { settings: { info: { name: string } } }).settings.info.name).toBe("My relay");
     expect(h.audit.entries.some((e) => e.action === "settings.update")).toBe(true);
     expect((await h.asKey(h.owner, "/settings", { method: "PATCH", body: "[1,2" })).status).toBe(400);
+    expect((await h.asKey(h.owner, "/settings", { method: "PATCH", body: { bogus: {} } })).status).toBe(400);
+    const regex = await h.asKey(h.owner, "/settings", {
+      method: "PATCH",
+      body: { moderation: { wordFilters: [{ id: "r", pattern: "(", isRegex: true }] } },
+    });
+    expect(regex.status).toBe(400);
   });
 });
 

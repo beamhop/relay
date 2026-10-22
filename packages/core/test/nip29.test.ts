@@ -95,6 +95,17 @@ describe("NIP-29 relay-based groups", () => {
     expect(await relay.groups.get("g1")).toBeUndefined();
   });
 
+  test("previous tags must reference recent group events", async () => {
+    const { connect } = await setup();
+    const c = connect();
+    const admin = keypair();
+    await c.publish(sign(admin, { kind: 9007, tags: h("tl") }));
+    const first = sign(admin, { kind: 9, content: "one", tags: h("tl") });
+    expect((await c.publish(first))[2]).toBe(true);
+    expect((await c.publish(sign(admin, { kind: 9, content: "two", tags: h("tl", [["previous", first.id.slice(0, 8)]]) })))[2]).toBe(true);
+    expect((await c.publish(sign(admin, { kind: 9, content: "bad", tags: h("tl", [["previous", "deadbeef"]]) })))[3]).toMatch(/^invalid:/);
+  });
+
   test("group creation policy", async () => {
     const { connect } = await setup({ settings: { groups: { creation: "admins" } } });
     const c = connect();

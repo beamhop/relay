@@ -141,21 +141,27 @@ export class SqlUserStore implements UserStore {
   async list(q: UserQuery): Promise<{ items: UserRecord[]; total: number }> {
     const conds: string[] = [];
     const params: unknown[] = [];
+    const inList = (pks: string[]) => {
+      params.push(...pks);
+      return ` OR pubkey IN (${pks.map(() => "?").join(", ")})`;
+    };
     if (q.search?.trim()) {
       const s = q.search.trim().toLowerCase();
       const contains = `%${escapeLike(s)}%`;
-      conds.push(
-        "(pubkey LIKE ? ESCAPE '\\' OR nip05_name LIKE ? ESCAPE '\\' OR LOWER(notes) LIKE ? ESCAPE '\\' OR LOWER(tags) LIKE ? ESCAPE '\\')",
-      );
       params.push(`${escapeLike(s)}%`, `${escapeLike(s)}%`, contains, contains);
+      const extra = q.searchPubkeys?.length ? inList(q.searchPubkeys) : "";
+      conds.push(
+        `(pubkey LIKE ? ESCAPE '\\' OR nip05_name LIKE ? ESCAPE '\\' OR LOWER(notes) LIKE ? ESCAPE '\\' OR LOWER(tags) LIKE ? ESCAPE '\\'${extra})`,
+      );
     }
     if (q.status) {
       conds.push("status = ?");
       params.push(q.status);
     }
     if (q.role) {
-      conds.push("role = ?");
       params.push(q.role);
+      const extra = q.rolePubkeys?.length ? inList(q.rolePubkeys) : "";
+      conds.push(`(role = ?${extra})`);
     }
     if (q.allowed !== undefined) {
       conds.push("allowed = ?");

@@ -104,6 +104,7 @@ function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bool
         <div className="space-y-2">
           <Label htmlFor="ip-cidr">IP or CIDR</Label>
           <Input id="ip-cidr" value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="203.0.113.0/24 or 2001:db8::/32" aria-invalid={!!cidr && !valid} autoCapitalize="off" />
+          {!!cidr.trim() && !valid && <p className="text-xs text-destructive">Enter a valid IPv4/IPv6 address or CIDR range.</p>}
         </div>
         <div className="space-y-2">
           <Label>Action</Label>

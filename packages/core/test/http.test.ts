@@ -50,7 +50,9 @@ describe("HTTP", () => {
     expect((await post(nip98(kp, "https://evil.example.com/invite/redeem"))).status).toBe(401);
     expect((await post(nip98(kp, url, "GET"))).status).toBe(401);
     expect((await post(nip98(kp, url, "POST", now() - 120))).status).toBe(401);
-    expect((await post(nip98(kp, url), "wrong")).status).toBe(400);
+    const used = nip98(kp, url, "POST", now() - 1);
+    expect((await post(used, "wrong")).status).toBe(400);
+    expect((await post(used)).status).toBe(401); // replayed auth event
     const ok = await post(nip98(kp, url));
     expect(ok.status).toBe(200);
     expect((await stores.users.get(kp.pk))?.allowed).toBe(true);

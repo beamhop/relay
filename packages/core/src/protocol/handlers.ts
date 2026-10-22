@@ -4,7 +4,7 @@ import { isExpired } from "../nips/nip40";
 import { verifyAuthEvent } from "../nips/nip42";
 import { Negentropy, NegentropyStorage } from "../nips/nip77/negentropy";
 import { processEvent } from "../pipeline/write";
-import { isVisibleTo, onlyGatedKinds } from "../subscriptions/visibility";
+import { isVisibleTo, onlyGatedKinds, restrictedSubFilters } from "../subscriptions/visibility";
 import { withPrefix } from "../util/reasons";
 import type { Connection, Subscription } from "./connection";
 import { nowSec } from "@beamhop/sdk";
@@ -48,8 +48,29 @@ async function reqRateOk(ctx: RelayContext, conn: Connection): Promise<boolean> 
 }
 
 function authReadDenied(ctx: RelayContext, conn: Connection): string | undefined {
-  if (ctx.s().access.authForRead && conn.authedPubkeys.size === 0) return "auth-required: authentication is required to read from this relay";
+  const { access } = ctx.s();
+  if ((access.authForRead || access.mode === "auth-required") && conn.authedPubkeys.size === 0) return "auth-required: authentication is required to read from this relay";
   return undefined;
+}
+
+/** Max potentially-private events inspected per COUNT / NEG-OPEN before refusing the filter as too broad. */
+export const MAX_PRIVATE_SCAN = 5_000;
+
+/**
+ * Ids of stored events matching `filters` that the connection may not see. Returns null when
+ * too many candidates exist to check cheaply (caller should refuse).
+ */
+async function hiddenIds(ctx: RelayContext, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<Set<string> | null> {
+  const subs = filters.flatMap((f) => restrictedSubFilters(ctx, f, conn.authedPubkeys));
+  const hidden = new Set<string>();
+  if (!subs.length) return hidden;
+  const events = await ctx.stores.events.query(
+    subs.map(({ limit: _x, ...f }) => ({ ...f, limit: MAX_PRIVATE_SCAN + 1 })),
+    { maxLimit: MAX_PRIVATE_SCAN + 1 },
+  );
+  if (events.length > MAX_PRIVATE_SCAN) return null;
+  for (const ev of events) if (!isVisibleTo(ctx, ev, conn, rctx)) hidden.add(ev.id);
+  return hidden;
 }
 
 // ------------------------------------------------------------------ REQ / CLOSE
@@ -180,7 +201,10 @@ export async function handleCount(ctx: RelayContext, conn: Connection, subId: st
   }
   if ("reject" in hq) return conn.closedSub(subId, withPrefix(hq.reject, "blocked"));
   try {
-    const count = await ctx.stores.events.count(hq.filters.map(({ limit: _l, ...f }) => f));
+    const filters = hq.filters.map(({ limit: _l, ...f }) => f);
+    const hidden = await hiddenIds(ctx, conn, filters, { conn, subId, source: "count" });
+    if (!hidden) return conn.closedSub(subId, "restricted: filter matches too many private events to count; narrow it with kinds");
+    const count = Math.max(0, (await ctx.stores.events.count(filters)) - hidden.size);
     conn.send(["COUNT", subId, { count }]);
     ctx.bus.emit("req.executed", { connId: conn.id, subId, filters: hq.filters, results: count, durationMs: performance.now() - started, ip: conn.ip });
   } catch (err) {
@@ -216,9 +240,13 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   if ("reject" in hq) return negErr(conn, subId, withPrefix(hq.reject, "blocked"));
 
   const { limit: _limit, ...syncFilter } = hq.filters[0] ?? filter;
+  if (syncFilter.search !== undefined) return negErr(conn, subId, "unsupported: search filters cannot be used for sync");
   let items: { id: string; created_at: number }[];
   try {
+    const hidden = await hiddenIds(ctx, conn, [syncFilter], { conn, subId, source: "sync" });
+    if (!hidden) return negErr(conn, subId, "blocked: filter matches too many private events; narrow it with kinds");
     items = await ctx.stores.events.queryIdsForSync(syncFilter);
+    if (hidden.size) items = items.filter((it) => !hidden.has(it.id));
   } catch (err) {
     ctx.logger.error("NEG-OPEN query failed", { err: String(err) });
     return negErr(conn, subId, "error: query failed");

@@ -64,6 +64,16 @@ describe("REQ", () => {
     expect((await c.req("x", {})).end[0]).toBe("EOSE");
   });
 
+  test("auth-required mode gates reads", async () => {
+    const { connect } = await setup({ settings: { access: { mode: "auth-required" } } });
+    const c = connect();
+    expect(((await c.req("x", {})).end[2] as string)).toMatch(/^auth-required:/);
+    c.send(["COUNT", "c", {}]);
+    expect(((await c.socket.waitFor((m) => m[0] === "CLOSED" && m[1] === "c"))[2] as string)).toMatch(/^auth-required:/);
+    await c.auth(keypair());
+    expect((await c.req("y", {})).end[0]).toBe("EOSE");
+  });
+
   test("REQ rate limiting", async () => {
     const { connect } = await setup({ settings: { limits: { reqPerMinute: 2 } } });
     const c = connect();
@@ -186,6 +196,26 @@ describe("COUNT (NIP-45)", () => {
     c.send(["COUNT", "c3", { kinds: [1059], "#p": [bob.pk] }]);
     expect(await c.socket.waitFor((m) => m[0] === "COUNT" && m[1] === "c3")).toEqual(["COUNT", "c3", { count: 1 }]);
   });
+
+  test("filters without kinds don't count private events", async () => {
+    const { connect } = await setup();
+    const c = connect();
+    const kp = keypair();
+    const bob = keypair();
+    await c.publish(sign(kp, { content: "public", tags: [["p", bob.pk]] }));
+    await c.publish(sign(kp, { kind: 4, tags: [["p", bob.pk]] }));
+    await c.publish(sign(kp, { kind: 1059, tags: [["p", bob.pk]] }));
+    const count = async (id: string, f: object) => {
+      c.send(["COUNT", id, f]);
+      return ((await c.socket.waitFor((m) => m[0] === "COUNT" && m[1] === id))[2] as { count: number }).count;
+    };
+    expect(await count("a", { "#p": [bob.pk] })).toBe(1);
+    expect(await count("b", { authors: [kp.pk] })).toBe(1);
+    await c.auth(keypair());
+    expect(await count("c", { authors: [kp.pk] })).toBe(1);
+    await c.auth(bob);
+    expect(await count("d", { "#p": [bob.pk] })).toBe(3);
+  });
 });
 
 describe("NIP-77 through the relay", () => {
@@ -222,6 +252,27 @@ describe("NIP-77 through the relay", () => {
     c.send(["NEG-CLOSE", "n1"]);
     expect([...need].sort()).toEqual(stored.slice(40).map((e) => e.id).sort());
     expect([...have]).toEqual([clientOnly]);
+  });
+
+  test("NEG-OPEN never reveals private event ids", async () => {
+    const { connect } = await setup();
+    const c = connect();
+    const kp = keypair();
+    const bob = keypair();
+    const pub = sign(kp, { content: "public", tags: [["p", bob.pk]] });
+    await c.publish(pub);
+    await c.publish(sign(kp, { kind: 4, tags: [["p", bob.pk]] }));
+    await c.publish(sign(kp, { kind: 1059, tags: [["p", bob.pk]] }));
+    const local = new NegentropyStorage();
+    local.seal();
+    const neg = new Negentropy(local);
+    const from = c.socket.sent.length;
+    c.send(["NEG-OPEN", "n2", { "#p": [bob.pk] }, neg.initiate()]);
+    const resp = await c.socket.waitFor((m) => m[0] === "NEG-MSG" || m[0] === "NEG-ERR", 2000, from);
+    expect(resp[0]).toBe("NEG-MSG");
+    expect(neg.reconcile(resp[2] as string).need).toEqual([pub.id]);
+    c.send(["NEG-OPEN", "n3", { search: "x" }, new Negentropy(local).initiate()]);
+    expect(((await c.socket.waitFor((m) => m[0] === "NEG-ERR" && m[1] === "n3"))[2] as string)).toMatch(/^unsupported:/);
   });
 
   test("NEG-MSG for unknown session → NEG-ERR", async () => {

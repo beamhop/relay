@@ -183,7 +183,7 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
     const assets = overrides.assets ?? createAssetSource(config.admin.uiDir);
     if (config.admin.enabled) log.info(assets.kind === "none" ? "admin UI not built — serving placeholder at /admin" : `admin UI served from ${assets.location}`);
 
-    const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log });
+    const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, checkHealth: () => stores.db.get("SELECT 1 AS ok") });
 
     let started = false;
     let stopping: Promise<void> | undefined;
@@ -243,6 +243,9 @@ interface AppDeps {
   assets: AssetSource;
   renderPrometheus?: (m: MetricsService) => string | Promise<string>;
   logger: Logger;
+  version?: string;
+  /** throws when the server isn't ready (e.g. database unreachable) */
+  checkHealth?: () => Promise<unknown>;
 }
 
 /** Root router — order follows docs/ARCHITECTURE.md "Request routing". */
@@ -305,6 +308,16 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
   };
   app.all("/plugins/:name", pluginRoute);
   app.all("/plugins/:name/*", pluginRoute);
+
+  // liveness / readiness probe (Docker HEALTHCHECK, load balancers)
+  app.get("/health", async (c) => {
+    try {
+      await d.checkHealth?.();
+      return c.json({ ok: true, version: d.version }, 200, { "cache-control": "no-store" });
+    } catch (err) {
+      return c.json({ ok: false, error: String(err) }, 503, { "cache-control": "no-store" });
+    }
+  });
 
   // Prometheus scrape endpoint
   if (d.extras.prometheus && d.renderPrometheus) {

@@ -23,15 +23,15 @@ import { dummyHash, hashPassword, verifyPassword } from "../util/password";
 import { tryParsePubkey } from "../util/pubkey";
 import { LoginLimiter } from "../util/ratelimit";
 import { readBody } from "../util/request";
-import { generateTotpSecret, totpUri, verifyTotp } from "../util/totp";
+import { generateTotpSecret, totpStep, totpUri, verifyTotp } from "../util/totp";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
 const PASSKEY_COOKIE = "bh_pk";
 const FRESH_NOSTR_LOGIN_SEC = 10 * 60;
 
 export async function buildMe(ctx: ApiContext, pubkey: string, role: AdminRole): Promise<Me> {
-  const [hasPassword, passkeys, profile] = await Promise.all([
-    ctx.credentials.hasPassword(pubkey),
+  const [cred, passkeys, profile] = await Promise.all([
+    ctx.credentials.getPassword(pubkey),
     ctx.credentials.listPasskeys(pubkey),
     ctx.profiles.get(pubkey),
   ]);
@@ -39,7 +39,8 @@ export async function buildMe(ctx: ApiContext, pubkey: string, role: AdminRole):
     pubkey,
     role,
     permissions: [...permissionsFor(role)],
-    hasPassword,
+    hasPassword: !!cred?.hash,
+    hasTotp: !!cred?.totpSecret,
     passkeys: passkeys.map((p) => ({ id: p.id, name: p.name, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })),
     ...(profile ? { profile } : {}),
   };
@@ -55,6 +56,8 @@ const TotpCode = z.object({ code: z.string().min(6).max(16) });
 
 export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
   const loginLimiter = new LoginLimiter(ctx.nowMs, 5, 60_000);
+  /** Last accepted TOTP time step per admin: a code (or an older one) cannot be reused. */
+  const lastTotpStep = new Map<string, number>();
   const ipLimiter = new LoginLimiter(ctx.nowMs, 30, 60_000);
   const passkeyChallenges = new ExpiringMap<{ challenge: string }>(10_000, ctx.nowMs);
   const pendingTotp = new ExpiringMap<string>(1000, ctx.nowMs);
@@ -101,11 +104,12 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/auth/password", async (c) => {
     const body = await readBody(c, PasswordLogin);
     const ip = c.get("ip") ?? "unknown";
-    const key = `${ip}|${body.login.trim().toLowerCase()}`;
+    const pubkey = await resolveLogin(body.login);
+    // key on the resolved pubkey so npub / hex / NIP-05 spellings share one lockout counter
+    const key = `${ip}|${pubkey ?? body.login.trim().toLowerCase()}`;
     const wait = Math.max(loginLimiter.check(key), ipLimiter.check(ip));
     if (wait > 0) throw tooMany(wait);
 
-    const pubkey = await resolveLogin(body.login);
     const cred = pubkey ? await ctx.credentials.getPassword(pubkey) : undefined;
     const ok = await verifyPassword(body.password, cred?.hash ?? (await dummyHash()));
     if (!pubkey || !cred || !ok) {
@@ -115,11 +119,13 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
     }
     if (cred.totpSecret) {
       if (!body.totp) throw unauthorized("TOTP code required", "totp_required");
-      if (!verifyTotp(cred.totpSecret, body.totp, ctx.nowSec())) {
+      const step = totpStep(cred.totpSecret, body.totp, ctx.nowSec());
+      if (step === null || step <= (lastTotpStep.get(pubkey) ?? -1)) {
         loginLimiter.fail(key);
         ipLimiter.fail(ip);
         throw unauthorized("invalid TOTP code", "invalid_totp");
       }
+      lastTotpStep.set(pubkey, step);
     }
     loginLimiter.succeed(key);
     return c.json(await startSession(c, pubkey, "password"));

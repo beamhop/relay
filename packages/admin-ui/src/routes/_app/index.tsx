@@ -81,7 +81,7 @@ function Kpis() {
       <KpiCard label="REQ /s" icon={Send} loading={loading} value={formatRate(s?.reqPerSec)} spark={spark("reqPerSec")} />
       <KpiCard label="Rejected /s" icon={ShieldX} loading={loading} value={formatRate(s?.rejectedPerSec)} tone={(s?.rejectedPerSec ?? 0) > 5 ? "warn" : "default"} spark={spark("rejectedPerSec")} />
       <KpiCard label="REQ latency p95" icon={Timer} loading={loading} value={formatMs(s?.reqLatencyP95)} sub={`p50 ${formatMs(s?.reqLatencyP50)} · p99 ${formatMs(s?.reqLatencyP99)}`} spark={spark("reqLatencyP95")} />
-      <KpiCard label="Total events" icon={Database} loading={loading} value={formatCompact(s?.totalEvents)} sub={formatNumber(s?.totalEvents)} />
+      <KpiCard label="Total events" icon={Database} loading={loading} value={formatCompact(s?.totalEvents)} sub={(s?.totalEvents ?? 0) >= 1000 ? formatNumber(s?.totalEvents) : undefined} />
       <KpiCard label="Database" icon={HardDrive} loading={loading} value={formatBytes(s?.dbBytes)} />
       <KpiCard label="Media" icon={HardDrive} loading={loading} value={formatBytes(s?.mediaBytes)} sub={`${formatNumber(s?.mediaCount)} blobs`} />
       <KpiCard label="CPU" icon={Cpu} loading={loading} value={formatPercent(s?.cpuPercent)} tone={(s?.cpuPercent ?? 0) > 85 ? "bad" : (s?.cpuPercent ?? 0) > 60 ? "warn" : "default"} spark={spark("cpuPercent")} />

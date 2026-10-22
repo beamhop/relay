@@ -30,6 +30,7 @@ export function registerIpRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/ip-rules", requirePermission("ip.manage"), async (c) => {
     const rule = await readBody(c, IpRuleSchema);
     await ipRules.add(rule);
+    ctx.deps.bus.emit("ip.rules.changed", { actor: "admin-api" });
     let disconnected = 0;
     if (rule.action === "block" && !rule.cidr.includes("/")) disconnected = ctx.deps.relay.disconnect({ ip: rule.cidr });
     await ctx.audit(c, "ip.add", rule.cidr, { action: rule.action, reason: rule.reason, disconnected });
@@ -41,6 +42,7 @@ export function registerIpRoutes(app: AdminApp, ctx: ApiContext) {
     const cidr = decodeURIComponent(c.req.param("cidr"));
     if (!(await ipRules.list()).some((r) => r.cidr === cidr)) throw notFound("ip rule not found");
     await ipRules.remove(cidr);
+    ctx.deps.bus.emit("ip.rules.changed", { actor: "admin-api" });
     await ctx.audit(c, "ip.remove", cidr);
     return c.json({ ok: true });
   });

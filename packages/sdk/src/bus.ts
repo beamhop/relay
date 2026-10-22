@@ -23,6 +23,7 @@ export interface BusEvents {
   "report.created": { event: NostrEvent };
   "user.updated": { pubkey: string; user: UserRecord; actor: string };
   "settings.changed": { settings: RuntimeSettings; actor: string };
+  "ip.rules.changed": { actor: string };
   "admin.action": { entry: Omit<AuditEntry, "id"> };
   "alert": { level: "info" | "warning" | "critical"; title: string; message: string; url?: string };
 }

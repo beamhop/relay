@@ -25,6 +25,30 @@ export function mayMatchGated(f: Filter): boolean {
   return !f.kinds || f.kinds.some((k) => GATED_KINDS.has(k));
 }
 
+function narrow(vals: readonly (string | number)[] | undefined, allowed: readonly (string | number)[]): any[] | null {
+  const out = vals ? allowed.filter((v) => vals.includes(v)) : [...allowed];
+  return out.length ? out : null;
+}
+
+/**
+ * Sub-filters of `f` covering every stored event that might be hidden from `authed`
+ * (DMs / gift wraps, private group content, hidden group metadata). Used by COUNT and
+ * NEG-OPEN, which can't run per-event visibility checks over the full result set.
+ */
+export function restrictedSubFilters(ctx: RelayContext, f: Filter, authed: ReadonlySet<string>): Filter[] {
+  const out: Filter[] = [];
+  const gatedKinds = narrow(f.kinds, [...GATED_KINDS]);
+  if (gatedKinds) out.push({ ...f, kinds: gatedKinds });
+  const { privateIds, hiddenIds } = ctx.groups.unreadable(authed);
+  const h = narrow(f["#h"], privateIds);
+  if (h) out.push({ ...f, "#h": h });
+  const metaKinds = narrow(f.kinds, [39000, 39001, 39002, 39003]);
+  const metaAuthors = narrow(f.authors, [ctx.key.pubkey]);
+  const d = narrow(f["#d"], hiddenIds);
+  if (metaKinds && metaAuthors && d) out.push({ ...f, kinds: metaKinds, authors: metaAuthors, "#d": d });
+  return out;
+}
+
 /** Full read-visibility check for an event towards a connection (stored results and live fan-out). */
 export function isVisibleTo(ctx: RelayContext, event: NostrEvent, conn: ConnectionInfo | undefined, rctx: ReadContext): boolean {
   const authed = conn?.authedPubkeys ?? EMPTY;

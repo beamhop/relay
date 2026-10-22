@@ -217,7 +217,11 @@ const plugin: BeamhopPlugin<typeof Settings> = {
 
     ctx.adminHttp.get("/stats", (c) => c.json({ ...totals, ...scorer.size, recent }));
     ctx.adminHttp.post("/score", async (c) => {
-      const event = (await c.req.json()) as NostrEvent;
+      const event = (await c.req.json().catch(() => null)) as NostrEvent | null;
+      const valid =
+        !!event && typeof event === "object" && typeof event.content === "string" && typeof event.pubkey === "string" &&
+        typeof event.kind === "number" && Array.isArray(event.tags);
+      if (!valid) return c.json({ error: "body must be a nostr event {pubkey, kind, tags, content}", code: "validation" }, 400);
       const preview = new SpamScorer(() => ctx.settings.get());
       return c.json(preview.score(event, { firstSeenAt: (await userInfo(event.pubkey)).firstSeenAt }));
     });

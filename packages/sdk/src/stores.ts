@@ -74,6 +74,10 @@ export interface UserRecord {
 
 export interface UserQuery {
   search?: string; // pubkey prefix, nip05 name, tag, notes
+  /** extra pubkeys that also match `search` (e.g. resolved from npub or profile names) */
+  searchPubkeys?: string[];
+  /** extra pubkeys that also match `role` (e.g. config owners not stored in the DB) */
+  rolePubkeys?: string[];
   status?: UserStatus;
   role?: AdminRole;
   allowed?: boolean;

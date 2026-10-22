@@ -180,6 +180,8 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     closers.delete(conn.id);
   }
 
+  let offIpRules: (() => void) | undefined;
+
   async function refreshIpRules() {
     await ctx.ipRules.refresh();
     for (const conn of [...conns.values()]) {
@@ -235,6 +237,8 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     async start() {
       stopped = false;
       scheduler.every("ip-rules", IP_RULES_REFRESH_MS, refreshIpRules);
+      offIpRules?.();
+      offIpRules = deps.bus.on("ip.rules.changed", () => void scheduler.runNow("ip-rules", refreshIpRules));
       scheduler.every("expiration", EXPIRATION_PURGE_MS, purgeExpired);
       scheduler.every("retention", 60_000, retentionTick);
       scheduler.every("rate-sweep", 60_000, () => ctx.rate.sweep());
@@ -242,6 +246,8 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     },
     async stop() {
       stopped = true;
+      offIpRules?.();
+      offIpRules = undefined;
       scheduler.stopAll();
       for (const conn of [...conns.values()]) {
         conn.notice("error: relay is shutting down");

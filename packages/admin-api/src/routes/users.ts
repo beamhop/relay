@@ -4,7 +4,7 @@ import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, conflict, forbidden } from "../errors";
 import { assertPermission, requirePermission } from "../middleware/auth";
-import { parsePubkey } from "../util/pubkey";
+import { parsePubkey, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
 const ROLES = ["owner", "admin", "moderator", "viewer"] as const;
@@ -91,6 +91,22 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     }
   }
 
+  /** Pubkeys matching a search by npub/hex or by profile name (kind-0 full-text search). */
+  async function searchPubkeys(search: string): Promise<string[]> {
+    const out = new Set<string>();
+    const pk = tryParsePubkey(search);
+    if (pk) out.add(pk);
+    if (search.length >= 2 && !pk) {
+      try {
+        const evs = await stores.events.query([{ kinds: [0], search, limit: 200 }], { maxLimit: 200 });
+        for (const e of evs) out.add(e.pubkey);
+      } catch {
+        // search unsupported by this backend — fall back to column matches only
+      }
+    }
+    return [...out];
+  }
+
   /** Count of owners (config owners ∪ DB owners). */
   async function ownerCount(): Promise<Set<string>> {
     const set = new Set(ctx.roles.owners);
@@ -101,7 +117,11 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
 
   app.get("/users", requirePermission("users.view"), async (c) => {
     const q = readQuery(c, ListQuery);
-    const { items, total } = await stores.users.list(q);
+    const { items, total } = await stores.users.list({
+      ...q,
+      ...(q.search?.trim() ? { searchPubkeys: await searchPubkeys(q.search.trim()) } : {}),
+      ...(q.role === "owner" ? { rolePubkeys: [...ctx.roles.owners] } : {}),
+    });
     return c.json({ items: await ctx.users.toViews(items), total });
   });
 
@@ -151,10 +171,12 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
             break;
           case "unban":
           case "unmute":
-            await ctx.users.setStatus(pubkey, "active", actor.pubkey);
+            if ((await ctx.users.getOrDefault(pubkey)).status === (body.action === "unban" ? "banned" : "muted"))
+              await ctx.users.setStatus(pubkey, "active", actor.pubkey);
             break;
           case "allow":
           case "disallow":
+            await ctx.users.assertCanEdit(actor, pubkey);
             await ctx.users.update(pubkey, { allowed: body.action === "allow" }, actor.pubkey);
             break;
           case "deny":
@@ -168,6 +190,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
             break;
           case "add-tag":
           case "remove-tag": {
+            await ctx.users.assertCanEdit(actor, pubkey);
             const u = await ctx.users.getOrDefault(pubkey);
             const tags = new Set(u.tags);
             if (body.action === "add-tag") tags.add(body.tag!);
@@ -214,6 +237,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     const pubkey = parsePubkey(c.req.param("pubkey"));
     const patch = await readBody(c, UserPatchSchema);
     if (patch.denied) await ctx.users.assertCanModerate(principalOf(c), pubkey);
+    else await ctx.users.assertCanEdit(principalOf(c), pubkey);
     if (patch.nip05Name) {
       const holder = await stores.users.getByNip05(patch.nip05Name);
       if (holder && holder.pubkey !== pubkey) throw conflict("nip05 name already taken");

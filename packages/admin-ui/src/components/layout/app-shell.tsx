@@ -46,11 +46,11 @@ export function AppShell() {
         <AppSidebar />
         <SidebarInset className="min-w-0">
           <TopBar />
-          <main className="mx-auto w-full max-w-[1600px] flex-1 px-3 pt-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:px-6 sm:pt-6 md:pb-8">
+          <div className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 px-3 pt-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:px-6 sm:pt-6 md:pb-8">
             <ErrorBoundary label="Page">
               <Outlet />
             </ErrorBoundary>
-          </main>
+          </div>
         </SidebarInset>
         <BottomNav />
       </SidebarProvider>

@@ -126,7 +126,7 @@ export default function WorldMap({ points, metric = "connections", className }: 
       title.className = "font-semibold";
       title.textContent = String(p.label);
       const stats = document.createElement("div");
-      stats.textContent = `${formatNumber(Number(p.connections))} connections · ${formatNumber(Number(p.events))} events`;
+      stats.textContent = `${formatNumber(Number(p.connections))} connection${Number(p.connections) === 1 ? "" : "s"} · ${formatNumber(Number(p.events))} event${Number(p.events) === 1 ? "" : "s"}`;
       div.append(title, stats);
       popup.setLngLat((f.geometry as unknown as { coordinates: [number, number] }).coordinates).setDOMContent(div).addTo(m);
     });
