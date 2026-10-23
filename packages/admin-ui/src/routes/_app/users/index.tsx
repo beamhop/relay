@@ -81,6 +81,10 @@ function UsersPage() {
       return n;
     });
   const allSelected = items.length > 0 && items.every((u) => selected.has(u.pubkey));
+  const selectedStatuses = new Set(items.filter((u) => selected.has(u.pubkey)).map((u) => u.status));
+  const anyBanned = selectedStatuses.has("banned");
+  const anyMuted = selectedStatuses.has("muted");
+  const anyActive = selectedStatuses.has("active");
 
   const runBulk = async (action: BulkUserRequest["action"], destructive = false) => {
     const pubkeys = [...selected];
@@ -236,9 +240,9 @@ function UsersPage() {
       <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
         {can("users.ban") && (
           <>
-            <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => runBulk("ban", true)}><Ban /> Ban</Button>
-            <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("unban")}><CheckCircle2 /> Unban</Button>
-            <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("mute")}><VolumeX /> Mute</Button>
+            {(anyActive || anyMuted) && <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => runBulk("ban", true)}><Ban /> Ban</Button>}
+            {anyBanned && <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("unban")}><CheckCircle2 /> Unban</Button>}
+            {anyActive && <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("mute")}><VolumeX /> Mute</Button>}
           </>
         )}
         {can("users.edit") && (
@@ -251,7 +255,7 @@ function UsersPage() {
               <DropdownMenuItem onSelect={() => runBulk("disallow")}>Remove from allow-list</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => runBulk("deny", true)}><UserX /> Deny</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => runBulk("undeny")}>Remove from deny-list</DropdownMenuItem>
-              {can("users.ban") && <DropdownMenuItem onSelect={() => runBulk("unmute")}>Unmute</DropdownMenuItem>}
+              {can("users.ban") && anyMuted && <DropdownMenuItem onSelect={() => runBulk("unmute")}>Unmute</DropdownMenuItem>}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => runBulk("add-tag")}><Tag /> Add tag…</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => runBulk("remove-tag")}>Remove tag…</DropdownMenuItem>
