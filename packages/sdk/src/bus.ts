@@ -22,6 +22,7 @@ export interface BusEvents {
   "blob.served": { sha256: string; size: number; ip: string };
   "report.created": { event: NostrEvent };
   "user.updated": { pubkey: string; user: UserRecord; actor: string };
+  "user.deleted": { pubkey: string; actor: string };
   "settings.changed": { settings: RuntimeSettings; actor: string };
   "ip.rules.changed": { actor: string };
   "admin.action": { entry: Omit<AuditEntry, "id"> };

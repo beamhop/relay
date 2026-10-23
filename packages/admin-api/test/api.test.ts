@@ -105,6 +105,29 @@ describe("users", () => {
     expect(h.audit.entries.some((e) => e.action === "user.bulk.ban")).toBe(true);
   });
 
+  test("delete removes the user and their events without banning; respects roles", async () => {
+    const h = await createHarness();
+    const u = newKey();
+    await h.stores.users.upsert(u.pk, { notes: "x" });
+    await h.events.save(signEvent(u, 1, [], "note"));
+    const mod = await h.addAdmin("moderator");
+    expect((await h.asKey(mod, `/users/${u.pk}`, { method: "DELETE" })).status).toBe(403);
+    const res = await h.asKey(h.owner, `/users/${nip19.npubEncode(u.pk)}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { deletedEvents: number }).deletedEvents).toBe(1);
+    expect(await h.stores.users.get(u.pk)).toBeUndefined();
+    expect(await h.events.count([{ authors: [u.pk] }])).toBe(0);
+    expect(h.audit.entries.some((e) => e.action === "user.delete")).toBe(true);
+    const admin = await h.addAdmin("admin");
+    expect((await h.asKey(admin, `/users/${h.owner.pk}`, { method: "DELETE" })).status).toBe(403);
+    expect((await h.asKey(h.owner, `/users/${h.owner.pk}`, { method: "DELETE" })).status).toBe(403);
+    const b = newKey();
+    await h.stores.users.upsert(b.pk, {});
+    const bulk = (await (await h.asKey(h.owner, "/users/bulk", { method: "POST", body: { pubkeys: [b.pk], action: "delete" } })).json()) as { ok: number };
+    expect(bulk.ok).toBe(1);
+    expect(await h.stores.users.get(b.pk)).toBeUndefined();
+  });
+
   test("bulk unmute leaves banned users banned; moderators can't edit higher roles", async () => {
     const h = await createHarness();
     const a = newKey();

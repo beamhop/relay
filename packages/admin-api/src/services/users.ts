@@ -86,4 +86,14 @@ export class UserService {
     if (req.disconnect ?? true) disconnected = this.deps.relay.disconnect({ pubkey });
     return { user, deletedEvents, deletedMedia, disconnected };
   }
+
+  /** Removes the user record and everything they stored here. Not a ban: they can connect again later. */
+  async delete(pubkey: string, actor: string) {
+    const disconnected = this.deps.relay.disconnect({ pubkey });
+    const deletedEvents = await this.deps.stores.events.deleteByPubkey(pubkey);
+    const deletedMedia = this.deps.blossom ? await this.deps.blossom.deleteByPubkey(pubkey, actor) : 0;
+    await this.deps.stores.users.delete(pubkey);
+    this.deps.bus.emit("user.deleted", { pubkey, actor });
+    return { deletedEvents, deletedMedia, disconnected };
+  }
 }

@@ -92,7 +92,8 @@ function UsersPage() {
       tag = r.input.trim();
     } else if (destructive) {
       const r = await flow.confirm({
-        title: action === "delete-events" ? `Delete all events of ${pubkeys.length} user(s)?` : `${action[0].toUpperCase()}${action.slice(1)} ${pubkeys.length} user(s)?`,
+        title: action === "delete-events" ? `Delete all events of ${pubkeys.length} user(s)?` : action === "delete" ? `Delete ${pubkeys.length} user(s)?` : `${action[0].toUpperCase()}${action.slice(1)} ${pubkeys.length} user(s)?`,
+        description: action === "delete" ? "Removes the users along with all their events and uploaded media. This can't be undone." : undefined,
         destructive: true,
         confirmText: "Confirm",
         input: action === "ban" ? { label: "Reason (optional)" } : undefined,
@@ -260,6 +261,12 @@ function UsersPage() {
                   <DropdownMenuItem variant="destructive" onSelect={() => runBulk("delete-events", true)}><Trash2 /> Delete events</DropdownMenuItem>
                 </>
               )}
+              {can("users.delete") && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onSelect={() => runBulk("delete", true)}><Trash2 /> Delete users</DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -364,6 +371,11 @@ function RowMenu({ u, flow }: { u: UserView; flow: ReturnType<typeof useBanFlow>
               </DropdownMenuItem>
             )}
           </>
+        )}
+        {can("users.delete") && u.role !== "owner" && (
+          <DropdownMenuItem variant="destructive" onSelect={() => flow.deleteWithConfirm(u.pubkey, u.profile)}>
+            Delete…
+          </DropdownMenuItem>
         )}
         <PluginUserActionItems pubkey={u.pubkey} />
       </DropdownMenuContent>

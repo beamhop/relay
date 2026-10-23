@@ -1,6 +1,6 @@
 import * as React from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, Ban, CheckCircle2, ExternalLink, FileText, Image as ImageIcon, MoreHorizontal, Save, VolumeX, Volume2 } from "lucide-react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft, Ban, CheckCircle2, ExternalLink, FileText, Image as ImageIcon, MoreHorizontal, Save, Trash2, VolumeX, Volume2 } from "lucide-react";
 import type { AdminRole, MediaItem, UserDetail, UserPatch } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { UserAvatar } from "@/components/user-avatar";
 import { CopyButton } from "@/components/copy-button";
 import { RoleBadge, ToneBadge, UserStatusBadge, BlobStatusBadge } from "@/components/badges";
@@ -49,6 +49,7 @@ function UserPage() {
 function UserView({ u }: { u: UserDetail }) {
   const can = useCan();
   const flow = useBanFlow(u.pubkey);
+  const navigate = useNavigate();
   const npub = toNpub(u.pubkey);
   const name = displayName(u.pubkey, u.profile);
   const protectedUser = u.role === "owner";
@@ -111,6 +112,19 @@ function UserView({ u }: { u: UserDetail }) {
                     </a>
                   </DropdownMenuItem>
                   <PluginUserActionItems pubkey={u.pubkey} />
+                  {can("users.delete") && !protectedUser && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={async () => {
+                          if (await flow.deleteWithConfirm(u.pubkey, u.profile)) navigate({ to: "/users" });
+                        }}
+                      >
+                        <Trash2 /> Delete user
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

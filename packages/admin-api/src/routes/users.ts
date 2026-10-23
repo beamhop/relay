@@ -47,7 +47,7 @@ const BanSchema = z.object({
 const RoleSchema = z.object({ role: z.enum(ROLES).nullable() });
 const BulkSchema = z.object({
   pubkeys: z.array(z.string()).min(1).max(1000),
-  action: z.enum(["ban", "unban", "mute", "unmute", "allow", "disallow", "deny", "undeny", "delete-events", "add-tag", "remove-tag"]),
+  action: z.enum(["ban", "unban", "mute", "unmute", "allow", "disallow", "deny", "undeny", "delete-events", "delete", "add-tag", "remove-tag"]),
   reason: z.string().max(1000).optional(),
   tag: z.string().trim().min(1).max(64).optional(),
 });
@@ -70,6 +70,7 @@ const BULK_PERMISSION = {
   "add-tag": "users.edit",
   "remove-tag": "users.edit",
   "delete-events": "content.delete",
+  delete: "users.delete",
 } as const;
 
 export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
@@ -188,6 +189,11 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
             await ctx.users.assertCanModerate(actor, pubkey);
             await stores.events.deleteByPubkey(pubkey);
             break;
+          case "delete":
+            await ctx.users.assertCanModerate(actor, pubkey);
+            await ctx.users.delete(pubkey, actor.pubkey);
+            await ctx.sessions.destroyAllFor(pubkey);
+            break;
           case "add-tag":
           case "remove-tag": {
             await ctx.users.assertCanEdit(actor, pubkey);
@@ -262,6 +268,16 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
       disconnected: r.disconnected,
     });
     return c.json(await ctx.users.toView(r.user));
+  });
+
+  app.delete("/users/:pubkey", requirePermission("users.delete"), async (c) => {
+    const pubkey = parsePubkey(c.req.param("pubkey"));
+    const actor = principalOf(c);
+    await ctx.users.assertCanModerate(actor, pubkey);
+    const r = await ctx.users.delete(pubkey, actor.pubkey);
+    await ctx.sessions.destroyAllFor(pubkey);
+    await ctx.audit(c, "user.delete", pubkey, r);
+    return c.json(r);
   });
 
   const statusRoute = (path: string, action: string, status: "active" | "muted", from?: "banned" | "muted") =>

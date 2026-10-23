@@ -24,7 +24,12 @@ export class UserCache {
     private readonly maxEntries = 50_000,
   ) {
     this.owners = new Set(owners);
-    this.unsub = bus.on("user.updated", ({ pubkey }) => this.invalidate(pubkey));
+    const offUpdated = bus.on("user.updated", ({ pubkey }) => this.invalidate(pubkey));
+    const offDeleted = bus.on("user.deleted", ({ pubkey }) => this.invalidate(pubkey));
+    this.unsub = () => {
+      offUpdated();
+      offDeleted();
+    };
   }
 
   async get(pubkey: string): Promise<UserRecord | undefined> {
