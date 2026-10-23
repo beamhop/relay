@@ -32,6 +32,30 @@ export async function loginWithExtension() {
   return loginWithSigner(window.nostr);
 }
 
+/** Local signing with an nsec / hex secret key. The key stays in memory for this call only — never stored or sent. */
+export async function loginWithPrivateKey(input: string) {
+  const { nip19 } = await import("nostr-tools");
+  const { finalizeEvent } = await import("nostr-tools/pure");
+  const s = input.trim().replace(/^nostr:/, "");
+  let sk: Uint8Array;
+  if (/^[0-9a-f]{64}$/i.test(s)) sk = Uint8Array.from(s.match(/../g)!, (b) => parseInt(b, 16));
+  else {
+    let d: ReturnType<typeof nip19.decode> | undefined;
+    try {
+      d = nip19.decode(s);
+    } catch {
+      /* handled below */
+    }
+    if (d?.type !== "nsec") throw new Error("Enter an nsec… or 64-char hex private key");
+    sk = d.data;
+  }
+  try {
+    return await loginWithSigner({ signEvent: async (t) => finalizeEvent(t, sk) });
+  } finally {
+    sk.fill(0);
+  }
+}
+
 const DEFAULT_CONNECT_RELAYS = ["wss://relay.nsec.app", "wss://relay.damus.io", "wss://nos.lol"];
 
 /** NIP-46 via bunker:// URL or NIP-05 */

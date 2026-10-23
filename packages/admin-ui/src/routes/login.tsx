@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Fingerprint, KeyRound, Link2, Loader2, Puzzle, QrCode, Smartphone } from "lucide-react";
+import { Fingerprint, KeyRound, KeySquare, Link2, Loader2, Puzzle, QrCode, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { Logo } from "@/components/layout/logo";
 import { CopyButton } from "@/components/copy-button";
 import { HttpError, errorMessage } from "@/lib/api";
-import { loginWithBunker, loginWithExtension, loginWithPasskey, loginWithPassword, startNostrConnect } from "@/lib/auth";
+import { loginWithBunker, loginWithExtension, loginWithPasskey, loginWithPassword, loginWithPrivateKey, startNostrConnect } from "@/lib/auth";
 
 export const Route = createFileRoute("/login")({
   validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({ redirect: typeof s.redirect === "string" ? s.redirect : undefined }),
@@ -52,20 +52,24 @@ function LoginPage() {
             {busy === "ext" ? <Loader2 className="animate-spin" /> : <Puzzle />}
             Sign in with extension
           </Button>
-          {!hasExtension && <p className="-mt-3 text-center text-xs text-muted-foreground">No NIP-07 extension detected — use a remote signer, password or passkey.</p>}
+          {!hasExtension && <p className="-mt-3 text-center text-xs text-muted-foreground">No NIP-07 extension detected — use a remote signer, private key, password or passkey.</p>}
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <Separator className="flex-1" /> or <Separator className="flex-1" />
           </div>
 
           <Tabs defaultValue="bunker">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="bunker"><Smartphone className="size-4" /> Signer</TabsTrigger>
+              <TabsTrigger value="nsec"><KeySquare className="size-4" /> Key</TabsTrigger>
               <TabsTrigger value="password"><KeyRound className="size-4" /> Password</TabsTrigger>
               <TabsTrigger value="passkey"><Fingerprint className="size-4" /> Passkey</TabsTrigger>
             </TabsList>
             <TabsContent value="bunker" className="pt-3">
               <BunkerLogin busy={busy} run={run} />
+            </TabsContent>
+            <TabsContent value="nsec" className="pt-3">
+              <PrivateKeyLogin busy={busy} run={run} />
             </TabsContent>
             <TabsContent value="password" className="pt-3">
               <PasswordLogin busy={busy} run={run} />
@@ -149,6 +153,28 @@ function BunkerLogin({ busy, run }: { busy: string | null; run: RunFn }) {
         </Button>
       )}
     </div>
+  );
+}
+
+function PrivateKeyLogin({ busy, run }: { busy: string | null; run: RunFn }) {
+  const [key, setKey] = React.useState("");
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (key.trim()) run("nsec", () => loginWithPrivateKey(key).finally(() => setKey("")));
+      }}
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="nsec">Private key</Label>
+        <Input id="nsec" type="password" placeholder="nsec1… or hex" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)} required />
+      </div>
+      <p className="text-xs text-muted-foreground">Signs the login challenge in this browser. Your key is never sent to the server or saved — prefer an extension or remote signer where possible.</p>
+      <Button type="submit" className="w-full" disabled={!!busy || !key.trim()}>
+        {busy === "nsec" ? <Loader2 className="animate-spin" /> : <KeySquare />} Sign in with key
+      </Button>
+    </form>
   );
 }
 
