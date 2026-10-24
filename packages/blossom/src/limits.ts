@@ -1,4 +1,7 @@
-/** Minimal FIFO semaphore; `tryRun` rejects instead of queueing when `maxQueue` waiters are already parked. */
+/**
+ * Minimal FIFO semaphore: at most `max` jobs run, at most `maxQueue` wait. `canEnter` tells beforehand whether `run`
+ * would be admitted (so a caller can answer 503 early); `run` itself throws `SemaphoreFullError` when it isn't.
+ */
 export class Semaphore {
   private active = 0;
   private waiters: (() => void)[] = [];
@@ -6,17 +9,12 @@ export class Semaphore {
     readonly max: number,
     readonly maxQueue = Infinity,
   ) {}
-  get inUse() {
-    return this.active;
-  }
-  get queued() {
-    return this.waiters.length;
-  }
   /** false when the queue is full (caller should answer 503) */
   canEnter(): boolean {
     return this.active < this.max || this.waiters.length < this.maxQueue;
   }
   async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.canEnter()) throw new SemaphoreFullError();
     if (this.active >= this.max) await new Promise<void>((r) => this.waiters.push(r));
     else this.active++;
     try {
@@ -26,6 +24,12 @@ export class Semaphore {
       if (next) next();
       else this.active--;
     }
+  }
+}
+
+export class SemaphoreFullError extends Error {
+  constructor() {
+    super("semaphore queue full");
   }
 }
 

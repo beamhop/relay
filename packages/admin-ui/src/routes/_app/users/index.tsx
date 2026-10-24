@@ -378,7 +378,7 @@ function RowMenu({ u, flow }: { u: UserView; flow: ReturnType<typeof useBanFlow>
             )}
           </>
         )}
-        {can("users.delete") && u.role !== "owner" && (
+        {can("users.delete") && u.role !== "owner" && (!u.role || can("admins.manage")) && (
           <DropdownMenuItem variant="destructive" onSelect={() => flow.deleteWithConfirm(u.pubkey, u.profile)}>
             Delete…
           </DropdownMenuItem>

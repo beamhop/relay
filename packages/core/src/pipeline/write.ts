@@ -8,7 +8,7 @@ import type { Connection } from "../protocol/connection";
 import { codeOf, withPrefix } from "../util/reasons";
 import { checkAccess, checkProtected } from "./access";
 import { checkPow } from "./pow";
-import { KIND_AUTH, KIND_DELETION, KIND_VANISH, prepareSpecial, vanishTargetsUs } from "./special-kinds";
+import { fileRelayReport, KIND_AUTH, KIND_DELETION, KIND_VANISH, NOT_STORED, prepareSpecial, vanishTargetsUs } from "./special-kinds";
 
 export interface WriteOptions {
   conn?: Connection;
@@ -25,12 +25,23 @@ export interface WriteResult {
 
 /** IP buckets are looser than pubkey buckets (NAT, many users behind one IP). */
 const IP_RATE_FACTOR = 4;
+/**
+ * NIP-62 requests to vanish per client address per minute. They skip the event buckets (a banned or flooding user
+ * must still be able to vanish) but each one deletes, so they get their own small bucket.
+ */
+export const VANISH_PER_MINUTE = 10;
+/** How long a relayed ephemeral event's id is remembered: a replay within this time is answered `duplicate:`. */
+export const EPHEMERAL_DEDUP_MS = 5 * 60_000;
+/** Ephemeral ids remembered at most (the oldest are forgotten first). */
+export const EPHEMERAL_DEDUP_SIZE = 50_000;
 
 /**
  * The event write pipeline (see docs/ARCHITECTURE.md):
  * size limits → id/sig → created_at → expiration → PoW → bans/mute/vanish → access mode → NIP-70 →
- * already stored (duplicate) → rate limit → plugin hooks → content policy → special kinds (deletion/vanish
- * before storing) → store/ephemeral → vanish re-check → NIP-29 state changes → fan-out → bus.
+ * already stored / recently relayed (duplicate) → rate limit → plugin hooks → content policy → special kinds
+ * (deletion/vanish before storing) → store/ephemeral → vanish re-check → NIP-29 state changes → fan-out → bus.
+ * A NIP-62 request to vanish skips PoW, bans, access mode, hooks and policies (and has its own rate limit); it is
+ * only stored and relayed when it took effect and passes the content policy.
  */
 export async function processEvent(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Promise<WriteResult> {
   try {
@@ -96,17 +107,23 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   const vanishedAt = ctx.vanished.get(event.pubkey);
   if (vanishedAt !== undefined && event.kind !== KIND_VANISH && event.created_at <= vanishedAt) return reject("blocked: pubkey has requested to vanish from this relay");
   if (user?.status === "muted" && !selfCleanup) return shadow("pubkey muted");
+  // their deletions / vanish requests still take effect, but aren't stored or relayed (no way around the ban or mute)
+  const quiet = !!user && (user.denied || user.status === "banned" || user.status === "muted");
 
-  if (external && conn && !vanish) {
+  if (external && conn) {
     // ---- access mode, NIP-70
-    const denied = (await checkAccess(ctx, event, user, conn)) ?? checkProtected(event, conn);
-    if (denied) return reject(denied);
-    // ---- replays of stored events change nothing: answered before anyone's rate limit is charged
-    if (!isEphemeral(event.kind) && (await ctx.stores.events.getById(event.id))) {
+    if (!vanish) {
+      const denied = (await checkAccess(ctx, event, user, conn)) ?? checkProtected(event, conn);
+      if (denied) return reject(denied);
+    }
+    // ---- replays of stored (or recently relayed ephemeral) events change nothing: answered before anyone's rate limit is charged
+    if (isEphemeral(event.kind) ? ephemeralSeen(ctx, event.id) : await ctx.stores.events.getById(event.id)) {
       return { ok: true, message: "duplicate: already have this event", status: "duplicate" };
     }
     // ---- rate limit
-    if (!rateOk(ctx, event, user, conn)) return reject("rate-limited: slow down, too many events");
+    if (vanish ? !ctx.rate.take(`vanish:ip:${conn.ipKey}`, VANISH_PER_MINUTE) : !rateOk(ctx, event, user, conn)) {
+      return reject("rate-limited: slow down, too many events");
+    }
   }
 
   // ---- plugin write hooks
@@ -130,19 +147,24 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   }
 
   // ---- special kinds (deletion, vanish, reports, NIP-29)
-  const special = await prepareSpecial(ctx, event, user, { source, ipKey: conn?.ipKey });
+  const special = await prepareSpecial(ctx, event, user, { source, ipKey: conn?.ipKey, quiet });
   if ("reject" in special) return reject(special.reject);
   if ("duplicate" in special) return { ok: true, message: special.duplicate, status: "duplicate" };
   // Deletion / vanish must not be re-applied by replaying an already-stored event.
   if (special.before && !isEphemeral(event.kind) && (await ctx.stores.events.getById(event.id))) {
     return { ok: true, message: "duplicate: already have this event", status: "duplicate" };
   }
-  await special.before?.();
+  // the effect was applied; the event itself isn't kept or relayed (see prepareSpecial)
+  if ((await special.before?.()) === NOT_STORED) return { ok: true, message: "" };
 
   // ---- store
   let status: "saved" | "replaced" | "ephemeral";
-  if (isEphemeral(event.kind)) status = "ephemeral";
-  else {
+  if (isEphemeral(event.kind)) {
+    // checked and recorded without an await in between, so concurrent copies are relayed once
+    if (ephemeralSeen(ctx, event.id)) return { ok: true, message: "duplicate: already have this event", status: "duplicate" };
+    ctx.ephemeralSeen.set(event.id, Date.now() + EPHEMERAL_DEDUP_MS);
+    status = "ephemeral";
+  } else {
     const res = await ctx.stores.events.save(event);
     switch (res.status) {
       case "saved":
@@ -191,8 +213,16 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
       title: "Content flagged by word filter",
       message: `${report} matched event ${event.id} (kind ${event.kind}) by ${event.pubkey}`,
     });
+    // off the OK path, like the NIP-56 auto-ban check
+    if (status !== "ephemeral") void fileRelayReport(ctx, event, report).catch((err) => ctx.logger.warn("filing word-filter report failed", { err: String(err) }));
   }
   return { ok: true, message: "", status };
+}
+
+/** Whether an ephemeral event with this id was relayed within EPHEMERAL_DEDUP_MS. */
+function ephemeralSeen(ctx: RelayContext, id: string): boolean {
+  const until = ctx.ephemeralSeen.get(id);
+  return until !== undefined && until > Date.now();
 }
 
 /**

@@ -7,7 +7,7 @@ import { Gate, MAX_QUERIES_PER_CONN } from "./read-limits";
 /** Above this many queued bytes live events are dropped for the connection. */
 export const SOFT_BUFFER_LIMIT = 1 << 20; // 1 MiB
 /** Above this the connection is considered a stuck slow consumer and closed. */
-export const HARD_BUFFER_LIMIT = 8 << 20; // 8 MiB
+const HARD_BUFFER_LIMIT = 8 << 20; // 8 MiB
 
 export interface Subscription {
   conn: Connection;
@@ -72,6 +72,7 @@ export class Connection implements ConnectionInfo {
     private readonly bus: EventBus,
     limits: { messagesPerMinute: number; maxInflightEvents: number },
     readonly userAgent?: string,
+    /** part of the plugin-facing ConnectionInfo (write/read hook contexts) */
     readonly origin?: string,
   ) {
     this.ipKey = ipKey(ip);

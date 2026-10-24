@@ -22,14 +22,14 @@ export const SEARCH_ESTIMATE_MS = { initial: 25, min: 10, max: 1_000 };
 /** Max `limit` of a search filter (ranking cost grows with it). */
 export const SEARCH_MAX_LIMIT = 100;
 /** Search queries running at once, relay-wide; each waits a loop turn first so other work interleaves. */
-export const SEARCH_CONCURRENCY = 1;
+const SEARCH_CONCURRENCY = 1;
 /** Searches waiting for a slot before new ones are refused as busy. */
-export const SEARCH_MAX_WAITING = 64;
+const SEARCH_MAX_WAITING = 64;
 /** Stored queries (and their result streams) running at once per connection; further REQs wait. */
 export const MAX_QUERIES_PER_CONN = 3;
 /** Stored queries executing at once, relay-wide (bounds concurrent result materialization on async drivers). */
-export const QUERY_CONCURRENCY = 16;
-export const QUERY_MAX_WAITING = 1_000;
+const QUERY_CONCURRENCY = 16;
+const QUERY_MAX_WAITING = 1_000;
 /** Estimated bytes of materialized-but-unsent stored results, per connection / per address / relay-wide. */
 export const RESULT_BYTES = { conn: 32 << 20, ip: 64 << 20, all: 384 << 20 };
 

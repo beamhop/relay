@@ -40,7 +40,7 @@ export const registry = {
 };
 
 export function usePluginRegistry() {
-  return React.useSyncExternalStore(registry.subscribe, registry.get);
+  return React.useSyncExternalStore(registry.subscribe, registry.get, registry.get);
 }
 
 export const normalizePath = (p: string) => p.replace(/^\/+|\/+$/g, "");

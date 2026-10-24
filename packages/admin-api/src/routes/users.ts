@@ -1,9 +1,11 @@
 import { z } from "zod";
-import type { AdminRole, BulkResult, BulkUserRequest, UserDetail, UserRecord } from "@beamhop/sdk";
-import type { AdminApp, ApiContext } from "../context";
+import type { AdminRole, BulkResult, BulkUserRequest, RoleRequest, UserDetail, UserRecord } from "@beamhop/sdk";
+import type { AdminApp, AdminContext, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, conflict, forbidden } from "../errors";
 import { assertPermission, requirePermission } from "../middleware/auth";
+import { auditLists } from "../util/audit";
+import type { Same } from "../util/contract";
 import { parsePubkey, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
@@ -45,6 +47,7 @@ const BanSchema = z.object({
   disconnect: z.boolean().optional(),
 });
 const RoleSchema = z.object({ role: z.enum(ROLES).nullable() });
+true satisfies Same<z.output<typeof RoleSchema>, RoleRequest>;
 const BulkSchema = z.object({
   pubkeys: z.array(z.string()).min(1).max(1000),
   action: z.enum(["ban", "unban", "mute", "unmute", "allow", "disallow", "deny", "undeny", "delete-events", "delete", "add-tag", "remove-tag"]),
@@ -108,6 +111,24 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     return [...out];
   }
 
+  /**
+   * Ends whatever admin access `pubkey` had: sessions, push devices and login factors (password, TOTP, passkeys), so a
+   * role granted again later can't be used with credentials from before (possibly the reason it was removed).
+   */
+  async function revokeAdminAccess(pubkey: string): Promise<void> {
+    await ctx.sessions.destroyAllFor(pubkey);
+    await ctx.push.unsubscribeAllFor(pubkey);
+    await ctx.credentials.deleteAll(pubkey);
+  }
+
+  /** Deleting a user takes their role with the record: for staff that is a role change, which needs admins.manage. */
+  async function assertCanDeleteUser(c: AdminContext, pubkey: string): Promise<AdminRole | null> {
+    await ctx.users.assertCanModerate(principalOf(c), pubkey);
+    const role = (await stores.users.get(pubkey))?.role ?? null;
+    if (role) assertPermission(c, "admins.manage");
+    return role;
+  }
+
   /** Count of owners (config owners ∪ DB owners). */
   async function ownerCount(): Promise<Set<string>> {
     const set = new Set(ctx.roles.owners);
@@ -158,6 +179,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     if ((body.action === "add-tag" || body.action === "remove-tag") && !body.tag) throw badRequest("tag required");
     const actor = principalOf(c);
     const result: BulkResult = { ok: 0, failed: [] };
+    const done: string[] = [];
     for (const raw of body.pubkeys) {
       let pubkey = raw;
       try {
@@ -194,9 +216,9 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
             await stores.events.deleteByPubkey(pubkey);
             break;
           case "delete":
-            await ctx.users.assertCanModerate(actor, pubkey);
+            await assertCanDeleteUser(c, pubkey);
             await ctx.users.delete(pubkey, actor.pubkey);
-            await ctx.sessions.destroyAllFor(pubkey);
+            await revokeAdminAccess(pubkey);
             break;
           case "add-tag":
           case "remove-tag": {
@@ -210,15 +232,16 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
           }
         }
         result.ok++;
+        done.push(pubkey);
       } catch (err) {
         result.failed.push({ pubkey, error: (err as Error).message });
       }
     }
+    // the targets (no per-user entries are written for bulk actions), split into applied and refused
     await ctx.audit(c, `user.bulk.${body.action}`, null, {
-      pubkeys: body.pubkeys.slice(0, 100),
+      ...auditLists({ pubkeys: done, failed: result.failed }),
       count: body.pubkeys.length,
       ok: result.ok,
-      failed: result.failed.length,
       ...(body.reason ? { reason: body.reason } : {}),
       ...(body.tag ? { tag: body.tag } : {}),
     });
@@ -277,10 +300,10 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   app.delete("/users/:pubkey", requirePermission("users.delete"), async (c) => {
     const pubkey = parsePubkey(c.req.param("pubkey"));
     const actor = principalOf(c);
-    await ctx.users.assertCanModerate(actor, pubkey);
+    const role = await assertCanDeleteUser(c, pubkey);
     const r = await ctx.users.delete(pubkey, actor.pubkey);
-    await ctx.sessions.destroyAllFor(pubkey);
-    await ctx.audit(c, "user.delete", pubkey, r);
+    await revokeAdminAccess(pubkey);
+    await ctx.audit(c, "user.delete", pubkey, { ...r, ...(role ? { role } : {}) });
     return c.json(r);
   });
 
@@ -314,10 +337,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
       if (owners.size === 0) throw conflict("cannot remove the last owner", "last_owner");
     }
     const user = await ctx.users.update(pubkey, { role }, principalOf(c).pubkey);
-    if (!role) {
-      await ctx.sessions.destroyAllFor(pubkey);
-      await ctx.push.unsubscribeAllFor(pubkey);
-    }
+    if (!role) await revokeAdminAccess(pubkey);
     await ctx.audit(c, "user.role", pubkey, { from: current, to: role });
     return c.json(await ctx.users.toView(user));
   });

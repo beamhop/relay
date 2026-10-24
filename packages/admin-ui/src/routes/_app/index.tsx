@@ -2,8 +2,9 @@ import * as React from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from "recharts";
 import {
-  Activity, ArrowDownToLine, ArrowUpFromLine, Cpu, Database, Gauge, HardDrive, Hourglass, MemoryStick, Plug, Send, ShieldX, Timer,
+  Activity, ArrowDownToLine, ArrowUpFromLine, Cpu, Database, Gauge, Globe, HardDrive, Hourglass, MemoryStick, Plug, Send, ShieldX, Timer,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -15,6 +16,8 @@ import { UserChip } from "@/components/user-chip";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { useLiveHistory, useLiveSnapshot } from "@/lib/live";
+import { useBoolPref, WORLD_MAP_TILE_HOST, worldMapPref } from "@/lib/prefs";
+import { useSystem } from "@/queries/auth";
 import { RANGES, useGeo, useKindStats, useRejections, useSeries, useSnapshot, useTopPubkeys, type RangeKey } from "@/queries/dashboard";
 import { countryFlag, formatBytes, formatCompact, formatDate, formatDuration, formatMs, formatNumber, formatPercent, formatRate } from "@/lib/format";
 import { kindName } from "@/lib/nostr";
@@ -253,6 +256,10 @@ function KindsCard({ range, className }: { range: RangeKey; className?: string }
 
 function GeoCard({ range, className }: { range: RangeKey; className?: string }) {
   const { data, isLoading } = useGeo(range);
+  const { data: sys } = useSystem();
+  // the map's tiles come from a third party: only with GeoIP data to show, and only after the admin opts in
+  const geoip = !!sys?.geoipEnabled;
+  const [mapOn, setMapOn] = useBoolPref(worldMapPref);
   const [metric, setMetric] = React.useState<"connections" | "events">("connections");
   const countries = React.useMemo(() => {
     const m = new Map<string, { country: string; name: string; connections: number; events: number }>();
@@ -277,13 +284,26 @@ function GeoCard({ range, className }: { range: RangeKey; className?: string }) 
           </ToggleGroup>
         </CardAction>
       </CardHeader>
-      <CardContent className="grid gap-4 md:grid-cols-[1fr_15rem]">
-        <ErrorBoundary label="Map" fallback={<div className="flex h-72 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">Map unavailable (WebGL required)</div>}>
-          <React.Suspense fallback={<Skeleton className="h-72 w-full rounded-lg" />}>
-            {isLoading ? <Skeleton className="h-72 w-full rounded-lg" /> : <WorldMap points={data ?? []} metric={metric} className="h-72 w-full overflow-hidden rounded-lg border" />}
-          </React.Suspense>
-        </ErrorBoundary>
-        <div className="max-h-72 overflow-y-auto">
+      <CardContent className={cn("grid gap-4", geoip && "md:grid-cols-[1fr_15rem]")}>
+        {geoip &&
+          (mapOn ? (
+            <ErrorBoundary label="Map" fallback={<div className="flex h-72 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">Map unavailable (WebGL required)</div>}>
+              <React.Suspense fallback={<Skeleton className="h-72 w-full rounded-lg" />}>
+                {isLoading ? <Skeleton className="h-72 w-full rounded-lg" /> : <WorldMap points={data ?? []} metric={metric} className="h-72 w-full overflow-hidden rounded-lg border" />}
+              </React.Suspense>
+            </ErrorBoundary>
+          ) : (
+            <div className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/30 p-4 text-center md:h-72">
+              <Globe className="size-8 text-muted-foreground" />
+              <p className="max-w-sm text-xs text-muted-foreground">
+                The map draws countries with tiles from {WORLD_MAP_TILE_HOST}, a third-party server that then sees your IP address.
+              </p>
+              <Button variant="outline" size="sm" onClick={() => setMapOn(true)}>
+                Load map from {WORLD_MAP_TILE_HOST}
+              </Button>
+            </div>
+          ))}
+        <div className={cn("overflow-y-auto", geoip && "max-h-72")}>
           {!countries.length && !isLoading ? (
             <p className="py-8 text-center text-sm text-muted-foreground">No geo data. Configure a GeoIP database to enable.</p>
           ) : (

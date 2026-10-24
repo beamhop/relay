@@ -2,6 +2,8 @@
 # docker compose --profile postgres up -d       → + PostgreSQL (set BEAMHOP_DB_DRIVER=postgres)
 # docker compose --profile s3 up -d             → + MinIO (set BEAMHOP_BLOSSOM_DRIVER=s3)
 # docker compose --profile observability up -d  → + OTel collector, Prometheus, Grafana
+#                                                 (set BEAMHOP_METRICS_TOKEN, e.g. `openssl rand -hex 32`: without a
+#                                                 token /metrics only answers loopback, so Prometheus can't scrape it)
 #
 # The optional services ship with DEV-ONLY default credentials and publish their ports on 127.0.0.1 only
 # (Docker-published ports bypass host firewalls like ufw). Override POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD /
@@ -99,6 +101,13 @@ services:
   prometheus:
     profiles: [observability]
     image: prom/prometheus:latest
+    environment:
+      BEAMHOP_METRICS_TOKEN: ${BEAMHOP_METRICS_TOKEN:-}
+    # prometheus.yml can't read env vars: hand the scrape token over as the file it names (credentials_file)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - printf '%s' "$$BEAMHOP_METRICS_TOKEN" > /prometheus/beamhop-metrics-token && exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
     volumes:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:

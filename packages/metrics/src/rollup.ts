@@ -52,6 +52,14 @@ export interface GeoAcc extends GeoInfo {
   connections: number;
   events: number;
 }
+/** Reason recorded once an hour already has `maxRejectionReasons` distinct (code, reason) pairs. */
+export const OTHER_REASON = "(other)";
+
+interface HourCaps {
+  maxPubkeys: number;
+  maxRejectionReasons: number;
+}
+
 class HourAcc {
   kinds = new Map<number, number>();
   pubkeys = new Map<string, PubkeyAcc>();
@@ -59,13 +67,15 @@ class HourAcc {
   geo = new Map<string, GeoAcc>();
   droppedPubkeys = 0;
   /**
-   * @param admitted pubkeys admitted in this hour bucket so far, shared by every accumulator of the bucket
-   *   (a flush closes the accumulator mid-hour) so `maxPubkeys` bounds the whole hour, not each flush
+   * @param admitted pubkeys and rejection reasons admitted in this hour bucket so far, shared by every accumulator
+   *   of the bucket (a flush closes the accumulator mid-hour) so the caps bound the whole hour, not each flush.
+   *   Rejection reasons carry client-controlled text (normalizeReason can't neutralize all of it), so past the cap
+   *   new reasons are counted under "(other)" for their code instead of adding rows.
    */
   constructor(
     readonly bucket: number,
-    private maxPubkeys: number,
-    private admitted: Set<string> = new Set(),
+    private caps: HourCaps,
+    private admitted: { pubkeys: Set<string>; reasons: Set<string> } = { pubkeys: new Set(), reasons: new Set() },
   ) {}
 
   kind(k: number) {
@@ -76,13 +86,19 @@ class HourAcc {
     if (p) {
       p.events += events;
       p.rejected += rejected;
-    } else if (this.admitted.has(pk) || this.admitted.size < this.maxPubkeys) {
-      this.admitted.add(pk);
+    } else if (this.admitted.pubkeys.has(pk) || this.admitted.pubkeys.size < this.caps.maxPubkeys) {
+      this.admitted.pubkeys.add(pk);
       this.pubkeys.set(pk, { events, rejected });
     } else this.droppedPubkeys++;
   }
   rejection(code: string, reason: string, n = 1) {
-    const key = code + "\u0000" + reason;
+    let key = code + "\u0000" + reason;
+    if (!this.admitted.reasons.has(key)) {
+      if (reason !== OTHER_REASON && this.admitted.reasons.size >= this.caps.maxRejectionReasons) {
+        reason = OTHER_REASON;
+        key = code + "\u0000" + reason;
+      } else this.admitted.reasons.add(key);
+    }
     const r = this.rejections.get(key);
     if (r) r.count += n;
     else this.rejections.set(key, { code, reason, count: n });
@@ -100,7 +116,7 @@ class HourAcc {
   }
   /** Fresh accumulator for the same bucket that keeps counting toward this hour's pubkey cap. */
   continuation(): HourAcc {
-    return new HourAcc(this.bucket, this.maxPubkeys, this.admitted);
+    return new HourAcc(this.bucket, this.caps, this.admitted);
   }
   merge(o: HourAcc) {
     for (const [k, v] of o.kinds) this.kinds.set(k, (this.kinds.get(k) ?? 0) + v);
@@ -110,6 +126,10 @@ class HourAcc {
     this.droppedPubkeys += o.droppedPubkeys;
   }
 }
+
+/** Distinct (code, reason) pairs kept per hour; later ones are folded into "(other)". */
+export const DEFAULT_MAX_REJECTION_REASONS = 500;
+const UNCAPPED: HourCaps = { maxPubkeys: Number.MAX_SAFE_INTEGER, maxRejectionReasons: Number.MAX_SAFE_INTEGER };
 
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const CHUNK = 200;
@@ -173,10 +193,10 @@ export class Rollup {
   constructor(
     private db: Db,
     nowSec: number,
-    private opts: { maxPubkeysPerBucket: number; topPubkeysPerHour: number; onDropped?: (message: string) => void },
+    private opts: { maxPubkeysPerBucket: number; topPubkeysPerHour: number; maxRejectionReasonsPerHour?: number; onDropped?: (message: string) => void },
   ) {
     this.current = new MinuteAcc(minuteOf(nowSec));
-    this.hour = new HourAcc(hourOf(nowSec), opts.maxPubkeysPerBucket);
+    this.hour = this.newHour(hourOf(nowSec));
     this.lastTrimmedHour = hourOf(nowSec) - 2 * HOUR;
   }
 
@@ -190,8 +210,12 @@ export class Rollup {
     const h = hourOf(nowSec);
     if (h !== this.hour.bucket) {
       this.pendingHours.push(this.hour);
-      this.hour = new HourAcc(h, this.opts.maxPubkeysPerBucket);
+      this.hour = this.newHour(h);
     }
+  }
+
+  private newHour(bucket: number): HourAcc {
+    return new HourAcc(bucket, { maxPubkeys: this.opts.maxPubkeysPerBucket, maxRejectionReasons: this.opts.maxRejectionReasonsPerHour ?? DEFAULT_MAX_REJECTION_REASONS });
   }
 
   /** Close the current (partial) minute so it gets flushed too (used on stop). */
@@ -226,7 +250,8 @@ export class Rollup {
       this.pendingHours.push(this.hour);
       this.hour = this.hour.continuation();
     }
-    const hours = mergeBy(this.pendingHours.splice(0), (a) => a.bucket, (a) => new HourAcc(a.bucket, Number.MAX_SAFE_INTEGER));
+    // already capped while counting: merging re-queued accumulators must not drop anything
+    const hours = mergeBy(this.pendingHours.splice(0), (a) => a.bucket, (a) => new HourAcc(a.bucket, UNCAPPED));
     this.inflightMinutes = minutes;
     if (!minutes.length && !hours.length) return;
     const counters: unknown[][] = [];

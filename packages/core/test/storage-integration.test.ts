@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ConfigSchema, EventBus, HookRegistry, type NostrEvent } from "@beamhop/sdk";
 import { createSettingsService, createTestStores, silentLogger } from "@beamhop/storage";
 import { createRelay } from "../src";
-import { FakeSocket, keypair, now, PUBLIC_URL, sign } from "./fakes";
+import { FakeSocket, keypair, now, PUBLIC_URL, RELAY_SECRET_KEY, sign } from "./fakes";
 
 /** Smoke test against the real SQL storage package to catch contract drift. */
 describe("integration with @beamhop/storage", () => {
@@ -10,7 +10,7 @@ describe("integration with @beamhop/storage", () => {
     const stores = await createTestStores();
     const bus = new EventBus();
     const settings = await createSettingsService(stores, bus);
-    const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL } });
+    const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, relaySecretKey: RELAY_SECRET_KEY });
     const relay = await createRelay({ config, stores, settings, bus, hooks: new HookRegistry(), logger: silentLogger });
     const socket = new FakeSocket();
     const conn = relay.handleConnection(socket, { ip: "1.1.1.1" });

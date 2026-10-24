@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { NostrEvent } from "@beamhop/sdk";
 import { createHarness, newKey } from "./fakes";
-import { isSecretKeyName, maskSecrets } from "../src/routes/plugins";
+import { isSecretKeyName } from "@beamhop/sdk";
+import { maskSecrets } from "../src/routes/plugins";
 import { totpCode } from "../src/util/totp";
 
 const json = (body: unknown) => ({ method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
@@ -157,7 +158,8 @@ describe("plugin settings masking", () => {
 describe("login rate buckets", () => {
   test("exhausting /auth/challenge doesn't block passkey login options", async () => {
     const h = await createHarness();
-    const hit = (path: string, init?: RequestInit) => h.api.app.request(path, init, { ip: "198.51.100.20" });
+    const hit = (path: string, init?: RequestInit) =>
+      h.api.app.request(path, { ...init, headers: { ...(init?.headers as Record<string, string>), "x-requested-with": "beamhop" } }, { ip: "198.51.100.20" });
     for (let i = 0; i < 60; i++) expect((await hit("/auth/challenge")).status).toBe(200);
     expect((await hit("/auth/challenge")).status).toBe(429);
     expect((await hit("/auth/passkey/login/options", json({}))).status).toBe(200);

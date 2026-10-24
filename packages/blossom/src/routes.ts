@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { AuthError, authenticate, type AuthVerb, type BlossomAuth } from "./auth";
 import { SHA256_RE } from "./driver";
 import { BlossomError, clientIp, CORS_HEADERS, errorResponse, jsonResponse, parseRange, readLimited, withCors } from "./http";
-import { blobCsp, extFromMime, normalizeMime, isMimeAllowed, isInlineSafe } from "./mime";
+import { blobCsp, extFromMime, normalizeMime, isMimeAllowed, isInlineSafe, SCRIPT_DESTINATIONS, servedType } from "./mime";
 import { fetchRemote } from "./mirror";
 import type { BlossomCore } from "./service";
 
@@ -89,11 +89,12 @@ export function createRoutes(core: BlossomCore): Hono {
 
   /**
    * Headers for serving user content from the relay (and admin panel) origin: never sniff, never run scripts
-   * (SVG/HTML), and make active types download instead of rendering.
+   * (SVG/HTML), never be loadable as script (JavaScript is sent as text/plain), and make active types download
+   * instead of rendering.
    */
   const blobHeaders = (type: string, etag: string, isPublic: boolean, filename: string) => {
     const headers = new Headers({
-      "Content-Type": type,
+      "Content-Type": servedType(type),
       ETag: etag,
       "Cache-Control": isPublic ? "public, max-age=31536000, immutable" : "private, no-store",
       "X-Content-Type-Options": "nosniff",
@@ -104,6 +105,12 @@ export function createRoutes(core: BlossomCore): Hono {
     return headers;
   };
 
+  /** A blob is never fetched to run as code (script, worker, worklet, XSLT), whatever its type: 403 up front. */
+  const refuseScriptLoad = (c: Context) => {
+    const dest = c.req.header("sec-fetch-dest")?.trim().toLowerCase();
+    if (dest && SCRIPT_DESTINATIONS.has(dest)) throw new BlossomError(403, "blobs can't be loaded as scripts");
+  };
+
   const notModified = (c: Context, etag: string) =>
     !!c.req.header("if-none-match")?.split(",").some((t) => t.trim().replace(/^W\//, "") === etag);
 
@@ -111,6 +118,7 @@ export function createRoutes(core: BlossomCore): Hono {
   app.get(
     THUMB_PATH,
     wrap(async (c) => {
+      refuseScriptLoad(c);
       const sha256 = c.req.param("name")!.slice(0, 64);
       const head = c.req.method === "HEAD";
       const { row, isPublic } = await loadVisible(c, sha256);
@@ -135,6 +143,7 @@ export function createRoutes(core: BlossomCore): Hono {
   app.get(
     BLOB_PATH,
     wrap(async (c) => {
+      refuseScriptLoad(c);
       const sha256 = c.req.param("name")!.slice(0, 64);
       const head = c.req.method === "HEAD";
       const { row, isPublic } = await loadVisible(c, sha256);
@@ -190,12 +199,17 @@ export function createRoutes(core: BlossomCore): Hono {
       const sha256 = c.req.param("name")!.slice(0, 64);
       const a = requireAuth(c, "delete", sha256, true);
       // A missing blob is a 404 even for a used token (a client retrying a DELETE whose response was lost).
-      if (!(await core.repo.get(sha256))) throw new BlossomError(404, "blob not found");
+      const row = await core.repo.get(sha256);
+      if (!row) throw new BlossomError(404, "blob not found");
+      // as on GET, a pending/blocked blob doesn't exist for anyone but its owners (403 would reveal it)
+      if (!(await core.repo.isOwner(sha256, a.pubkey))) {
+        throw row.status === "approved" ? new BlossomError(403, "you do not own this blob") : new BlossomError(404, "blob not found");
+      }
       // single-use per blob: replaying a captured delete token after the signer re-uploads the blob would delete
       // it again. Keyed by token *and* blob so one token listing several `x` tags still deletes each of them once.
       const tokenKey = `${a.event.id}:${sha256}`;
       if (await core.isDeleteTokenUsed(tokenKey)) throw new BlossomError(401, "auth token already used");
-      if (!(await core.releaseOwnership(sha256, a.pubkey, a.pubkey))) throw new BlossomError(403, "you do not own this blob");
+      if (!(await core.releaseOwnership(sha256, a.pubkey, a.pubkey, a.event.created_at))) throw new BlossomError(403, "you do not own this blob");
       await core.markDeleteTokenUsed(tokenKey, a.expiration * 1000);
       return new Response(null, { status: 200 });
     }),
@@ -220,7 +234,8 @@ export function createRoutes(core: BlossomCore): Hono {
       if (size > settings.maxUploadBytes) throw new BlossomError(413, `blob too large (max ${settings.maxUploadBytes} bytes)`);
       const type = normalizeMime(c.req.header("x-content-type"));
       if (type && !isMimeAllowed(type, settings.allowedMimeTypes)) throw new BlossomError(415, `type ${type} is not allowed`);
-      await core.assertNotBlocked(shaHeader);
+      await core.assertNotRefused(shaHeader);
+      await core.assertTokenCurrent(shaHeader, a.pubkey, a.event.created_at);
       if (await core.repo.isOwner(shaHeader, a.pubkey)) return new Response(null, { status: 200 });
       await core.assertQuota(a.pubkey, size, user);
       return new Response(null, { status: 200 });
@@ -238,12 +253,14 @@ export function createRoutes(core: BlossomCore): Hono {
       if (shaHeader !== undefined && !SHA256_RE.test(shaHeader)) throw new BlossomError(400, "invalid X-SHA-256 header");
       // BUD-11: an `x` tag matching the blob is required (checked against X-SHA-256 now and the body hash below).
       const a = requireAuth(c, "upload", shaHeader, true);
-      if (a.hashes.length === 0) throw new BlossomError(401, "auth missing x tag");
       core.assertPubkeyRate(a.pubkey);
       const user = await core.assertCanUpload(a.pubkey);
       const len = contentLength(c.req.header("content-length"));
       if (len !== undefined && len > max) throw new BlossomError(413, `blob too large (max ${max} bytes)`);
-      if (shaHeader) await core.assertNotBlocked(shaHeader);
+      if (shaHeader) {
+        await core.assertNotRefused(shaHeader);
+        await core.assertTokenCurrent(shaHeader, a.pubkey, a.event.created_at);
+      }
 
       const { descriptor, created } = await core.withUploadBody(ip, async (limits) => {
         const { data, sha256 } = await readLimited(c.req.raw.body, max, len, limits);
@@ -251,7 +268,12 @@ export function createRoutes(core: BlossomCore): Hono {
         if (shaHeader && shaHeader !== sha256) throw new BlossomError(409, "X-SHA-256 does not match body");
         if (!a.hashes.includes(sha256)) throw new BlossomError(401, "auth x tag does not match blob");
         // `strip` only takes effect when the operator opts in via `settings.blossom.stripExif` (deviates from BUD-02).
-        return core.withUploadSlot(() => core.ingest({ data, sha256, pubkey: a.pubkey, declaredType: c.req.header("content-type"), ip, strip: true }, user));
+        return core.withUploadSlot(() =>
+          core.ingest(
+            { data, sha256, pubkey: a.pubkey, tokenCreatedAt: a.event.created_at, declaredType: c.req.header("content-type"), ip, strip: true },
+            user,
+          ),
+        );
       });
       return jsonResponse(descriptor, created ? 201 : 200);
     }),
@@ -265,10 +287,13 @@ export function createRoutes(core: BlossomCore): Hono {
       const ip = clientIp(c.req.raw, trustProxy, c.env);
       core.assertIpRate(ip);
       const a = requireAuth(c, "upload");
-      if (a.hashes.length === 0) throw new BlossomError(401, "auth missing x tag");
       core.assertPubkeyRate(a.pubkey);
       const user = await core.assertCanUpload(a.pubkey);
-      for (const h of a.hashes) await core.assertNotBlocked(h);
+      for (const h of a.hashes) await core.assertNotRefused(h);
+      // no download when the signer has since deleted every blob the token names (ingest re-checks the one that arrives)
+      let current = false;
+      for (const h of a.hashes) if (!current) current = await core.tokenCurrent(h, a.pubkey, a.event.created_at);
+      if (!current) throw new BlossomError(401, "auth token predates your deletion of this blob; sign a new one");
       let body: { url?: unknown };
       try {
         const raw = await readLimited(c.req.raw.body, MAX_MIRROR_BODY, undefined, { stallMs: core.options.uploadStallMs ?? 15_000 });
@@ -286,7 +311,6 @@ export function createRoutes(core: BlossomCore): Hono {
         const res = await fetchRemote(mirrorUrl, {
           fetch: core.options.fetch,
           allowPrivate: !!core.options.allowPrivateMirror,
-          timeoutMs: core.options.mirrorTimeoutMs ?? 30_000,
           allowedPorts: core.options.mirrorPorts,
           signal,
         });
@@ -321,7 +345,16 @@ export function createRoutes(core: BlossomCore): Hono {
         // BUD-04: prefer the origin's Content-Type, falling back to sniffing.
         return core.withUploadSlot(() =>
           core.ingest(
-            { data: read.data, sha256: read.sha256, pubkey: a.pubkey, declaredType: res.headers.get("content-type"), preferDeclaredType: true, ip, strip: false },
+            {
+              data: read.data,
+              sha256: read.sha256,
+              pubkey: a.pubkey,
+              tokenCreatedAt: a.event.created_at,
+              declaredType: res.headers.get("content-type"),
+              preferDeclaredType: true,
+              ip,
+              strip: false,
+            },
             user,
           ),
         );

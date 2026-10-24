@@ -12,7 +12,15 @@ const COOKIE_PATH = "/admin";
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** max body hashed for a NIP-98 `payload` tag (the import route is exempt from the 1 MB JSON body limit) */
 const PAYLOAD_MAX = 1024 * 1024;
-const IMPORT_PAYLOAD_MAX = 256 * 1024 * 1024;
+/** default total size of an /events/import body (AdminApiOptions.importMaxBytes) */
+export const IMPORT_MAX_BYTES = 256 * 1024 * 1024;
+const IMPORT_PATH = /^(?:\/admin\/api)?\/events\/import$/;
+const PLUGIN_PROXY_PATH = /^(?:\/admin\/api)?\/plugins\/x\//;
+/** `application/json` and `application/*+json` */
+const JSON_TYPE = /^application\/(?:[\w.-]+\+)?json$/;
+const NDJSON_TYPES = new Set(["application/x-ndjson", "application/ndjson", "application/jsonl", "application/x-jsonlines"]);
+
+export const isImportRequest = (c: AdminContext) => c.req.method === "POST" && IMPORT_PATH.test(c.req.path);
 /** NIP-98 events are valid for ±60 s; keep their ids a little longer than that */
 export const AUTH_REPLAY_TTL_MS = 125_000;
 
@@ -41,11 +49,27 @@ function makePrincipal(pubkey: string, role: Principal["role"], via: Principal["
   return { pubkey, role, permissions: permissionsFor(role), via, session };
 }
 
-/** Cookie-authenticated mutating requests must prove same-origin (CSRF). */
+/**
+ * Mutating requests not authenticated by NIP-98 — logins included — must prove they come from the panel (CSRF): a custom
+ * header another site can't send without a CORS preflight (which this API never grants), or our own Origin.
+ */
 function csrfOk(c: AdminContext, ctx: ApiContext): boolean {
   if (c.req.header("x-requested-with") === "beamhop") return true;
   const origin = c.req.header("origin");
   return !!origin && origin === ctx.publicOrigin;
+}
+
+/**
+ * A body must be declared JSON (NDJSON for the import route), so an HTML form (urlencoded / multipart / text/plain) can't
+ * pass for an API call. Bodyless requests may omit the type. Plugin admin routes choose their own formats.
+ */
+function contentTypeOk(c: AdminContext): boolean {
+  // plugin admin routes take any body (an upload may be a Uint8Array or an untyped Blob, sent without a type)
+  if (PLUGIN_PROXY_PATH.test(c.req.path)) return true;
+  const raw = c.req.header("content-type");
+  if (raw === undefined) return Number(c.req.header("content-length") ?? 0) === 0 && !c.req.header("transfer-encoding");
+  const type = raw.split(";")[0].trim().toLowerCase();
+  return JSON_TYPE.test(type) || (NDJSON_TYPES.has(type) && isImportRequest(c));
 }
 
 /**
@@ -66,7 +90,7 @@ export function authenticate(ctx: ApiContext): MiddlewareHandler<AdminEnv> {
       const role = await ctx.roles.resolve(ev.pubkey);
       if (!role) throw forbidden("not an admin", "not_admin");
       if (ev.tags.some((t) => t[0] === "payload")) {
-        const max = c.req.method === "POST" && /^(?:\/admin\/api)?\/events\/import$/.test(c.req.path) ? IMPORT_PAYLOAD_MAX : PAYLOAD_MAX;
+        const max = isImportRequest(c) ? (ctx.opts.importMaxBytes ?? IMPORT_MAX_BYTES) : PAYLOAD_MAX;
         const body = await readBodyCapped(c.req.raw.clone(), max);
         if (!body) throw new HttpError(413, "request body too large", "too_large");
         if (!payloadMatches(ev, body)) throw unauthorized("auth event payload mismatch", "invalid_auth");
@@ -78,11 +102,15 @@ export function authenticate(ctx: ApiContext): MiddlewareHandler<AdminEnv> {
       return next();
     }
 
+    if (MUTATING.has(c.req.method)) {
+      // before the session lookup: unauthenticated routes (password / nostr / passkey login) are covered too
+      if (!csrfOk(c, ctx)) throw forbidden("CSRF check failed (send X-Requested-With: beamhop)", "csrf");
+      if (!contentTypeOk(c)) throw new HttpError(415, "request body must be JSON (Content-Type: application/json)", "unsupported_media_type");
+    }
     const sid = getCookie(c, SESSION_COOKIE);
     if (sid) {
       const s = await ctx.sessions.get(sid);
       if (s) {
-        if (MUTATING.has(c.req.method) && !csrfOk(c, ctx)) throw forbidden("CSRF check failed (send X-Requested-With: beamhop)", "csrf");
         c.set("principal", makePrincipal(s.pubkey, await ctx.roles.resolve(s.pubkey), "session", s));
         if (await ctx.sessions.touch(s)) setSessionCookie(c, ctx, s);
       } else {

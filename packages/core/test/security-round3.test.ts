@@ -3,7 +3,7 @@ import { ConfigSchema, EventBus, type Filter, HookRegistry, type NostrEvent, typ
 import { createTestStores } from "@beamhop/storage";
 import { createRelay, Negentropy, NegentropyStorage } from "../src";
 import { MAX_PRIVATE_SCAN, MAX_REFILL_SCAN, MAX_SEARCH_COUNT_SCAN } from "../src/protocol/handlers";
-import { FakeSettings, FakeSocket, keypair, now, PUBLIC_URL, setup, sign, silentLogger } from "./fakes";
+import { FakeSettings, FakeSocket, keypair, now, PUBLIC_URL, RELAY_SECRET_KEY, setup, sign, silentLogger } from "./fakes";
 
 const hex = (n: number) => n.toString(16).padStart(64, "0");
 /** An unsigned event (stores don't verify signatures): cheap to store by the thousand. */
@@ -37,7 +37,7 @@ function spyLoads(store: { query: QueryFn }) {
 /** A relay on the real SQL storage (sqlite in memory). */
 async function sqlRelay() {
   const stores = await createTestStores();
-  const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL } });
+  const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, relaySecretKey: RELAY_SECRET_KEY });
   const relay = await createRelay({ config, stores, settings: new FakeSettings(), hooks: new HookRegistry(), bus: new EventBus(), logger: silentLogger });
   const connect = (ip = "1.2.3.4") => {
     const socket = new FakeSocket();

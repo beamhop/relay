@@ -9,7 +9,7 @@ const MAX_P_TAGS_CHECKED = 20;
  * notes/replies, DMs, reposts, reactions, gift wraps, comments, zap receipts. Anything else (profiles,
  * long-form, group content, …) would turn a p tag into a way around the access mode.
  */
-export const INBOUND_KINDS: ReadonlySet<number> = new Set([1, 4, 6, 7, 16, 1059, 1111, 9735]);
+const INBOUND_KINDS: ReadonlySet<number> = new Set([1, 4, 6, 7, 16, 1059, 1111, 9735]);
 
 /** Access mode check (public / whitelist / invite / auth-required) for events received over websocket. */
 export async function checkAccess(ctx: RelayContext, event: NostrEvent, user: UserRecord | undefined, conn: Connection): Promise<string | undefined> {

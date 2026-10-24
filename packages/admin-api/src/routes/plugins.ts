@@ -6,27 +6,13 @@ import type { MiddlewareHandler } from "hono";
 import type { AdminContext, AdminEnv } from "../context";
 import { assertPermission, requirePermission } from "../middleware/auth";
 import { readBody } from "../util/request";
-import { isSecretKeyName, looksLikeSecretValue } from "@beamhop/sdk";
+import { maskSecretValues } from "@beamhop/sdk";
 
 const SettingsPatch = z.object({ values: z.record(z.string(), z.unknown()) });
 const PROXY_SEGMENT = "x";
 const PLUGIN_PREFIX = `/plugins/${PROXY_SEGMENT}`;
 const STRIPPED_HEADERS = ["cookie", "authorization", "x-beamhop-admin-pubkey", "x-beamhop-admin-role"];
 const MASK = "••••••••";
-
-type JsonSchema = {
-  format?: string;
-  writeOnly?: boolean;
-  "x-secret"?: boolean;
-  properties?: Record<string, JsonSchema>;
-  additionalProperties?: JsonSchema | boolean;
-  items?: JsonSchema;
-};
-
-export { isSecretKeyName } from "@beamhop/sdk";
-
-const isSecretProp = (key: string, p: JsonSchema | undefined) =>
-  p?.format === "password" || p?.writeOnly === true || p?.["x-secret"] === true || isSecretKeyName(key);
 
 /** Every non-empty string at any depth becomes the mask; structure, numbers and flags stay. */
 const maskAll = (v: unknown): unknown => {
@@ -37,21 +23,13 @@ const maskAll = (v: unknown): unknown => {
 };
 
 /**
- * Masks secrets at any depth: everything under a key that is secret by schema (`format: "password"`,
- * `writeOnly`, `x-secret`) or by name (see `isSecretKeyName`), plus any string that carries a credential on its
- * own (URLs with `user:pass@` or `secret=`/`token=` parameters, nsec keys). Numbers and flags stay readable.
+ * Masks secrets at any depth for viewers and the audit log: everything under a field the settings schema marks
+ * secret (`format: "password"`, `writeOnly`, `x-secret` — through nullable/union branches and `$ref`s too) or whose
+ * name looks like a credential, plus any string that carries a credential on its own. Numbers and flags stay
+ * readable. The walker is shared with the server (`maskSecretValues` in @beamhop/sdk).
  */
-export function maskSecrets(value: unknown, schema?: JsonSchema): unknown {
-  if (typeof value === "string") return value !== "" && looksLikeSecretValue(value) ? MASK : value;
-  if (Array.isArray(value)) return value.map((v) => maskSecrets(v, schema?.items));
-  if (!value || typeof value !== "object") return value;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    const extra = schema?.additionalProperties;
-    const p = schema?.properties?.[k] ?? (extra && typeof extra === "object" ? extra : undefined);
-    out[k] = isSecretProp(k, p) ? maskAll(v) : maskSecrets(v, p);
-  }
-  return out;
+export function maskSecrets(value: unknown, schema?: unknown): unknown {
+  return maskSecretValues(value, schema, maskAll);
 }
 
 export function registerPluginRoutes(app: AdminApp, ctx: ApiContext) {
@@ -99,8 +77,13 @@ export function registerPluginRoutes(app: AdminApp, ctx: ApiContext) {
 
   app.post("/plugins/:name/enable", manage("plugins.manage"), async (c) => {
     const name = find(c.req.param("name")).name;
-    await plugins.enable(name, principalOf(c).pubkey);
-    await ctx.audit(c, "plugin.enable", name);
+    try {
+      await plugins.enable(name, principalOf(c).pubkey);
+    } finally {
+      // the one audit record of the attempt (the plugin manager doesn't record its own): a failed setup is audited too
+      const p = find(name);
+      await ctx.audit(c, "plugin.enable", name, { status: p.status, ...(p.error ? { error: p.error } : {}) });
+    }
     return c.json(find(name));
   });
 
@@ -115,7 +98,7 @@ export function registerPluginRoutes(app: AdminApp, ctx: ApiContext) {
     const info = find(c.req.param("name"));
     const values = await plugins.getSettings(info.name);
     const canManage = principalOf(c).permissions.has("plugins.manage");
-    return c.json({ values: canManage ? values : maskSecrets(values, info.settingsSchema as JsonSchema), schema: info.settingsSchema ?? {} });
+    return c.json({ values: canManage ? values : maskSecrets(values, info.settingsSchema), schema: info.settingsSchema ?? {} });
   });
 
   app.patch("/plugins/:name/settings", manage("plugins.manage"), async (c) => {
@@ -128,7 +111,7 @@ export function registerPluginRoutes(app: AdminApp, ctx: ApiContext) {
       throw badRequest((err as Error).message || "invalid plugin settings", "validation");
     }
     // the audit log is readable with audit.view, so secrets never go into it
-    await ctx.audit(c, "plugin.settings", info.name, { values: maskSecrets(values, info.settingsSchema as JsonSchema) });
+    await ctx.audit(c, "plugin.settings", info.name, { values: maskSecrets(values, info.settingsSchema) });
     return c.json({ values: saved, schema: info.settingsSchema ?? {} });
   });
 

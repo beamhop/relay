@@ -3,7 +3,7 @@ import { h, Fragment, useState, useEffect, useCallback, ui, toast } from "./host
 // Minimal copy of AdminUiPluginApi from @beamhop/sdk/ui-contract (type-only)
 interface Api {
   pluginName: string;
-  registerPage(p: { path: string; title: string; icon?: string; component: unknown }): void;
+  registerPage(p: { path: string; title: string; component: unknown }): void;
   registerWidget(w: { id: string; title: string; size?: "sm" | "md" | "lg"; component: unknown }): void;
   registerUserAction(a: { id: string; label: string; destructive?: boolean; run(pubkey: string): Promise<void> | void }): void;
   registerEventAction(a: { id: string; label: string; destructive?: boolean; run(eventId: string): Promise<void> | void }): void;
@@ -75,7 +75,7 @@ export default function register(api: Api) {
     );
   }
 
-  api.registerPage({ path: "/hello", title: "Hello", icon: "hand", component: HelloPage });
+  api.registerPage({ path: "/hello", title: "Hello", component: HelloPage });
   api.registerWidget({ id: "hello-rejected", title: "Hello plugin", size: "sm", component: HelloWidget });
   api.registerUserAction({
     id: "hello-greet",

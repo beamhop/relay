@@ -321,9 +321,11 @@ export function sign(kp: Keypair, t: { kind?: number; content?: string; tags?: s
 }
 
 export const PUBLIC_URL = "https://relay.example.com";
+/** Relay key for tests (the server normally generates and persists one; core requires it in config). */
+export const RELAY_SECRET_KEY = "7f".repeat(32);
 
 export async function setup(opts: { settings?: DeepPartial<RuntimeSettings>; config?: Record<string, unknown> } = {}) {
-  const config: BeamhopConfig = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, ...(opts.config ?? {}) });
+  const config: BeamhopConfig = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, relaySecretKey: RELAY_SECRET_KEY, ...(opts.config ?? {}) });
   const stores = await createFakeStores();
   const settings = new FakeSettings(opts.settings);
   const bus = new EventBus();

@@ -14,6 +14,9 @@ const SCOPE: string = sw.registration.scope; // e.g. https://host/admin/
 const OFFLINE_URL = new URL("offline.html", SCOPE).href;
 const INDEX_URL = new URL("index.html", SCOPE).href;
 const API_PREFIX = new URL("api/", SCOPE).pathname;
+/** records which shell cache the active version uses */
+const META_CACHE = "beamhop-meta";
+const ACTIVE_KEY = new URL("__active-shell-cache", SCOPE).href;
 
 function hash(s: string) {
   let h = 5381;
@@ -35,15 +38,17 @@ sw.addEventListener("install", (event: any) => {
 sw.addEventListener("activate", (event: any) => {
   event.waitUntil(
     (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k.startsWith("beamhop-shell-") && k !== CACHE).map((k) => caches.delete(k)));
+      // keep the cache of the version that was active until now: a tab still running the old bundle lazy-loads
+      // route chunks the new deploy no longer serves, and finds them there (see the fetch handler). It is recorded
+      // explicitly, since the newest other cache may be one whose install failed and was never used.
+      const meta = await caches.open(META_CACHE);
+      const previous = await (await meta.match(ACTIVE_KEY))?.text();
+      const stale = (await caches.keys()).filter((k) => k.startsWith("beamhop-shell-") && k !== CACHE && k !== previous);
+      await Promise.all(stale.map((k) => caches.delete(k)));
+      await meta.put(ACTIVE_KEY, new Response(CACHE));
       await sw.clients.claim();
     })(),
   );
-});
-
-sw.addEventListener("message", (event: any) => {
-  if (event.data === "SKIP_WAITING") sw.skipWaiting();
 });
 
 sw.addEventListener("fetch", (event: any) => {
@@ -71,7 +76,8 @@ sw.addEventListener("fetch", (event: any) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE);
-      const hit = await cache.match(req, { ignoreSearch: false });
+      // current version first; then the kept previous version, for hashed chunks of a bundle that's still open
+      const hit = (await cache.match(req, { ignoreSearch: false })) || (await caches.match(req, { ignoreSearch: false }));
       return hit || fetch(req);
     })(),
   );

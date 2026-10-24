@@ -2,8 +2,8 @@ export const SOFTWARE = "https://github.com/beamhop/beamhop";
 export const VERSION = "0.1.0";
 
 /**
- * NIPs advertised in NIP-11 `supported_nips`. Per NIP-11, client-side NIPs (2, 10, 22, 28, 44, 51, 65 —
- * which only need generic NIP-01 storage) are not advertised.
+ * NIPs advertised in NIP-11 `supported_nips` (5, 29 and 86 only while NIP-05, groups and the admin API are enabled).
+ * Per NIP-11, client-side NIPs (2, 10, 22, 28, 44, 51, 65 — which only need generic NIP-01 storage) are not advertised.
  */
 export const SUPPORTED_NIPS: readonly number[] = [
   1, // basic protocol

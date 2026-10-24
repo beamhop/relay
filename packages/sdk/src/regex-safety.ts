@@ -2,12 +2,13 @@
  * Static safety check for admin-supplied word-filter regexes. Filters run synchronously on every event, so a
  * pattern that backtracks heavily (e.g. `^(\w+\s?)+$`, or `\w+\.?\w+x` on a long run of letters) lets anyone
  * freeze the relay with crafted content. The pattern is parsed and its worst-case backtracking work is bounded
- * from above; each filter then only looks at as much content as keeps that bound within a fixed step budget,
- * and patterns that can't cover even REGEX_FILTER_MIN_INPUT characters within it are refused. The bound is
- * deliberately conservative: it refuses patterns that *could* blow up rather than proving they do.
+ * from above; each filter is then run on at most as much content at once as keeps that bound within a fixed step
+ * budget (see compileRegexFilter for how longer posts are scanned), and patterns that can't cover even
+ * REGEX_FILTER_MIN_INPUT characters within it are refused. The bound is deliberately conservative: it refuses
+ * patterns that *could* blow up rather than proving they do.
  */
 export const MAX_FILTER_PATTERN_LENGTH = 512;
-/** Regex filters never look past this many leading characters of the content. */
+/** A regex filter is never run on more than this many characters at once. */
 export const REGEX_FILTER_MAX_INPUT = 8192;
 /** Patterns whose worst case only fits the budget on less content than this are refused. */
 export const REGEX_FILTER_MIN_INPUT = 1024;
@@ -385,8 +386,13 @@ function nodeCost(n: Node, L: number): Cost {
 
 export type RegexFilterAnalysis = { reason: string } | { maxInput: number };
 
-/** Why `pattern` is refused as a word filter, or how many leading characters of content it may be run on. */
+/** Why `pattern` is refused as a word filter, or how many characters of content it may be run on at once. */
 export function analyzeRegexFilter(pattern: string): RegexFilterAnalysis {
+  const a = analyze(pattern);
+  return "reason" in a ? a : { maxInput: a.maxInput };
+}
+
+function analyze(pattern: string): { reason: string } | { maxInput: number; steps: (length: number) => number } {
   if (pattern.length > MAX_FILTER_PATTERN_LENGTH) return { reason: `pattern is longer than ${MAX_FILTER_PATTERN_LENGTH} characters` };
   try {
     new RegExp(pattern, "iu");
@@ -413,7 +419,109 @@ export function analyzeRegexFilter(pattern: string): RegexFilterAnalysis {
     if (steps(mid) <= REGEX_FILTER_STEP_BUDGET) lo = mid;
     else hi = mid - 1;
   }
-  return { maxInput: lo };
+  return { maxInput: lo, steps };
+}
+
+/** Smallest window the rest of a long post is scanned in. */
+const MIN_SCAN_WINDOW = REGEX_FILTER_MIN_INPUT / 2;
+/** How far a window edge moves back to land on whitespace. */
+const EDGE_SLACK = 32;
+/** Real text around an edge match when it is re-checked (enough for \b, anchors and short lookarounds). */
+const EDGE_CONTEXT = 64;
+
+/** Whether the pattern can tell where its input starts / ends (anchors, word boundaries, lookarounds). */
+function edgeSensitivity(pattern: string): { start: boolean; end: boolean } {
+  let start = false;
+  let end = false;
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\") {
+      const next = pattern[i + 1];
+      if (!inClass && (next === "b" || next === "B")) start = end = true;
+      i++;
+    } else if (inClass) {
+      if (ch === "]") inClass = false;
+    } else if (ch === "[") inClass = true;
+    else if (ch === "^") start = true;
+    else if (ch === "$") end = true;
+    else if (ch === "(" && pattern[i + 1] === "?") {
+      if (pattern[i + 2] === "=" || pattern[i + 2] === "!") end = true;
+      else if (pattern[i + 2] === "<" && (pattern[i + 3] === "=" || pattern[i + 3] === "!")) start = true;
+    }
+  }
+  return { start, end };
+}
+
+const isSpace = (c: string, i: number) => /\s/.test(c[i] ?? "");
+
+/**
+ * Compiles an acceptable word-filter regex into a case-insensitive content test, or says why it is refused.
+ * Content up to the pattern's input limit is tested in one run (its worst case fits the step budget). The rest of a
+ * longer post is scanned in overlapping windows for at most one more budget: the largest window size whose scan of
+ * the whole post fits is used, so cheap patterns (literals, alternations) cover everything, while backtracking-prone
+ * ones stop scanning once the budget is spent. Window edges land on whitespace where possible; where a match touches
+ * an inner edge and the pattern has anchors, word boundaries or lookarounds, it only counts once it also matches
+ * at the same position with real text around the edge.
+ */
+export function compileRegexFilter(pattern: string): { reason: string } | { test: (content: string) => boolean } {
+  const a = analyze(pattern);
+  if ("reason" in a) return a;
+  const max = a.maxInput;
+  const re = new RegExp(pattern, "iu");
+  const scan = new RegExp(pattern, "giu");
+  const sticky = new RegExp(pattern, "iuy");
+  const sense = edgeSensitivity(pattern);
+  // candidate window sizes for the rest of the post, largest first, with their worst-case cost
+  const sizes: { w: number; cost: number }[] = [];
+  for (let w = max; w >= MIN_SCAN_WINDOW; w = Math.floor(w / 2)) sizes.push({ w, cost: a.steps(w + 2 * EDGE_CONTEXT) });
+
+  /** whether a match at absolute index `at` survives with real text around a window edge */
+  const recheck = (c: string, at: number) => {
+    const from = Math.max(0, at - EDGE_CONTEXT);
+    const slice = c.slice(from, Math.min(c.length, at + EDGE_CONTEXT * 2));
+    sticky.lastIndex = at - from;
+    const m = sticky.exec(slice);
+    return !!m && (from + slice.length === c.length || m.index + m[0].length < slice.length);
+  };
+  /** a match in c[start, end) that isn't an artefact of cutting the content there */
+  const found = (c: string, start: number, end: number) => {
+    const slice = c.slice(start, end);
+    scan.lastIndex = 0;
+    for (let m = scan.exec(slice); m; m = scan.exec(slice)) {
+      const at = start + m.index;
+      const atStart = start > 0 && m.index === 0;
+      const atEnd = end < c.length && m.index + m[0].length >= slice.length;
+      if ((!atStart || !sense.start) && (!atEnd || !sense.end)) return true;
+      if (recheck(c, at)) return true;
+      if (m[0].length === 0) scan.lastIndex++;
+    }
+    return false;
+  };
+  /** an index at or a little before `i` just after whitespace, so a cut doesn't split a word */
+  const softCut = (c: string, i: number) => {
+    for (let j = i - 1; j > i - EDGE_SLACK && j > 0; j--) if (isSpace(c, j)) return j + 1;
+    return i;
+  };
+
+  const test = (c: string) => {
+    if (c.length <= max) return re.test(c);
+    const head = softCut(c, max);
+    if (found(c, 0, head)) return true;
+    const rest = c.length - head;
+    const pick = sizes.find(({ w, cost }) => Math.ceil(rest / (w - w / 4)) * cost <= REGEX_FILTER_STEP_BUDGET) ?? sizes[sizes.length - 1];
+    const overlap = Math.floor(pick.w / 4);
+    let spent = 0;
+    for (let start = softCut(c, head - overlap); spent + pick.cost <= REGEX_FILTER_STEP_BUDGET; ) {
+      spent += pick.cost;
+      const end = start + pick.w >= c.length ? c.length : softCut(c, start + pick.w);
+      if (found(c, start, end)) return true;
+      if (end >= c.length) return false;
+      start = Math.max(softCut(c, end - overlap), start + 1);
+    }
+    return false;
+  };
+  return { test };
 }
 
 /** Returns why `pattern` is refused as a word filter, or undefined when it is acceptable. */

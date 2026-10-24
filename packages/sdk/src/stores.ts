@@ -85,7 +85,8 @@ export interface UserQuery {
   role?: AdminRole;
   allowed?: boolean;
   tag?: string;
-  sort?: "lastSeen" | "firstSeen" | "eventCount";
+  /** `pubkey`: ascending by pubkey alone, stable across pages (for callers paging through everything) */
+  sort?: "lastSeen" | "firstSeen" | "eventCount" | "pubkey";
   limit?: number;
   offset?: number;
 }
@@ -136,6 +137,11 @@ export interface IpRuleStore {
 export interface KvStore {
   get<T = unknown>(namespace: string, key: string): Promise<T | undefined>;
   set(namespace: string, key: string, value: unknown): Promise<void>;
+  /**
+   * Stores `value` only if the key doesn't exist yet (atomic: concurrent callers, e.g. several instances, can't
+   * both win); returns whether it was written. Optional for alternative stores — callers fall back to get + set.
+   */
+  setIfAbsent?(namespace: string, key: string, value: unknown): Promise<boolean>;
   delete(namespace: string, key: string): Promise<void>;
   list<T = unknown>(namespace: string): Promise<Record<string, T>>;
 }

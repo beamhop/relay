@@ -198,7 +198,7 @@ describe("passkey login options don't reveal admins or their credentials", () =>
   const addPasskey = (h: Harness, pk: string, id: string, transports = '["internal","hybrid"]') =>
     h.stores.db.run("INSERT INTO admin_passkeys (id, pubkey, public_key, counter, transports, name, created_at) VALUES (?, ?, 'pk', 0, ?, 'key', 1)", [id, pk, transports]);
   const options = async (api: { request: (p: string, i: RequestInit) => Response | Promise<Response> }, login: string) => {
-    const res = await api.request("/auth/passkey/login/options", { method: "POST", body: JSON.stringify({ login }), headers: { "content-type": "application/json" } });
+    const res = await api.request("/auth/passkey/login/options", { method: "POST", body: JSON.stringify({ login }), headers: { "content-type": "application/json", "x-requested-with": "beamhop" } });
     expect(res.status).toBe(200);
     return ((await res.json()) as Options).allowCredentials ?? [];
   };

@@ -47,12 +47,7 @@ export function totpCode(secret: string, counter: number): string {
   return String(bin % 1_000_000).padStart(6, "0");
 }
 
-/** RFC 6238 (SHA-1, 30s, 6 digits), ±1 step window. */
-export function verifyTotp(secret: string, code: string, nowSec: number): boolean {
-  return totpStep(secret, code, nowSec) !== null;
-}
-
-/** Like verifyTotp but returns the matched time step (for replay protection), or null. */
+/** RFC 6238 (SHA-1, 30s, 6 digits), ±1 step window: the matched time step (for replay protection), or null. */
 export function totpStep(secret: string, code: string, nowSec: number): number | null {
   const c = code.replace(/\s+/g, "");
   if (!/^\d{6}$/.test(c)) return null;

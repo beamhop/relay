@@ -6,18 +6,6 @@ import { badRequest, isZodError, zodMessage } from "../errors";
 import { requirePermission } from "../middleware/auth";
 import { readBody } from "../util/request";
 
-let cachedSchema: Record<string, unknown> | undefined;
-function settingsJsonSchema(): Record<string, unknown> {
-  if (!cachedSchema) {
-    try {
-      cachedSchema = z.toJSONSchema(RuntimeSettingsSchema as unknown as z.ZodType, { unrepresentable: "any", io: "input" }) as Record<string, unknown>;
-    } catch {
-      cachedSchema = {};
-    }
-  }
-  return cachedSchema;
-}
-
 const PatchSchema = z.record(z.string(), z.unknown());
 
 /** Rejects unknown top-level sections and word-filter regexes that don't compile or could backtrack catastrophically. */
@@ -38,7 +26,7 @@ export function registerSettingsRoutes(app: AdminApp, ctx: ApiContext) {
   const { settings } = ctx.deps;
 
   app.get("/settings", requirePermission("settings.view"), (c) => {
-    const body: SettingsResponse = { settings: settings.get(), schema: settingsJsonSchema() };
+    const body: SettingsResponse = { settings: settings.get() };
     return c.json(body);
   });
 
@@ -53,7 +41,7 @@ export function registerSettingsRoutes(app: AdminApp, ctx: ApiContext) {
       throw badRequest(isZodError(err) ? zodMessage(err) : (err as Error).message || "invalid settings", "validation");
     }
     await ctx.audit(c, "settings.update", null, { patch });
-    const body: SettingsResponse = { settings: updated, schema: settingsJsonSchema() };
+    const body: SettingsResponse = { settings: updated };
     return c.json(body);
   });
 }

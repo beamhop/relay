@@ -11,9 +11,9 @@ import { Scheduler } from "./jobs/scheduler";
 import { GroupsService } from "./nips/nip29/groups";
 import { GroupRepo } from "./nips/nip29/repo";
 import { ContentPolicy } from "./pipeline/content-policy";
-import { VANISH_KV_NAMESPACE } from "./pipeline/special-kinds";
+import { MAX_VANISH_MARKERS, VANISH_KV_NAMESPACE } from "./pipeline/special-kinds";
 import { Verifier } from "./pipeline/verify";
-import { processEvent } from "./pipeline/write";
+import { EPHEMERAL_DEDUP_SIZE, processEvent } from "./pipeline/write";
 import { Connection } from "./protocol/connection";
 import {
   cancelSub,
@@ -42,23 +42,24 @@ import { SubscriptionIndex } from "./subscriptions/index";
 import { isVisibleTo } from "./subscriptions/visibility";
 import { UserCache } from "./users";
 import { randomHex } from "./util/hex";
+import { Lru } from "./util/lru";
 import { RateLimiter } from "./util/rate-limit";
 import { toWsUrl } from "./util/url";
 
-export const IP_RULES_REFRESH_MS = 30_000;
-export const EXPIRATION_PURGE_MS = 60_000;
+const IP_RULES_REFRESH_MS = 30_000;
+const EXPIRATION_PURGE_MS = 60_000;
 /**
  * connectionsPerIp applies per address; an IPv6 /64 (one subscriber's prefix, or a whole office LAN)
  * may hold this many times that in total.
  */
-export const V6_PREFIX_CONNECTION_FACTOR = 4;
+const V6_PREFIX_CONNECTION_FACTOR = 4;
 export { MESSAGES_PER_MINUTE };
 
 const noopHandle = (id: string): ConnectionHandle => ({ id, onMessage() {}, onClose() {} });
 
 export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEngine> => {
   const logger = deps.logger.child("core");
-  const key = await loadRelayKey(deps.config, deps.stores.kv, logger);
+  const key = loadRelayKey(deps.config);
   const conns = new Map<string, Connection>();
   const subs = new SubscriptionIndex();
 
@@ -76,6 +77,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     verifier: new Verifier(),
     policy: new ContentPolicy(deps.settings, logger),
     vanished: new Map(),
+    ephemeralSeen: new Lru(EPHEMERAL_DEDUP_SIZE),
     neg: { items: 0, opening: 0, openingByIp: new Map() },
     reads: new ReadLimits(),
     s: () => deps.settings.get(),
@@ -88,10 +90,12 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       }
       return n;
     },
+    disconnect: (target, notice) => disconnect(target, notice),
   };
   ctx.groups = new GroupsService(ctx, new GroupRepo(deps.stores.db));
   await ctx.groups.init();
   for (const [pk, at] of Object.entries(await deps.stores.kv.list<number>(VANISH_KV_NAMESPACE))) {
+    if (ctx.vanished.size >= MAX_VANISH_MARKERS) break;
     if (typeof at === "number") ctx.vanished.set(pk, at);
   }
   await ctx.ipRules.refresh();
@@ -235,6 +239,20 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     closers.delete(conn.id);
   }
 
+  function disconnect(target: { id?: string; pubkey?: string; ip?: string }, notice = "blocked: disconnected by relay operator"): number {
+    let n = 0;
+    for (const conn of [...conns.values()]) {
+      const hit =
+        (target.id !== undefined && conn.id === target.id) ||
+        (target.pubkey !== undefined && conn.authedPubkeys.has(target.pubkey)) ||
+        (target.ip !== undefined && conn.ip === target.ip);
+      if (!hit) continue;
+      closeConn(conn, notice, 1008, "disconnected");
+      n++;
+    }
+    return n;
+  }
+
   let offIpRules: (() => void) | undefined;
 
   async function refreshIpRules() {
@@ -270,19 +288,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     },
     sign: (t) => key.sign(t),
     connections: () => [...conns.values()].map((c) => c.summary()),
-    disconnect(target) {
-      let n = 0;
-      for (const conn of [...conns.values()]) {
-        const hit =
-          (target.id !== undefined && conn.id === target.id) ||
-          (target.pubkey !== undefined && conn.authedPubkeys.has(target.pubkey)) ||
-          (target.ip !== undefined && conn.ip === target.ip);
-        if (!hit) continue;
-        closeConn(conn, "blocked: disconnected by relay operator", 1008, "disconnected");
-        n++;
-      }
-      return n;
-    },
+    disconnect: (target) => disconnect(target),
     nip11: () => buildNip11(ctx),
     groups: {
       list: async () => ctx.groups.list(),

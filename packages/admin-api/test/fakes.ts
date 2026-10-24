@@ -284,11 +284,12 @@ export function fakeRelay(stores: Stores, bus: EventBus) {
   return relay;
 }
 
-type FakeBlossom = BlossomService & { blobs: Map<string, BlobRecord>; blocked: Set<string> };
+/** `blocked`: hash → who blocked it (`blockedBy`) */
+type FakeBlossom = BlossomService & { blobs: Map<string, BlobRecord>; blocked: Map<string, string | null> };
 
 export function fakeBlossom(): FakeBlossom {
   const blobs = new Map<string, BlobRecord>();
-  const blocked = new Set<string>();
+  const blocked = new Map<string, string | null>();
   return {
     blobs,
     blocked,
@@ -309,14 +310,15 @@ export function fakeBlossom(): FakeBlossom {
       const data = new TextEncoder().encode("blob:" + s);
       return { body: new Blob([data]).stream(), size: data.length, type: b.type };
     },
-    async setStatus(s, status: BlobStatus) {
+    async setStatus(s, status: BlobStatus, actor) {
       const b = blobs.get(s);
       if (!b) throw new Error("not found");
       b.status = status;
+      b.moderatedBy = actor;
     },
-    async delete(s, _a, opts) {
+    async delete(s, actor, opts) {
       blobs.delete(s);
-      if (opts?.block) blocked.add(s);
+      if (opts?.block) blocked.set(s, actor);
     },
     async deleteByPubkey(pk) {
       let n = 0;
@@ -332,7 +334,7 @@ export function fakeBlossom(): FakeBlossom {
       return { count: all.length, bytes: all.reduce((a, b) => a + b.size, 0), byType: [] };
     },
     async blocklist() {
-      return [...blocked].map((sha256) => ({ sha256, reason: "deleted by admin", createdAt: 1 }));
+      return [...blocked].map(([sha256, blockedBy]) => ({ sha256, reason: "deleted by admin", createdAt: 1, blockedBy }));
     },
     async unblock(s) {
       return blocked.delete(s);
@@ -417,7 +419,17 @@ export function nip98Header(k: Key, url: string, method: string, body?: string, 
 export const TEST_SCRYPT: ScryptParams = { N: 1024, r: 8, p: 1 };
 
 export async function createHarness(
-  opts: { blossom?: boolean; pushSender?: PushSender; trustProxy?: boolean; scryptParams?: ScryptParams; db?: Db; owner?: Key } = {},
+  opts: {
+    blossom?: boolean;
+    pushSender?: PushSender;
+    trustProxy?: boolean;
+    scryptParams?: ScryptParams;
+    db?: Db;
+    owner?: Key;
+    reportPushIntervalMs?: number;
+    importMaxBytes?: number;
+    bannedEventsTtlMs?: number;
+  } = {},
 ) {
   const owner = opts.owner ?? newKey();
   const bus = new EventBus();
@@ -456,12 +468,29 @@ export async function createHarness(
     heartbeatMs: 1000,
     pushSender: opts.pushSender,
     scryptParams: opts.scryptParams ?? TEST_SCRYPT,
+    reportPushIntervalMs: opts.reportPushIntervalMs,
+    importMaxBytes: opts.importMaxBytes,
+    bannedEventsTtlMs: opts.bannedEventsTtlMs,
   });
 
   /** absolute public URL of an admin path (what NIP-98 `u` tags must contain) */
   const url = (path: string) => `${PUBLIC_URL}/admin/api${path}`;
-  /** the app is mounted at /admin/api by the server; tests call it directly with relative paths */
-  const req = (path: string, init?: RequestInit) => api.app.request(path, init);
+  /**
+   * The app is mounted at /admin/api by the server; tests call it directly with relative paths. Like the server adapter,
+   * this binds the client IP as `env.ip` (from the rightmost X-Forwarded-For hop when `trustProxy` is set), and like the
+   * admin UI's fetch wrapper it sends `X-Requested-With: beamhop` on mutating requests — unless the test sends a session
+   * cookie, an Origin, that header or NIP-98 auth itself (CSRF tests do).
+   */
+  const req = (path: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    const method = (init?.method ?? "GET").toUpperCase();
+    const own = ["origin", "x-requested-with", "authorization"].some((h) => headers.has(h)) || /\bbh_session=/.test(headers.get("cookie") ?? "");
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && !own) {
+      headers.set("x-requested-with", "beamhop");
+    }
+    const xff = opts.trustProxy ? headers.get("x-forwarded-for") : null;
+    return api.app.request(path, { ...init, headers }, xff ? { ip: xff.split(",").at(-1)!.trim() } : undefined);
+  };
 
   /** Request authenticated with a per-request NIP-98 header. */
   const asKey = (k: Key, path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}) => {
@@ -503,6 +532,9 @@ export async function createHarness(
 
   return { api, deps, stores, bus, owner, relay, metrics, blossom, settings, clock, url, req, asKey, login, withCookie, addAdmin, audit: stores.audit as FakeAudit, events: stores.events as FakeEventStore };
 }
+
+/** What the admin UI sends with every API call (CSRF proof + JSON body), for tests that call the app directly. */
+export const PANEL_HEADERS = { "x-requested-with": "beamhop", "content-type": "application/json" } as const;
 
 export function cookieFrom(res: Response): string | undefined {
   const sc = res.headers.get("set-cookie");

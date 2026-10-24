@@ -32,7 +32,7 @@ export interface PluginContext<S = Record<string, unknown>> {
   };
   /** Public HTTP routes mounted at /plugins/<name>/ */
   http: Hono;
-  /** Admin-only routes mounted at /admin/api/plugins/<name>/ (session + RBAC "plugins.use" applied) */
+  /** Admin-only routes mounted at /admin/api/plugins/x/<name>/ (session + RBAC "plugins.use" applied) */
   adminHttp: Hono;
   jobs: {
     /** run every `intervalMs`; returns cancel */

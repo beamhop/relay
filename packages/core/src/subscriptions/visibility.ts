@@ -3,7 +3,7 @@ import type { RelayContext } from "../context";
 import { CONTROL_KINDS, GROUP_KIND } from "../nips/nip29/groups";
 
 /** Kinds only delivered to authenticated recipients (NIP-04 DMs, NIP-59 gift wraps incl. ephemeral 21059). */
-export const GATED_KINDS: ReadonlySet<number> = new Set([4, 1059, 21059]);
+const GATED_KINDS: ReadonlySet<number> = new Set([4, 1059, 21059]);
 /** Gift wrap kinds: signed by throwaway keys, addressed via `p`. */
 export const GIFT_WRAP_KINDS: ReadonlySet<number> = new Set([1059, 21059]);
 
@@ -23,8 +23,11 @@ export function onlyGatedKinds(f: Filter): boolean {
   return !!f.kinds && f.kinds.length > 0 && f.kinds.every((k) => GATED_KINDS.has(k));
 }
 
+/** The `allowed` values a filter field selects (all when absent), or null for none. Linear: both lists can be thousands long. */
 function narrow(vals: readonly (string | number)[] | undefined, allowed: readonly (string | number)[]): any[] | null {
-  const out = vals ? allowed.filter((v) => vals.includes(v)) : [...allowed];
+  if (!vals) return allowed.length ? (allowed as any[]) : null;
+  const wanted = new Set<string | number>(vals);
+  const out = allowed.filter((v) => wanted.has(v));
   return out.length ? out : null;
 }
 

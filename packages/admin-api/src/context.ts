@@ -39,6 +39,12 @@ export interface AdminApiOptions {
   pushSender?: PushSender;
   /** scrypt parameters for new password hashes, default N=2^17, r=8, p=1 (tests use cheaper ones) */
   scryptParams?: ScryptParams;
+  /** total size cap of a POST /events/import body (bytes), default 256 MiB */
+  importMaxBytes?: number;
+  /** minimum time between two report push notifications; reports in between are sent as one digest. Default 60000 */
+  reportPushIntervalMs?: number;
+  /** how long (ms) the banned-event id cache is trusted before it is re-read from the database, default 5000 */
+  bannedEventsTtlMs?: number;
 }
 
 export interface ApiContext {

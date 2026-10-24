@@ -20,14 +20,14 @@ export function withCors(res: Response): Response {
   return res;
 }
 
-/** Error response with the Blossom `X-Reason` header (plain-text body with the same message). */
+/**
+ * Error response with the Blossom `X-Reason` header (plain-text body with the full message). The header is cut down
+ * to printable ASCII: a header value outside Latin-1 (e.g. a plugin's localized rejection reason) would make the
+ * Response constructor throw.
+ */
 export function errorResponse(status: number, reason: string): Response {
-  return withCors(
-    new Response(reason, {
-      status,
-      headers: { "X-Reason": reason.replace(/[\r\n]+/g, " ").slice(0, 512), "Content-Type": "text/plain; charset=utf-8" },
-    }),
-  );
+  const header = reason.replace(/[\r\n\t]+/g, " ").replace(/[^\x20-\x7e]/g, "?").slice(0, 512);
+  return withCors(new Response(reason, { status, headers: { "X-Reason": header, "Content-Type": "text/plain; charset=utf-8" } }));
 }
 
 export function jsonResponse(body: unknown, status = 200): Response {
@@ -160,7 +160,7 @@ export function parseRange(header: string | null | undefined, size: number): { s
 }
 
 /** Strips brackets, an IPv4 port and the IPv4-mapped IPv6 prefix (same rules as the server adapters). */
-export function normalizeIp(ip: string): string {
+function normalizeIp(ip: string): string {
   let s = ip.trim();
   if (s.startsWith("[")) s = s.slice(1, s.indexOf("]"));
   else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(s)) s = s.slice(0, s.lastIndexOf(":"));

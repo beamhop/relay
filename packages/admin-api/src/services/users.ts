@@ -1,4 +1,4 @@
-import type { AdminApiDeps, AdminRole, BanRequest, UserRecord, UserStatus, UserView } from "@beamhop/sdk";
+import type { AdminApiDeps, AdminRole, BanRequest, BlobRecord, UserRecord, UserStatus, UserView } from "@beamhop/sdk";
 import { forbidden } from "../errors";
 import type { ProfileService } from "./profiles";
 import { ROLE_RANK, type RoleService } from "./roles";
@@ -102,7 +102,31 @@ export class UserService {
    * non-staff or lower-ranked staff, never those of your peers or superiors. Pass `protectedSet` (from
    * protectedAuthors) when checking many authors; a handful are resolved one by one.
    */
-  async assertCanDeleteEventsOf(actor: Actor, authors: Iterable<string>, protectedSet?: ReadonlyMap<string, AdminRole>): Promise<void> {
+  assertCanDeleteEventsOf(actor: Actor, authors: Iterable<string>, protectedSet?: ReadonlyMap<string, AdminRole>): Promise<void> {
+    return this.assertOutranksAuthors(actor, authors, "delete events", protectedSet);
+  }
+
+  /**
+   * Deleting, blocking or hiding a blob follows the same ranks as deleting events, against every uploader: it is gone (or
+   * hidden) for all of them, so one peer or superior among them is enough to refuse.
+   */
+  assertCanModerateBlob(actor: Actor, blob: Pick<BlobRecord, "owners">, protectedSet?: ReadonlyMap<string, AdminRole>): Promise<void> {
+    return this.assertOutranksAuthors(actor, blob.owners, "moderate media", protectedSet);
+  }
+
+  /**
+   * Undoing a moderation decision — approving a blob someone blocked or hid, lifting a hash block — needs at least the rank
+   * of whoever made it (`by`; nothing to check when unknown or when they no longer hold a role).
+   */
+  async assertCanOverride(actor: Actor, by: string | null | undefined, what: string): Promise<void> {
+    if (!by || by === actor.pubkey || actor.role === "owner") return;
+    const role = await this.roles.rankRole(by);
+    if (role && ROLE_RANK[role] > (actor.role ? ROLE_RANK[actor.role] : 0)) {
+      throw forbidden(`cannot ${what}: a user with role ${role} made that decision`, "forbidden_target");
+    }
+  }
+
+  private async assertOutranksAuthors(actor: Actor, authors: Iterable<string>, what: string, protectedSet?: ReadonlyMap<string, AdminRole>): Promise<void> {
     if (actor.role === "owner") return;
     const unique = [...new Set(authors)].filter((pk) => pk !== actor.pubkey);
     if (!unique.length) return;
@@ -110,7 +134,7 @@ export class UserService {
     const prot = protectedSet ?? (unique.length > FEW_AUTHORS ? await this.protectedAuthors(actor) : undefined);
     for (const pk of unique) {
       const role = prot ? (prot.get(pk) ?? null) : await this.roles.rankRole(pk);
-      if (role && ROLE_RANK[role] >= rank) throw forbidden(`cannot delete events of a user with role ${role}`, "forbidden_target");
+      if (role && ROLE_RANK[role] >= rank) throw forbidden(`cannot ${what} of a user with role ${role}`, "forbidden_target");
     }
   }
 

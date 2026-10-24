@@ -13,6 +13,7 @@ import { EventContent } from "@/components/event-card";
 import { ToneBadge, KindBadge, type Tone } from "@/components/badges";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ListSkeleton } from "@/components/page-skeleton";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { InfiniteSentinel } from "@/components/infinite-sentinel";
 import { SelectionBar } from "@/components/selection-bar";
 import { SwipeRow } from "@/components/swipe-row";
@@ -206,7 +207,30 @@ function ReportsPage() {
   );
 }
 
-function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: Report; canResolve: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void }) {
+type ReportCardProps = { r: Report; canResolve: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void };
+
+/** Reports carry attacker-chosen content: a card that fails to render must not hide the rest of the queue. */
+function ReportCard(props: ReportCardProps) {
+  return (
+    <ErrorBoundary
+      key={props.r.id}
+      fallback={
+        <div className="space-y-2 rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm sm:p-4">
+          <p className="font-medium">Report {String(props.r.id).slice(0, 12)}… can’t be displayed</p>
+          {props.canResolve && (
+            <Button size="sm" variant="outline" onClick={() => props.onAction("dismiss")}>
+              <X /> Dismiss
+            </Button>
+          )}
+        </div>
+      }
+    >
+      <ReportCardInner {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: ReportCardProps) {
   const mobile = useIsMobile();
   return (
     <div className={cn("space-y-3 rounded-xl border bg-card p-3 sm:p-4", selected && "border-primary/60 bg-primary/5")}>
@@ -248,7 +272,8 @@ function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: Report
           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
             <KindBadge kind={r.targetEvent.kind} /> reported content · {timeAgo(r.targetEvent.created_at)}
           </div>
-          <EventContent event={r.targetEvent} compact />
+          {/* reported media never loads on its own, and shows blurred */}
+          <EventContent event={r.targetEvent} compact sensitive />
         </div>
       ) : r.targetEventId ? (
         <p className="text-xs text-muted-foreground">Reported event {r.targetEventId.slice(0, 12)}… is no longer stored, so its author can't be checked against the reported user.</p>

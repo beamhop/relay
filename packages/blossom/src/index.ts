@@ -21,6 +21,7 @@ export function optionsFromConfig(config: CoreDeps["config"]): BlossomOptions {
     "uploadStallMs",
     "minUploadBytesPerSec",
     "mirrorPorts",
+    "mirrorTimeoutMs",
   ] as const) {
     if (l[k] !== undefined) (out as Record<string, unknown>)[k] = l[k];
   }

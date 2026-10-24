@@ -6,11 +6,16 @@
  */
 export interface AdminUiPluginApi {
   pluginName: string;
-  registerPage(page: { path: string; title: string; icon?: string; component: unknown /* React.ComponentType */ }): void;
+  /** listed under "Plugins" in the sidebar (with a generic plugin icon) at /admin/p/<plugin>/<path> */
+  registerPage(page: { path: string; title: string; component: unknown /* React.ComponentType */ }): void;
   registerWidget(widget: { id: string; title: string; size?: "sm" | "md" | "lg"; component: unknown }): void;
   registerUserAction(action: { id: string; label: string; destructive?: boolean; run(pubkey: string): Promise<void> | void }): void;
   registerEventAction(action: { id: string; label: string; destructive?: boolean; run(eventId: string): Promise<void> | void }): void;
-  /** fetch against /admin/api/plugins/<name>/... with session credentials */
+  /**
+   * fetch against /admin/api/plugins/x/<pluginName>/<path> (the plugin's adminRoutes) with session credentials.
+   * `path` is relative to that namespace ("/stats" and "stats" are the same); absolute URLs, `..` segments and
+   * anything else that would leave it reject with an error.
+   */
   fetch(path: string, init?: RequestInit): Promise<Response>;
 }
 export interface AdminUiHost {

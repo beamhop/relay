@@ -5,7 +5,6 @@ import { toWsUrl } from "../util/url";
 import { buildNip11 } from "./nip11";
 import { invitePage } from "./invite-page";
 import { verifyNip98 } from "./nip98";
-import { RateLimiter } from "../util/rate-limit";
 import { ipKey } from "../util/cidr";
 
 const CORS = {
@@ -17,12 +16,12 @@ const CORS = {
 const NIP05_NAME = /^[a-z0-9._-]{1,64}$/;
 const MAX_REDEEM_BODY = 4096;
 /** Invite redemption attempts per address per minute (each one costs a signature check and a replay-cache slot). */
-export const REDEEM_PER_MINUTE = 20;
+const REDEEM_PER_MINUTE = 20;
 
 /** Relay HTTP routes: NIP-11, NIP-05 and invite redemption. Unhandled requests fall through via next(). */
 export function createHttp(ctx: RelayContext): Hono {
   const app = new Hono<{ Bindings: { ip?: string } }>();
-  const redeemLimiter = new RateLimiter();
+  let warnedNip05Host = false;
 
   // CORS preflight for NIP-11 (and NIP-86, which shares "/")
   app.options("/", () => new Response(null, { status: 204, headers: CORS }));
@@ -38,6 +37,23 @@ export function createHttp(ctx: RelayContext): Hono {
   app.get("/.well-known/nostr.json", async (c) => {
     const s = ctx.s();
     if (!s.nip05.enabled) return c.json({ error: "NIP-05 disabled" }, 404, CORS);
+    // identifiers are name@domain: with a domain configured, other hosts pointing here directly don't get answers.
+    // The relay's own host is accepted too, since the domain's site typically proxies this path to it (nginx sends
+    // `Host: $proxy_host` by default, a Cloudflare Worker fetches the relay's URL), and so is the host a reverse proxy
+    // reports (X-Forwarded-Host): a client spoofing it only changes its own answer.
+    const domain = hostOf(s.nip05.domain);
+    if (domain) {
+      const host = new URL(c.req.url).host;
+      const forwarded = c.req.header("x-forwarded-host")?.split(",")[0]?.trim();
+      const allowed = [domain, hostOf(ctx.config.server.publicUrl)];
+      if (![host, forwarded].some((h) => h && allowed.includes(hostOf(h)))) {
+        if (!warnedNip05Host) {
+          warnedNip05Host = true;
+          ctx.logger.warn("NIP-05 request refused: its host is neither nip05.domain nor the publicUrl host (logged once)", { host, forwardedHost: forwarded, domain });
+        }
+        return c.json({ error: "NIP-05 is not served for this host" }, 404, CORS);
+      }
+    }
     const name = (c.req.query("name") ?? "").toLowerCase();
     const names: Record<string, string> = {};
     const ownerPk = hexPubkey(s.info.pubkey);
@@ -55,7 +71,8 @@ export function createHttp(ctx: RelayContext): Hono {
   app.options("/invite/redeem", () => new Response(null, { status: 204, headers: CORS }));
   app.post("/invite/redeem", async (c) => {
     const ip = c.env?.ip;
-    if (ip && !redeemLimiter.take(`redeem:${ipKey(ip)}`, REDEEM_PER_MINUTE)) return c.json({ ok: false, error: "rate-limited: too many attempts" }, 429, CORS);
+    // the relay's limiter is swept on a timer, so addresses that come once don't stay in memory
+    if (ip && !ctx.rate.take(`redeem:${ipKey(ip)}`, REDEEM_PER_MINUTE)) return c.json({ ok: false, error: "rate-limited: too many attempts" }, 429, CORS);
     const body = await readCapped(c.req.raw, MAX_REDEEM_BODY);
     if (!body) return c.json({ ok: false, error: "body too large" }, 413, CORS);
     const auth = verifyNip98(c.req.raw, { publicUrl: ctx.config.server.publicUrl, verifier: ctx.verifier, body });
@@ -114,6 +131,17 @@ async function readCapped(req: Request, max: number): Promise<Uint8Array | null>
     off += ch.byteLength;
   }
   return out;
+}
+
+/** Lowercase hostname of a host, host:port or URL ("" when there's none); ports and IPv6 brackets are dropped. */
+function hostOf(v: string | undefined): string {
+  const t = (v ?? "").trim();
+  if (!t) return "";
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `http://${t}`).hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  } catch {
+    return t.toLowerCase();
+  }
 }
 
 /** NIP-05 keys must be lowercase hex; accept an operator-entered npub or uppercase hex. */

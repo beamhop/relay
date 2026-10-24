@@ -1,6 +1,6 @@
 import type { BlobStatus, Db, Migration } from "@beamhop/sdk";
 
-export const migrations: Migration[] = [
+const migrations: Migration[] = [
   {
     id: "001_init",
     up: `
@@ -28,6 +28,36 @@ CREATE TABLE IF NOT EXISTS blossom_blocklist (
 );
 `,
   },
+  {
+    // blossom_deletions: an owner deleted their copy of a blob at `deleted_at` (their delete token's created_at), so
+    // their older upload tokens for it are refused; rows are pruned once no such token can still be valid.
+    // blossom_stripped: metadata stripping turned `original` into the stored `sha256`; a block on the stored blob
+    // also refuses the original bytes (e.g. mirrored byte-identical from another server).
+    id: "002_deletions_stripped",
+    up: `
+CREATE TABLE IF NOT EXISTS blossom_deletions (
+  sha256 TEXT NOT NULL,
+  pubkey TEXT NOT NULL,
+  deleted_at BIGINT NOT NULL,
+  PRIMARY KEY (sha256, pubkey)
+);
+CREATE INDEX IF NOT EXISTS blossom_deletions_at_idx ON blossom_deletions (deleted_at);
+CREATE TABLE IF NOT EXISTS blossom_stripped (
+  original TEXT PRIMARY KEY,
+  sha256 TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS blossom_stripped_sha_idx ON blossom_stripped (sha256);
+`,
+  },
+  {
+    // who moderated: the admin who set a blob's pending/blocked status, and who put a hash on the blocklist
+    id: "003_moderated_by",
+    up: `
+ALTER TABLE blossom_blobs ADD COLUMN moderated_by TEXT;
+ALTER TABLE blossom_blocklist ADD COLUMN blocked_by TEXT;
+`,
+  },
 ];
 
 export interface BlobRow {
@@ -36,15 +66,26 @@ export interface BlobRow {
   type: string;
   createdAt: number;
   status: BlobStatus;
+  /** admin who set the current pending/blocked status (null when approved, or held back by requireApproval) */
+  moderatedBy: string | null;
   hasThumbnail: boolean;
 }
 
-export interface OwnedBlobRow extends BlobRow {
+interface OwnedBlobRow extends BlobRow {
   /** when this owner uploaded it */
   ownedAt: number;
 }
 
-type RawBlob = { sha256: string; size: unknown; type: string; created_at: unknown; status: string; has_thumbnail: unknown; owned_at?: unknown };
+type RawBlob = {
+  sha256: string;
+  size: unknown;
+  type: string;
+  created_at: unknown;
+  status: string;
+  moderated_by: string | null;
+  has_thumbnail: unknown;
+  owned_at?: unknown;
+};
 
 const toRow = (r: RawBlob): BlobRow => ({
   sha256: r.sha256,
@@ -52,12 +93,13 @@ const toRow = (r: RawBlob): BlobRow => ({
   type: r.type,
   createdAt: Number(r.created_at),
   status: r.status as BlobStatus,
+  moderatedBy: r.moderated_by ?? null,
   hasThumbnail: Number(r.has_thumbnail) === 1,
 });
 
-const BLOB_COLS = "b.sha256, b.size, b.type, b.created_at, b.status, b.has_thumbnail";
+const BLOB_COLS = "b.sha256, b.size, b.type, b.created_at, b.status, b.moderated_by, b.has_thumbnail";
 
-export interface ListQuery {
+interface ListQuery {
   pubkey?: string;
   status?: BlobStatus;
   type?: string;
@@ -80,13 +122,15 @@ export class BlobRepo {
 
   async insert(row: BlobRow): Promise<void> {
     await this.db.run(
-      "INSERT INTO blossom_blobs (sha256, size, type, created_at, status, has_thumbnail) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (sha256) DO NOTHING",
-      [row.sha256, row.size, row.type, row.createdAt, row.status, row.hasThumbnail ? 1 : 0],
+      "INSERT INTO blossom_blobs (sha256, size, type, created_at, status, moderated_by, has_thumbnail) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sha256) DO NOTHING",
+      [row.sha256, row.size, row.type, row.createdAt, row.status, row.moderatedBy, row.hasThumbnail ? 1 : 0],
     );
   }
 
-  async setStatus(sha256: string, status: BlobStatus): Promise<boolean> {
-    return (await this.db.run("UPDATE blossom_blobs SET status = ? WHERE sha256 = ?", [status, sha256])).changes > 0;
+  /** `moderatedBy` is kept for pending/blocked and cleared on approval. */
+  async setStatus(sha256: string, status: BlobStatus, moderatedBy: string | null): Promise<boolean> {
+    const by = status === "approved" ? null : moderatedBy;
+    return (await this.db.run("UPDATE blossom_blobs SET status = ?, moderated_by = ? WHERE sha256 = ?", [status, by, sha256])).changes > 0;
   }
 
   async remove(sha256: string): Promise<void> {
@@ -108,6 +152,58 @@ export class BlobRepo {
 
   async isOwner(sha256: string, pubkey: string): Promise<boolean> {
     return !!(await this.db.get("SELECT 1 AS x FROM blossom_owners WHERE sha256 = ? AND pubkey = ?", [sha256, pubkey]));
+  }
+
+  /** When `pubkey` became an owner of the blob (undefined when it isn't one). */
+  async ownedAt(sha256: string, pubkey: string): Promise<number | undefined> {
+    const r = await this.db.get<{ created_at: unknown }>("SELECT created_at FROM blossom_owners WHERE sha256 = ? AND pubkey = ?", [sha256, pubkey]);
+    return r ? Number(r.created_at) : undefined;
+  }
+
+  /** Remembers that `pubkey` deleted its copy of the blob at `at` (only ever moves forward). */
+  async recordDeletion(sha256: string, pubkey: string, at: number): Promise<void> {
+    await this.db.run(
+      `INSERT INTO blossom_deletions (sha256, pubkey, deleted_at) VALUES (?, ?, ?)
+       ON CONFLICT (sha256, pubkey) DO UPDATE SET deleted_at = excluded.deleted_at WHERE blossom_deletions.deleted_at < excluded.deleted_at`,
+      [sha256, pubkey, at],
+    );
+  }
+
+  async deletedAt(sha256: string, pubkey: string): Promise<number | undefined> {
+    const r = await this.db.get<{ deleted_at: unknown }>("SELECT deleted_at FROM blossom_deletions WHERE sha256 = ? AND pubkey = ?", [sha256, pubkey]);
+    return r ? Number(r.deleted_at) : undefined;
+  }
+
+  async pruneDeletions(before: number): Promise<void> {
+    await this.db.run("DELETE FROM blossom_deletions WHERE deleted_at < ?", [before]);
+  }
+
+  /** Records that stripping `original` produced the stored blob `sha256`. */
+  async addStripped(original: string, sha256: string, at: number): Promise<void> {
+    await this.db.run("INSERT INTO blossom_stripped (original, sha256, created_at) VALUES (?, ?, ?) ON CONFLICT (original) DO NOTHING", [original, sha256, at]);
+  }
+
+  /** The stored blob that `original` was stripped into, if any. */
+  async strippedTo(original: string): Promise<string | undefined> {
+    return (await this.db.get<{ sha256: string }>("SELECT sha256 FROM blossom_stripped WHERE original = ?", [original]))?.sha256;
+  }
+
+  /** Originals that stripping turned into `sha256`. */
+  async originalsOf(sha256: string): Promise<string[]> {
+    return (await this.db.all<{ original: string }>("SELECT original FROM blossom_stripped WHERE sha256 = ?", [sha256])).map((r) => r.original);
+  }
+
+  /**
+   * Drops original → stored mappings involving `sha256` (as either side) that no longer matter: the stored blob is
+   * gone and neither hash is on the blocklist (a row moderated to "blocked" still exists, so it's covered by the first).
+   */
+  async pruneStripped(sha256: string): Promise<void> {
+    await this.db.run(
+      `DELETE FROM blossom_stripped WHERE (sha256 = ? OR original = ?)
+       AND NOT EXISTS (SELECT 1 FROM blossom_blobs b WHERE b.sha256 = blossom_stripped.sha256)
+       AND NOT EXISTS (SELECT 1 FROM blossom_blocklist k WHERE k.sha256 = blossom_stripped.sha256 OR k.sha256 = blossom_stripped.original)`,
+      [sha256, sha256],
+    );
   }
 
   async ownerCount(sha256: string): Promise<number> {
@@ -203,10 +299,11 @@ export class BlobRepo {
     return !!(await this.db.get("SELECT 1 AS x FROM blossom_blocklist WHERE sha256 = ?", [sha256]));
   }
 
-  async block(sha256: string, reason: string, at: number): Promise<void> {
+  async block(sha256: string, reason: string, at: number, blockedBy: string | null): Promise<void> {
     await this.db.run(
-      "INSERT INTO blossom_blocklist (sha256, reason, created_at) VALUES (?, ?, ?) ON CONFLICT (sha256) DO UPDATE SET reason = excluded.reason",
-      [sha256, reason, at],
+      `INSERT INTO blossom_blocklist (sha256, reason, created_at, blocked_by) VALUES (?, ?, ?, ?)
+       ON CONFLICT (sha256) DO UPDATE SET reason = excluded.reason, blocked_by = excluded.blocked_by`,
+      [sha256, reason, at, blockedBy],
     );
   }
 
@@ -214,10 +311,10 @@ export class BlobRepo {
     return (await this.db.run("DELETE FROM blossom_blocklist WHERE sha256 = ?", [sha256])).changes > 0;
   }
 
-  async blocklist(): Promise<{ sha256: string; reason: string; createdAt: number }[]> {
-    const rows = await this.db.all<{ sha256: string; reason: string; created_at: unknown }>(
-      "SELECT sha256, reason, created_at FROM blossom_blocklist ORDER BY created_at DESC",
+  async blocklist(): Promise<{ sha256: string; reason: string; createdAt: number; blockedBy: string | null }[]> {
+    const rows = await this.db.all<{ sha256: string; reason: string; created_at: unknown; blocked_by: string | null }>(
+      "SELECT sha256, reason, created_at, blocked_by FROM blossom_blocklist ORDER BY created_at DESC",
     );
-    return rows.map((r) => ({ sha256: r.sha256, reason: r.reason, createdAt: Number(r.created_at) }));
+    return rows.map((r) => ({ sha256: r.sha256, reason: r.reason, createdAt: Number(r.created_at), blockedBy: r.blocked_by ?? null }));
   }
 }

@@ -181,9 +181,10 @@ describe("NIP-29 control events", () => {
     await c.publish(sign(admin, { kind: 9001, tags: h("g", [["p", bob.pk]]) }));
     await c.publish(sign(admin, { kind: 9005, tags: h("g", [["e", add.id]]) }));
     expect(stores.events.events.has(add.id)).toBe(false);
+    // the 9005 tombstoned it: the replay is refused outright
     const r = await connect("9.9.9.9").publish(add);
-    expect(r[2]).toBe(true);
-    expect(r[3]).toMatch(/^duplicate:/);
+    expect(r[2]).toBe(false);
+    expect(r[3]).toMatch(/^blocked: .*deleted/);
     expect((await relay.groups.get("g"))?.memberList.some((m) => m.pubkey === bob.pk)).toBe(false);
     expect(stores.events.events.has(add.id)).toBe(false);
   });

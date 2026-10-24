@@ -27,6 +27,8 @@ import { formatBytes, formatDate, formatNumber, timeAgo } from "@/lib/format";
 import { mediaUrl } from "@/lib/api";
 import { displayName, kindName, parsePubkey, toNpub } from "@/lib/nostr";
 import { safeUrl } from "@/lib/utils";
+import { autoMediaSrc } from "@/lib/media-policy";
+import { useMediaPolicy } from "@/lib/prefs";
 import { useConfirm } from "@/components/confirm";
 
 export const Route = createFileRoute("/_app/users/$pubkey")({
@@ -55,6 +57,7 @@ function UserView({ u }: { u: UserDetail }) {
   const npub = toNpub(u.pubkey);
   const name = displayName(u.pubkey, u.profile);
   const protectedUser = u.role === "owner";
+  const banner = autoMediaSrc(u.profile?.banner, useMediaPolicy());
   return (
     <div className="space-y-4">
       <Button variant="ghost" size="sm" asChild className="-ml-2">
@@ -66,7 +69,7 @@ function UserView({ u }: { u: UserDetail }) {
       <Card className="overflow-hidden pt-0">
         <div
           className="h-28 bg-gradient-to-br from-primary/30 via-primary/10 to-transparent bg-cover bg-center sm:h-40"
-          style={safeUrl(u.profile?.banner) ? { backgroundImage: `url(${JSON.stringify(safeUrl(u.profile?.banner))})` } : undefined}
+          style={banner ? { backgroundImage: `url(${JSON.stringify(banner)})` } : undefined}
         />
         <CardContent className="-mt-12 space-y-3 sm:-mt-14">
           <div className="flex flex-wrap items-end gap-3">
@@ -114,7 +117,7 @@ function UserView({ u }: { u: UserDetail }) {
                     </a>
                   </DropdownMenuItem>
                   <PluginUserActionItems pubkey={u.pubkey} />
-                  {can("users.delete") && !protectedUser && (
+                  {can("users.delete") && !protectedUser && (!u.role || can("admins.manage")) && (
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
@@ -202,6 +205,17 @@ function Stat({ label, value, tone, title }: { label: string; value: React.React
   );
 }
 
+/** a per-user quota this large never runs out (per-user 0 means no uploads, so "unlimited" needs its own value) */
+const UNLIMITED_QUOTA = Number.MAX_SAFE_INTEGER;
+/** quota field (MB, "unlimited" or empty) → bytes, null for the relay default, undefined when invalid */
+const quotaBytes = (v: string): number | null | undefined => {
+  const t = v.trim().toLowerCase();
+  if (t === "") return null;
+  if (t === "unlimited") return UNLIMITED_QUOTA;
+  const mb = Number(t);
+  return mb >= 0 ? Math.round(mb * 1024 * 1024) : undefined;
+};
+
 type EditFields = Pick<UserDetail, "notes" | "tags" | "allowed" | "denied" | "nip05Name" | "blossomQuota" | "rateLimit">;
 const formOf = (u: EditFields) => ({
   notes: u.notes,
@@ -209,7 +223,8 @@ const formOf = (u: EditFields) => ({
   allowed: u.allowed,
   denied: u.denied,
   nip05Name: u.nip05Name ?? "",
-  quotaMb: u.blossomQuota == null ? "" : String(Math.round(u.blossomQuota / 1024 / 1024)),
+  // empty = the relay default, 0 = no uploads: show small quotas with decimals so they don't read as 0
+  quotaMb: u.blossomQuota == null ? "" : u.blossomQuota >= UNLIMITED_QUOTA ? "unlimited" : String(Number((u.blossomQuota / 1024 / 1024).toFixed(2))),
   epm: u.rateLimit?.eventsPerMinute?.toString() ?? "",
   rpm: u.rateLimit?.reqPerMinute?.toString() ?? "",
 });
@@ -247,7 +262,7 @@ function EditCard({ u }: { u: UserDetail }) {
     if (f.allowed !== o.allowed) body.allowed = f.allowed;
     if (f.denied !== o.denied) body.denied = f.denied;
     if (f.nip05Name !== o.nip05Name) body.nip05Name = f.nip05Name.trim() || null;
-    if (f.quotaMb !== o.quotaMb) body.blossomQuota = f.quotaMb.trim() === "" ? null : Math.round(Number(f.quotaMb) * 1024 * 1024);
+    if (f.quotaMb !== o.quotaMb) body.blossomQuota = quotaBytes(f.quotaMb);
     if (f.epm !== o.epm || f.rpm !== o.rpm) {
       const rl = { eventsPerMinute: num(f.epm), reqPerMinute: num(f.rpm) };
       body.rateLimit = rl.eventsPerMinute === undefined && rl.reqPerMinute === undefined ? null : rl;
@@ -268,7 +283,7 @@ function EditCard({ u }: { u: UserDetail }) {
     );
   };
   const dirty = JSON.stringify(f) !== JSON.stringify(baseline.current.values);
-  const invalidNum = [f.quotaMb, f.epm, f.rpm].some((v) => v.trim() !== "" && !(Number(v) >= 0));
+  const invalidNum = [f.epm, f.rpm].some((v) => v.trim() !== "" && !(Number(v) >= 0)) || quotaBytes(f.quotaMb) === undefined;
 
   return (
     <Card>
@@ -298,7 +313,8 @@ function EditCard({ u }: { u: UserDetail }) {
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="u-quota">Media quota (MB)</Label>
-              <Input id="u-quota" inputMode="decimal" value={f.quotaMb} onChange={(e) => set("quotaMb", e.target.value)} placeholder="default" />
+              <Input id="u-quota" inputMode="decimal" value={f.quotaMb} onChange={(e) => set("quotaMb", e.target.value)} placeholder="relay default" />
+              <p className="text-xs text-muted-foreground">Empty = relay default · 0 = no uploads · "unlimited"</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="u-epm">Events / min</Label>

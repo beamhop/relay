@@ -57,11 +57,6 @@ export class CredentialService {
     return r ? { hash: r.password_hash, totpSecret: r.totp_secret, setAt: r.password_set_at == null ? null : Number(r.password_set_at) } : undefined;
   }
 
-  async hasPassword(pubkey: string): Promise<boolean> {
-    const r = await this.db.get<{ password_hash: string }>("SELECT password_hash FROM admin_credentials WHERE pubkey = ?", [pubkey]);
-    return !!r?.password_hash;
-  }
-
   async setPassword(pubkey: string, hash: string): Promise<void> {
     const now = this.nowSec();
     const updated = await this.db.run("UPDATE admin_credentials SET password_hash = ?, updated_at = ?, password_set_at = ? WHERE pubkey = ?", [hash, now, now, pubkey]);
@@ -127,5 +122,15 @@ export class CredentialService {
   async deletePasskey(pubkey: string, id: string): Promise<boolean> {
     const r = await this.db.run("DELETE FROM admin_passkeys WHERE id = ? AND pubkey = ?", [id, pubkey]);
     return r.changes > 0;
+  }
+
+  /**
+   * Drops every login factor of a pubkey (password, TOTP secret, passkeys) when its admin access ends, so a role granted
+   * again later starts from scratch. Trusted-device cookies need no cleanup: they only count against a stored password
+   * set before them, and the next password is set after them.
+   */
+  async deleteAll(pubkey: string): Promise<void> {
+    await this.db.run("DELETE FROM admin_passkeys WHERE pubkey = ?", [pubkey]);
+    await this.db.run("DELETE FROM admin_credentials WHERE pubkey = ?", [pubkey]);
   }
 }

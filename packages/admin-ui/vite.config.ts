@@ -25,8 +25,8 @@ export default defineConfig({
       filename: "sw.ts",
       base: "/admin/",
       scope: "/admin/",
+      // registered by hand in main.tsx; the worker activates updates itself (skipWaiting in sw.ts)
       injectRegister: false,
-      registerType: "autoUpdate",
       // everything else in public/ is matched by injectManifest.globPatterns; listing it here too duplicates precache entries
       includeAssets: ["plugin-shims/*.js"],
       injectManifest: {

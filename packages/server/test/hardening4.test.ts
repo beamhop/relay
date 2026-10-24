@@ -43,12 +43,13 @@ describe("trusted proxies", () => {
 });
 
 describe("/metrics without a token", () => {
-  test("only answers the local network, directly", async () => {
+  test("only answers loopback clients, directly", async () => {
     const bh = await createBeamhop(testConfig(), { factories: stubFactories() });
     try {
       const get = (ip: string, headers: Record<string, string> = {}) => bh.fetch(new Request("http://x/metrics", { headers }), makeEnv(ip));
       expect((await get("127.0.0.1")).status).toBe(200);
-      expect((await get("172.18.0.5")).status).toBe(200);
+      // private peers no longer qualify (NAT / L4 hops make internet clients look private), see hardening5
+      expect((await get("172.18.0.5")).status).toBe(403);
       expect((await get("203.0.113.9")).status).toBe(403);
       // relayed by a proxy on the host: its address is private, but it speaks for internet clients
       expect((await get("127.0.0.1", { "x-forwarded-for": "203.0.113.9" })).status).toBe(403);

@@ -2,8 +2,9 @@ import { z } from "zod";
 import type { EventView, Filter, ImportResult, NostrEvent } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
-import { badRequest, forbidden, notFound } from "../errors";
-import { requirePermission } from "../middleware/auth";
+import { badRequest, forbidden, HttpError, notFound } from "../errors";
+import { IMPORT_MAX_BYTES, requirePermission } from "../middleware/auth";
+import { auditLists } from "../util/audit";
 import { FiltersSchema, isConstrained, parseFiltersParam } from "../util/filters";
 import { isNostrEventShape, isValidSignedEvent } from "../util/nip98";
 import { parseEventId } from "../util/pubkey";
@@ -190,15 +191,31 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       else err(n, r.message || "rejected");
     };
 
+    const maxBytes = ctx.opts.importMaxBytes ?? IMPORT_MAX_BYTES;
+    if (Number(c.req.header("content-length") ?? 0) > maxBytes) throw new HttpError(413, `import body exceeds ${maxBytes} bytes`, "too_large");
     const body = c.req.raw.body;
     if (!body) throw badRequest("empty body");
-    const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+    // counted as it streams (chunked bodies carry no Content-Length): past the cap, reading stops and the lines
+    // already imported stay imported (the audit entry and the 413 say how many)
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let received = 0;
+    let tooLarge = false;
     let buf = "";
     let lineNo = 0;
     let skipping = false;
     for (;;) {
       const { value, done } = await reader.read();
-      if (value) buf += value;
+      if (value) {
+        received += value.byteLength;
+        if (received > maxBytes) {
+          tooLarge = true;
+          await reader.cancel().catch(() => {});
+          break;
+        }
+        buf += decoder.decode(value, { stream: true });
+      }
+      if (done) buf += decoder.decode();
       let idx: number;
       while ((idx = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, idx);
@@ -217,9 +234,19 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       }
       if (done) break;
     }
-    if (buf.trim() && !skipping) await handle(buf, ++lineNo);
+    // a body cut off by the cap ends mid-line: its last partial line is dropped, not imported
+    if (!tooLarge && buf.trim() && !skipping) await handle(buf, ++lineNo);
 
-    await ctx.audit(c, "event.import", null, { bypassPolicies: bypass, imported: result.imported, duplicates: result.duplicates, rejected: result.rejected });
+    await ctx.audit(c, "event.import", null, {
+      bypassPolicies: bypass,
+      imported: result.imported,
+      duplicates: result.duplicates,
+      rejected: result.rejected,
+      ...(tooLarge ? { truncatedAtBytes: maxBytes } : {}),
+    });
+    if (tooLarge) {
+      throw new HttpError(413, `import body exceeds ${maxBytes} bytes: stopped after line ${lineNo} (${result.imported} imported, ${result.duplicates} duplicates, ${result.rejected} rejected)`, "too_large");
+    }
     return c.json(result);
   });
 
@@ -322,8 +349,17 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       deleted += await stores.events.deleteByIds(unique);
       affected.push(...unique);
     }
-    if (affected.length) bus.emit("event.deleted", { ids: [...new Set(affected)].slice(0, AFFECTED_CAP), actor: actor.pubkey, reason: body.reason });
-    await ctx.audit(c, "event.delete", null, { ids: ids.slice(0, 100), filters: body.filters, deleted, reason: body.reason });
+    const affectedIds = [...new Set(affected)].slice(0, AFFECTED_CAP);
+    if (affectedIds.length) bus.emit("event.deleted", { ids: affectedIds, actor: actor.pubkey, reason: body.reason });
+    // the targets: the ids asked for and the ids the filters matched (lists capped, counts exact)
+    const explicit = new Set(ids);
+    const matchedIds = affectedIds.filter((id) => !explicit.has(id));
+    await ctx.audit(c, "event.delete", null, {
+      ...auditLists(matchedIds.length ? { ids, matchedIds } : { ids }),
+      filters: body.filters,
+      deleted,
+      reason: body.reason,
+    });
     return c.json(truncated ? { deleted, truncated } : { deleted });
   });
 

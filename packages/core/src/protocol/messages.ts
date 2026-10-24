@@ -26,14 +26,14 @@ export const MAX_SUB_ID_LENGTH = 64;
 // 5000 leaves room for large follow lists; per-connection memory is bounded separately (MAX_FILTER_WEIGHT_PER_CONN)
 export const MAX_FILTER_VALUES = 5000;
 /** Max values summed over all arrays of one filter. */
-export const MAX_FILTER_VALUES_TOTAL = 5000;
+const MAX_FILTER_VALUES_TOTAL = 5000;
 /** Max UTF-8 bytes of an addressable event's `d` tag (postgres btree index rows are capped at 2704 bytes). */
 export const MAX_D_TAG_BYTES = 1024;
 const TAG_KEY = /^#[a-zA-Z]$/;
 const HEX_EVEN = /^([0-9a-f]{2})*$/;
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n);
 
-export function validateSubId(s: unknown): string | undefined {
+function validateSubId(s: unknown): string | undefined {
   if (typeof s !== "string" || s.length === 0) return "invalid: subscription id must be a non-empty string";
   if (s.length > MAX_SUB_ID_LENGTH) return `invalid: subscription id longer than ${MAX_SUB_ID_LENGTH} chars`;
   return undefined;

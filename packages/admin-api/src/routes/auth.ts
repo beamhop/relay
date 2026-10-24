@@ -10,13 +10,14 @@ import {
   type AuthenticationResponseJSON,
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import type { AdminRole, ChallengeResponse, LoginResponse, Me } from "@beamhop/sdk";
+import type { AdminRole, ChallengeResponse, LoginResponse, Me, NostrLoginRequest, PasswordLoginRequest } from "@beamhop/sdk";
 import type { AdminApp, AdminContext, ApiContext, Principal } from "../context";
 import { principalOf } from "../context";
 import { badRequest, forbidden, HttpError, notFound, unauthorized } from "../errors";
 import { clearSessionCookie, requireAdmin, setSessionCookie } from "../middleware/auth";
 import { permissionsFor } from "../services/roles";
 import type { LoginMethod } from "../services/sessions";
+import type { Accepts, Same } from "../util/contract";
 import { ExpiringMap } from "../util/lru";
 import { isNostrEventShape, verifyNip98 } from "../util/nip98";
 import { tryParsePubkey } from "../util/pubkey";
@@ -64,8 +65,11 @@ async function buildMe(ctx: ApiContext, pubkey: string, role: AdminRole): Promis
 }
 
 const PasswordLogin = z.object({ login: z.string().min(1).max(200), password: z.string().min(1).max(1024), totp: z.string().max(16).optional() });
+true satisfies Same<z.output<typeof PasswordLogin>, PasswordLoginRequest>;
 const PasswordSet = z.object({ password: z.string().min(8, "password must be at least 8 characters").max(1024), currentPassword: z.string().max(1024).optional() });
+/** the event's shape is checked after parsing (isNostrEventShape), so the schema only pins the fields */
 const NostrLogin = z.object({ event: z.unknown() });
+true satisfies Same<keyof z.output<typeof NostrLogin>, keyof NostrLoginRequest> & Accepts<z.input<typeof NostrLogin>, NostrLoginRequest>;
 const PasskeyLoginOptions = z.object({ login: z.string().max(200).optional() });
 const PasskeyVerify = z.object({ response: z.record(z.string(), z.unknown()) });
 const PasskeyRegisterVerify = z.object({ response: z.record(z.string(), z.unknown()), name: z.string().max(100).optional() });
@@ -73,9 +77,6 @@ const TotpCode = z.object({ code: z.string().min(6).max(16) });
 const TotpSetup = z.object({ code: z.string().min(6).max(16).optional(), currentPassword: z.string().max(1024).optional() });
 const PasskeyRegisterOptions = z.object({ currentPassword: z.string().max(1024).optional() });
 const PasskeyDelete = z.object({ currentPassword: z.string().max(1024).optional() });
-
-/** GET /auth/challenge — `url` is the exact `u` the signed login event must carry (always publicUrl-based). */
-export type ChallengeResponseWithUrl = ChallengeResponse & { url: string };
 
 /**
  * Stateless single-use tokens: `<exp>.<payload>.<hmac>` signed with a per-process key, so issuing them costs
@@ -303,7 +304,7 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
     limitChallenges(c, challengeRate);
     const expiresAt = Math.floor((ctx.nowMs() + CHALLENGE_TTL_MS) / 1000);
     const challenge = loginChallenges.issue(randomBytes(16).toString("hex"), expiresAt);
-    const body: ChallengeResponseWithUrl = { challenge, expiresAt, url: nostrLoginUrl };
+    const body: ChallengeResponse = { challenge, expiresAt, url: nostrLoginUrl };
     return c.json(body);
   });
 

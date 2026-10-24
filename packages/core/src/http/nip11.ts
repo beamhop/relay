@@ -9,7 +9,8 @@ export function buildNip11(ctx: RelayContext): Record<string, unknown> {
   const doc: Record<string, unknown> = {
     name: info.name,
     description: info.description,
-    supported_nips: [...SUPPORTED_NIPS],
+    // NIPs whose feature can be switched off are only advertised while it is on
+    supported_nips: SUPPORTED_NIPS.filter((n) => (n !== 5 || s.nip05.enabled) && (n !== 29 || s.groups.enabled) && (n !== 86 || ctx.config.admin.enabled)),
     software: SOFTWARE,
     version: VERSION,
     self: ctx.key.pubkey,

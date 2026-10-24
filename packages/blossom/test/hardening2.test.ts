@@ -67,17 +67,19 @@ describe("upload auth scoping (B9)", () => {
   const verify = (header: string, verb: "upload" | "get" | "delete" | "list" = "upload") =>
     verifyAuthEvent(parseAuthHeader(header)!, { verb, domains: ["cdn.example.com"] });
 
-  test("an upload token bound to neither a blob nor a server is rejected", () => {
-    expect(() => verify(authHeader(alice.sk, "upload", { server: [] }))).toThrow(/x or server tag/);
+  test("an upload token must name the blob (a server tag alone isn't enough)", () => {
+    expect(() => verify(authHeader(alice.sk, "upload", { server: [] }))).toThrow(/missing x tag/);
     expect(verify(authHeader(alice.sk, "upload", { x: [x] })).hashes).toEqual([x]);
-    expect(verify(authHeader(alice.sk, "upload", { server: ["cdn.example.com"] })).pubkey).toBe(alice.pubkey);
+    // every upload route required an x tag anyway; the server-only form was never accepted over HTTP
+    expect(() => verify(authHeader(alice.sk, "upload", { server: ["cdn.example.com"] }))).toThrow(/missing x tag/);
   });
 
-  test("write tokens can't live longer than 24h; read tokens may", () => {
+  test("no token lives longer than 24h, read tokens included", () => {
     const far = now() + 3 * 24 * 3600;
     expect(() => verify(authHeader(alice.sk, "upload", { x: [x], expiration: far }))).toThrow(/too far in the future/);
     expect(() => verify(authHeader(alice.sk, "delete", { x: [x], expiration: far }), "delete")).toThrow(/too far/);
-    expect(verify(authHeader(alice.sk, "get", { expiration: far }), "get").pubkey).toBe(alice.pubkey);
+    expect(() => verify(authHeader(alice.sk, "get", { expiration: far }), "get")).toThrow(/too far/);
+    expect(() => verify(authHeader(alice.sk, "list", { expiration: far }), "list")).toThrow(/too far/);
   });
 
   test("PUT /upload with an unscoped token is a 401", async () => {

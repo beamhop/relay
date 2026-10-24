@@ -3,7 +3,7 @@ import type { NostrEvent } from "@beamhop/sdk";
 import { createAdminApi } from "../src";
 import { ExpiringMap } from "../src/util/lru";
 import { totpCode } from "../src/util/totp";
-import { createHarness, newKey, nip98Header, PUBLIC_URL, signEvent, type Key } from "./fakes";
+import { createHarness, newKey, nip98Header, PANEL_HEADERS, PUBLIC_URL, signEvent, type Key } from "./fakes";
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
@@ -41,7 +41,7 @@ describe("client IP behind a proxy", () => {
     const h = await createHarness({ trustProxy: true });
     const { challenge } = (await (await h.req("/auth/challenge")).json()) as { challenge: string };
     const event = signEvent(h.owner, 27235, [["u", h.url("/auth/nostr")], ["method", "POST"], ["challenge", challenge]]);
-    const req = new Request("http://localhost/auth/nostr", { method: "POST", body: JSON.stringify({ event }), headers: { "x-forwarded-for": "6.6.6.6" } });
+    const req = new Request("http://localhost/auth/nostr", { method: "POST", body: JSON.stringify({ event }), headers: { ...PANEL_HEADERS, "x-forwarded-for": "6.6.6.6" } });
     await h.api.app.fetch(req, { ip: "192.0.2.10" });
     expect(h.audit.entries.find((e) => e.action === "auth.login")?.ip).toBe("192.0.2.10");
   });
@@ -113,7 +113,7 @@ describe("re-auth checks", () => {
     const res = await restarted.app.request("/auth/password", {
       method: "POST",
       body: JSON.stringify({ login: h.owner.pk, password: "the-password", totp: code }),
-      headers: { "content-type": "application/json" },
+      headers: PANEL_HEADERS,
     });
     expect(res.status).toBe(401);
   });
@@ -154,7 +154,7 @@ describe("nostr login URL", () => {
       const { challenge, url } = (await (await h.req("/auth/challenge")).json()) as { challenge: string; url: string };
       expect(url).toBe(`${PUBLIC_URL}/admin/api/auth/nostr`);
       const event = signEvent(h.owner, 27235, [["u", u], ["method", "POST"], ["challenge", challenge]]);
-      return h.api.app.request(new Request(reqUrl, { method: "POST", body: JSON.stringify({ event }) }));
+      return h.api.app.request(new Request(reqUrl, { method: "POST", body: JSON.stringify({ event }), headers: PANEL_HEADERS }));
     };
     // panel opened via a LAN IP: the client signs the server-provided publicUrl URL
     expect((await post(`${PUBLIC_URL}/admin/api/auth/nostr`)).status).toBe(200);
@@ -360,8 +360,8 @@ describe("media blocklist", () => {
   test("list and unblock blocked hashes", async () => {
     const h = await createHarness();
     const sha = "a".repeat(64);
-    h.blossom!.blocked.add(sha);
-    expect(await (await h.asKey(h.owner, "/media/blocklist")).json()).toEqual({ items: [{ sha256: sha, reason: "deleted by admin", createdAt: 1 }] });
+    h.blossom!.blocked.set(sha, null);
+    expect(await (await h.asKey(h.owner, "/media/blocklist")).json()).toEqual({ items: [{ sha256: sha, reason: "deleted by admin", createdAt: 1, blockedBy: null }] });
     const viewer = await h.addAdmin("viewer");
     expect((await h.asKey(viewer, `/media/blocklist/${sha}`, { method: "DELETE" })).status).toBe(403);
     expect((await h.asKey(h.owner, `/media/blocklist/${sha}`, { method: "DELETE" })).status).toBe(200);

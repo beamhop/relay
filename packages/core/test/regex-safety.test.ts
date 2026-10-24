@@ -31,13 +31,14 @@ describe("word filter regex cost model", () => {
     expect(analyzeRegexFilter("(a+)+")).toHaveProperty("reason");
   });
 
-  test("an accepted quadratic pattern stays fast on hostile content and only scans its window", () => {
+  test("an accepted quadratic pattern stays fast on hostile content and scans it all in windows", () => {
     const settings = new FakeSettings({ moderation: { wordFilters: [filter("\\w+x")] } });
     const policy = new ContentPolicy(settings, silentLogger);
     const t0 = performance.now();
     expect(policy.evaluate(sign(keypair(), { content: "a".repeat(REGEX_FILTER_MAX_INPUT * 4) })).action).toBe("pass");
     expect(performance.now() - t0).toBeLessThan(100);
     expect(policy.evaluate(sign(keypair(), { content: "aax" })).action).toBe("reject");
-    expect(policy.evaluate(sign(keypair(), { content: " ".repeat(regexFilterInputLimit("\\w+x")) + "ax" })).action).toBe("pass");
+    // past the pattern's input limit too (previously only the leading window was looked at)
+    expect(policy.evaluate(sign(keypair(), { content: " ".repeat(regexFilterInputLimit("\\w+x")) + "ax" })).action).toBe("reject");
   });
 });

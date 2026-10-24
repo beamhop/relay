@@ -13,20 +13,22 @@ import { nowSec } from "@beamhop/sdk";
 
 /** Max items in a negentropy session before refusing with NEG-ERR. */
 export const MAX_NEG_ITEMS = 500_000;
+/** Ids listed per query while preparing a negentropy session. */
+const NEG_ID_PAGE = 50_000;
 /** Negentropy frame size limit (bytes before hex encoding). */
-export const NEG_FRAME_SIZE_LIMIT = 60_000;
-/** Negentropy sessions idle/open longer than this are dropped. */
-export const NEG_SESSION_TTL_MS = 5 * 60_000;
+const NEG_FRAME_SIZE_LIMIT = 60_000;
+/** Negentropy sessions open longer than this are dropped (idle ones sooner, see NEG_IDLE_TIMEOUT_MS). */
+const NEG_SESSION_TTL_MS = 5 * 60_000;
 /** Negentropy sessions (open or being prepared) per connection. */
 export const MAX_NEG_SESSIONS_PER_CONN = 2;
-/** Items held by all open negentropy sessions together (~72 bytes each). */
-export const NEG_GLOBAL_ITEM_BUDGET = 2_000_000;
+/** Items held by all open negentropy sessions and listed by NEG-OPENs being prepared, together (~72 bytes each). */
+const NEG_GLOBAL_ITEM_BUDGET = 2_000_000;
 /** NEG-OPENs being prepared at once, relay-wide (each may load up to MAX_NEG_ITEMS ids). */
-export const NEG_OPEN_CONCURRENCY = 4;
+const NEG_OPEN_CONCURRENCY = 4;
 /** NEG-MSG payload (hex chars) per connection per minute; per address it's IP_RATE_FACTOR times that. */
-export const NEG_MSG_HEX_PER_MINUTE = 32 << 20;
+const NEG_MSG_HEX_PER_MINUTE = 32 << 20;
 /** Max sync candidates checked one by one against visibility rules (plugin hooks, many private events). */
-export const MAX_VISIBILITY_SCAN = 50_000;
+const MAX_VISIBILITY_SCAN = 50_000;
 /** Sum of filterWeight() over a connection's open subscriptions. */
 export const MAX_FILTER_WEIGHT_PER_CONN = 20_000;
 /** EVENTs a connection may have awaiting their OK. */
@@ -43,7 +45,7 @@ export const MESSAGES_PER_MINUTE = 1200;
 export const MESSAGE_IP_FACTOR = 4;
 /** Pubkeys one connection may authenticate as (NIP-42). */
 export const MAX_AUTHED_PUBKEYS = 10;
-export const AUTH_PER_MINUTE = 30;
+const AUTH_PER_MINUTE = 30;
 /**
  * Stored results are paced to keep the client's send buffer below half of SOFT_BUFFER_LIMIT (where live
  * delivery starts dropping events), so a backfill doesn't crowd out live events on other subscriptions.
@@ -53,8 +55,8 @@ export const BACKPRESSURE = { drainTimeoutMs: 10_000, pollMs: 25, highWater: SOF
 /** Interval of the relay-wide sweep of expired negentropy sessions. */
 export const NEG_SWEEP_MS = 30_000;
 /** NEG-OPENs being prepared at once per client address; more wait briefly for a slot (NEG_OPEN_WAIT_MS). */
-export const NEG_OPEN_PER_IP = 2;
-export const NEG_OPEN_WAIT_MS = 3_000;
+const NEG_OPEN_PER_IP = 2;
+const NEG_OPEN_WAIT_MS = 3_000;
 /** Max live events buffered while a stored query is in flight. */
 const MAX_PENDING_LIVE = 1000;
 const IP_RATE_FACTOR = 4;
@@ -255,14 +257,14 @@ export const MAX_PRIVATE_SCAN = 5_000;
 export const MAX_SEARCH_COUNT_SCAN = 1_000;
 
 /**
- * Ids of stored events matching `filters` that the connection may not see under the built-in privacy
- * rules, which only affect a known subset of events (restrictedSubFilters). Returns null when too many
+ * Stored events matching `filters` that the connection may not see under the built-in privacy rules, which
+ * only affect a known subset of events (restrictedSubFilters), as id → created_at. Returns null when too many
  * candidates exist to check cheaply (caller should refuse). Candidates are listed by id and checked in
  * small batches: anyone can store thousands of them (gift wraps, DMs) near maxEventBytes each.
  */
-async function hiddenIds(ctx: RelayContext, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<Set<string> | null> {
+async function hiddenIds(ctx: RelayContext, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<Map<string, number> | null> {
   const subs = filters.flatMap((f) => restrictedSubFilters(ctx, f, conn.authedPubkeys));
-  const hidden = new Set<string>();
+  const hidden = new Map<string, number>();
   if (!subs.length) return hidden;
   const candidates = new Map<string, { id: string; created_at: number }>();
   for (const { limit: _x, ...f } of subs) {
@@ -274,7 +276,7 @@ async function hiddenIds(ctx: RelayContext, conn: Connection, filters: Filter[],
   const visible = await filterVisible(ctx, conn, [...candidates.values()], rctx);
   if (!visible) return null;
   const seen = new Set(visible.map((it) => it.id));
-  for (const id of candidates.keys()) if (!seen.has(id)) hidden.add(id);
+  for (const [id, it] of candidates) if (!seen.has(id)) hidden.set(id, it.created_at);
   return hidden;
 }
 
@@ -875,7 +877,7 @@ export function dropAllNegSessions(ctx: RelayContext, conn: Connection): void {
 }
 
 /** Sessions idle longer than this are closed (NIP-77 lets relays time out inactive sessions). */
-export const NEG_IDLE_TIMEOUT_MS = 60_000;
+const NEG_IDLE_TIMEOUT_MS = 60_000;
 
 const negSessionExpired = (s: NegSession, now: number) => now - s.openedAt > NEG_SESSION_TTL_MS || now - s.lastActiveAt > NEG_IDLE_TIMEOUT_MS;
 
@@ -939,54 +941,92 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
   // a hook may rewrite the filter into several (union) or none (match nothing)
   const syncFilters = hq.filters.map(({ limit: _limit, ...f }) => f);
   if (syncFilters.some((f) => f.search !== undefined)) return negErr("unsupported: search filters cannot be used for sync");
-  let items: { id: string; created_at: number }[] = [];
-  try {
-    if (syncFilters.length) {
-      const seen = new Set<string>();
-      for (const f of syncFilters) {
-        // bounded: never load more ids than a session may hold (no spread: it overflows the stack on large arrays)
-        for (const it of await ctx.stores.events.queryIdsForSync({ ...f, limit: MAX_NEG_ITEMS + 1 })) {
-          if (seen.has(it.id)) continue;
-          seen.add(it.id);
-          items.push(it);
-        }
-        if (items.length > MAX_NEG_ITEMS) break;
-      }
-      if (items.length > MAX_NEG_ITEMS) return negErr("blocked: too many results");
-      // ids are disclosed to the client, so everything it may not read must go. The hidden set is
-      // computed after the ids, so every listed id already existed when it was computed.
-      const pluginHooks = ctx.hooks.counts.visibility > 0;
-      const hidden = pluginHooks ? null : await hiddenIds(ctx, conn, syncFilters, rctx);
-      const visible = hidden ? items.filter((it) => !hidden.has(it.id)) : await filterVisible(ctx, conn, items, rctx);
-      if (!visible) return negErr("blocked: filter matches too many events to check against this relay's visibility rules; narrow it");
-      items = visible;
-    }
-  } catch (err) {
-    ctx.logger.error("NEG-OPEN query failed", { err: String(err) });
-    return negErr("error: query failed");
-  }
-  if (conn.closed) return;
-  if (ctx.neg.items + items.length > NEG_GLOBAL_ITEM_BUDGET) sweepNegSessions(ctx);
-  if (ctx.neg.items + items.length > NEG_GLOBAL_ITEM_BUDGET) return negErr("rate-limited: relay is busy with other syncs, try again later");
-
+  // Ids are listed page by page straight into the session's typed arrays (no object per id is kept), and count
+  // against the relay-wide item budget while they are listed, so syncs being prepared can't exhaust memory either.
   const storage = new NegentropyStorage();
-  for (const it of items) storage.insert(it.created_at, it.id);
-  storage.seal();
-  const neg = new Negentropy(storage, NEG_FRAME_SIZE_LIMIT);
-  let out: string | null;
+  let listed = 0;
   try {
-    out = neg.reconcile(message).output;
-  } catch (err) {
-    return negErr(`invalid: ${(err as Error).message}`);
+    let exclude: { id: string; created_at: number }[] = [];
+    try {
+      for (const f of syncFilters) {
+        const refused = await listSyncIds(ctx, f, storage, (n) => {
+          ctx.neg.items += n;
+          listed += n;
+        });
+        if (refused) return negErr(refused);
+        if (conn.closed) return;
+      }
+      // ids are disclosed to the client, so everything it may not read must go. The hidden set is
+      // computed after the ids, so every listed id already existed when it was computed. Under plugin
+      // visibility hooks, or with too many private candidates, every listed id is checked instead.
+      const hidden = ctx.hooks.counts.visibility > 0 ? null : await hiddenIds(ctx, conn, syncFilters, rctx);
+      if (hidden) exclude = [...hidden].map(([id, created_at]) => ({ id, created_at }));
+      else {
+        const items = storage.inserted > MAX_VISIBILITY_SCAN ? null : storage.pendingItems();
+        const visible = items && (await filterVisible(ctx, conn, items, rctx));
+        if (!items || !visible) return negErr("blocked: filter matches too many events to check against this relay's visibility rules; narrow it");
+        const ok = new Set(visible.map((it) => it.id));
+        exclude = items.filter((it) => !ok.has(it.id));
+      }
+    } catch (err) {
+      ctx.logger.error("NEG-OPEN query failed", { err: String(err) });
+      return negErr("error: query failed");
+    }
+    if (conn.closed) return;
+    storage.seal(exclude);
+
+    const neg = new Negentropy(storage, NEG_FRAME_SIZE_LIMIT);
+    let out: string | null;
+    try {
+      out = neg.reconcile(message).output;
+    } catch (err) {
+      return negErr(`invalid: ${(err as Error).message}`);
+    }
+    // re-check after the awaits above (no awaits from here on, so the accounting can't race)
+    if (conn.closed) return;
+    dropNegSession(ctx, conn, subId);
+    if (conn.negSessions.size >= MAX_NEG_SESSIONS_PER_CONN) return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
+    const now = Date.now();
+    conn.negSessions.set(subId, { neg, openedAt: now, lastActiveAt: now, items: storage.size() });
+    ctx.neg.items += storage.size();
+    conn.send(["NEG-MSG", subId, out ?? ""]);
+  } finally {
+    ctx.neg.items -= listed;
   }
-  // re-check after the awaits above (no awaits from the budget check on, so the accounting can't race)
-  if (conn.closed) return;
-  dropNegSession(ctx, conn, subId);
-  if (conn.negSessions.size >= MAX_NEG_SESSIONS_PER_CONN) return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
-  const now = Date.now();
-  conn.negSessions.set(subId, { neg, openedAt: now, lastActiveAt: now, items: items.length });
-  ctx.neg.items += items.length;
-  conn.send(["NEG-MSG", subId, out ?? ""]);
+}
+
+/**
+ * Lists the (created_at, id) pairs matching `f` into `storage`, NEG_ID_PAGE at a time (oldest first), charging
+ * each page with `charge`. Returns a NEG-ERR reason when the sync is refused.
+ */
+async function listSyncIds(ctx: RelayContext, f: Filter, storage: NegentropyStorage, charge: (n: number) => void): Promise<string | undefined> {
+  let since = f.since;
+  /** ids already listed at `since` (the next page reads that second again) */
+  let boundary = new Set<string>();
+  for (;;) {
+    const rows = await ctx.stores.events.queryIdsForSync({ ...f, ...(since !== undefined ? { since } : {}), limit: NEG_ID_PAGE });
+    let added = 0;
+    for (const r of rows) {
+      if (since !== undefined && (r.created_at < since || (r.created_at === since && boundary.has(r.id)))) continue;
+      storage.insert(r.created_at, r.id);
+      added++;
+    }
+    charge(added);
+    // counted before the filters of a union are merged
+    if (storage.inserted > MAX_NEG_ITEMS) return "blocked: too many results";
+    if (ctx.neg.items > NEG_GLOBAL_ITEM_BUDGET) sweepNegSessions(ctx);
+    if (ctx.neg.items > NEG_GLOBAL_ITEM_BUDGET) return "rate-limited: relay is busy with other syncs, try again later";
+    if (rows.length < NEG_ID_PAGE) return undefined;
+    const last = rows[rows.length - 1].created_at;
+    if (added === 0) {
+      // a full page of one second already listed can't be paged past; otherwise nothing new is left
+      return rows[0].created_at === last ? "blocked: too many events with the same created_at to sync; narrow the filter" : undefined;
+    }
+    if (last !== since) boundary = new Set();
+    for (const r of rows) if (r.created_at === last) boundary.add(r.id);
+    since = last;
+    await yieldToLoop(); // sqlite queries are synchronous: let other connections in between pages
+  }
 }
 
 export function handleNegMsg(ctx: RelayContext, conn: Connection, subId: string, message: string): void {

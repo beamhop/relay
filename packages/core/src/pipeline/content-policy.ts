@@ -1,4 +1,4 @@
-import { analyzeRegexFilter, type Logger, type NostrEvent, type RuntimeSettings, type SettingsService, type WordFilter } from "@beamhop/sdk";
+import { compileRegexFilter, type Logger, type NostrEvent, type RuntimeSettings, type SettingsService, type WordFilter } from "@beamhop/sdk";
 
 export type PolicyVerdict =
   | { action: "pass" }
@@ -28,15 +28,12 @@ export class ContentPolicy {
       let test: (c: string) => boolean;
       if (f.isRegex) {
         // stored settings may predate the save-time check: never run a pattern that can backtrack catastrophically
-        const safety = analyzeRegexFilter(f.pattern);
-        if ("reason" in safety) {
-          this.logger.warn("unsafe or invalid word filter regex ignored", { id: f.id, reason: safety.reason });
+        const compiled = compileRegexFilter(f.pattern);
+        if ("reason" in compiled) {
+          this.logger.warn("unsafe or invalid word filter regex ignored", { id: f.id, reason: compiled.reason });
           continue;
         }
-        const re = new RegExp(f.pattern, "iu");
-        // only as much content as keeps this pattern's worst-case backtracking within budget
-        const max = safety.maxInput;
-        test = (c) => re.test(c.length > max ? c.slice(0, max) : c);
+        test = compiled.test;
       } else {
         const needle = f.pattern.toLowerCase();
         test = (c) => c.toLowerCase().includes(needle);

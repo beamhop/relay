@@ -5,10 +5,10 @@ import type { AdminApi, AdminApiDeps, CreateAdminApi, ReportView } from "@beamho
 import type { AdminApiOptions, AdminEnv, ApiContext } from "./context";
 import { migrateAdmin } from "./db";
 import { createErrorHandler, errorBody, HttpError } from "./errors";
-import { authenticate } from "./middleware/auth";
+import { authenticate, isImportRequest } from "./middleware/auth";
 import { CredentialService } from "./services/credentials";
 import { ProfileService } from "./services/profiles";
-import { PushService } from "./services/push";
+import { PushCoalescer, PushService } from "./services/push";
 import { ReplayGuard } from "./services/replay";
 import { ReportService } from "./services/reports";
 import { RoleService } from "./services/roles";
@@ -108,15 +108,28 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>)
   bus.on("event.accepted", ({ event }) => {
     if (event.kind === 0) ctx.profiles.invalidate(event.pubkey);
   });
+  // anyone can file reports: pushes are coalesced (one per interval, the rest as a digest) and the live view skips the
+  // related-report count (GET /reports computes it), so a report flood can't flood admin devices or the database
+  const reportDigest = new PushCoalescer(ctx.opts.reportPushIntervalMs ?? 60_000, (n) => {
+    void ctx.push.notify("reports", {
+      title: `${n} more new report${n === 1 ? "" : "s"}`,
+      body: "Open the reports queue to review them.",
+      url: `${ctx.publicUrl}/admin/reports`,
+      tag: "reports-digest",
+    });
+  });
   bus.on("report.created", ({ event }) => {
     void (async () => {
       try {
-        const view = await ctx.reports.view(event);
+        const push = ctx.push.enabled && reportDigest.offer();
+        if (!push && !reportListeners.size) return;
+        const view = await ctx.reports.view(event, { relatedLimit: 0 });
         for (const fn of reportListeners) fn(view);
+        if (!push) return;
         const target = view.targetProfile?.display_name ?? view.targetProfile?.name ?? nip19.npubEncode(view.targetPubkey || event.pubkey).slice(0, 16);
         await ctx.push.notify("reports", {
           title: `New report: ${view.type}`,
-          body: `${target}${event.content ? ` — ${event.content.slice(0, 120)}` : ""}`,
+          body: `${target.slice(0, 80)}${event.content ? ` — ${event.content.slice(0, 120)}` : ""}`,
           url: `${ctx.publicUrl}/admin/reports?id=${event.id}`,
           tag: `report-${event.id}`,
         });
@@ -143,7 +156,7 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   app.notFound((c) => c.json(errorBody("not found", "not_found"), 404));
 
   app.use("*", async (c, next) => {
-    c.set("ip", clientIp(c, deps.config.server.trustProxy));
+    c.set("ip", clientIp(c));
     c.header("Cache-Control", "no-store");
     c.header("X-Content-Type-Options", "nosniff");
     await next();
@@ -154,8 +167,9 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
       throw new HttpError(413, "request body too large", "too_large");
     },
   });
-  // only the import route itself gets the larger cap (it enforces its own); a suffix match would also cover plugin proxy paths
-  app.use("*", (c, next) => (c.req.method === "POST" && /^(?:\/admin\/api)?\/events\/import$/.test(c.req.path) ? next() : limiter(c, next)));
+  // only the import route itself skips this cap: it streams its body and stops at importMaxBytes (default 256 MiB)
+  // itself; a suffix match would also cover plugin proxy paths
+  app.use("*", (c, next) => (isImportRequest(c) ? next() : limiter(c, next)));
   app.use("*", authenticate(ctx));
 
   registerAuthRoutes(app, ctx);
@@ -175,7 +189,7 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   registerAuditRoutes(app, ctx);
   registerPushRoutes(app, ctx);
 
-  return { app: app as unknown as Hono, nip86: createNip86Handler(ctx) };
+  return { app: app as unknown as Hono, nip86: await createNip86Handler(ctx) };
 }
 
 createAdminApi satisfies CreateAdminApi;

@@ -8,7 +8,7 @@ export function toWsUrl(publicUrl: string): string {
  * host (lowercase, default ports stripped) + path without trailing slash. Scheme-insensitive
  * (ws/wss/http/https are considered equivalent: the host is what prevents cross-relay replay).
  */
-export function relayUrlKey(url: string): string | undefined {
+function relayUrlKey(url: string): string | undefined {
   try {
     const u = new URL(url.trim().replace(/^ws(s?):\/\//i, (_m, s: string) => `http${s}://`));
     const path = u.pathname.replace(/\/+$/, "");

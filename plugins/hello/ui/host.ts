@@ -5,6 +5,16 @@
  * JSX is compiled to h(...) via tsconfig `jsxFactory`.
  */
 type AnyComponent = (props: any) => any;
+
+// no React types are imported, so give the `h` JSX factory a permissive element namespace
+declare global {
+  namespace JSX {
+    type Element = any;
+    interface IntrinsicElements {
+      [tag: string]: any;
+    }
+  }
+}
 interface ReactLike {
   createElement: (...args: any[]) => any;
   Fragment: any;

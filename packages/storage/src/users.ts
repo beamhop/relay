@@ -138,6 +138,7 @@ export class SqlUserStore implements UserStore {
     return this.overlay(await this.db.tx((tx) => upsertUser(tx, pubkey, patch)));
   }
 
+  /** `sort: "pubkey"` orders by pubkey alone (ascending): stable across pages, for callers that page through everything. */
   async list(q: UserQuery): Promise<{ items: UserRecord[]; total: number }> {
     const conds: string[] = [];
     const params: unknown[] = [];
@@ -174,12 +175,12 @@ export class SqlUserStore implements UserStore {
     }
     const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
     const order =
-      q.sort === "firstSeen" ? "first_seen_at DESC" : q.sort === "eventCount" ? "event_count DESC" : "last_seen_at DESC";
+      q.sort === "pubkey" ? null : q.sort === "firstSeen" ? "first_seen_at DESC" : q.sort === "eventCount" ? "event_count DESC" : "last_seen_at DESC";
     const limit = Math.min(Math.max(1, Math.floor(q.limit ?? 50)), 1000);
     const offset = Math.max(0, Math.floor(q.offset ?? 0));
     const total = toNum((await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM users${where}`, params))?.n);
     const rows = await this.db.all<UserRow>(
-      `SELECT * FROM users${where} ORDER BY ${order}, pubkey ASC LIMIT ? OFFSET ?`,
+      `SELECT * FROM users${where} ORDER BY ${order ? `${order}, ` : ""}pubkey ASC LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
     return { items: rows.map((r) => this.overlay(rowToUser(r))), total };

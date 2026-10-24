@@ -188,11 +188,11 @@ describe("users", () => {
 });
 
 describe("settings", () => {
-  test("GET returns settings + JSON schema; PATCH validates", async () => {
+  test("GET returns settings (no generated JSON schema); PATCH validates", async () => {
     const h = await createHarness();
-    const get = (await (await h.asKey(h.owner, "/settings")).json()) as { settings: { info: { name: string } }; schema: { type?: string } };
+    const get = (await (await h.asKey(h.owner, "/settings")).json()) as { settings: { info: { name: string } }; schema?: unknown };
     expect(get.settings.info.name).toBeString();
-    expect(get.schema.type).toBe("object");
+    expect(get.schema).toBeUndefined();
     const bad = await h.asKey(h.owner, "/settings", { method: "PATCH", body: { limits: { maxLimit: "lots" } } });
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as { error: string }).error).toContain("maxLimit");
@@ -406,6 +406,8 @@ describe("push", () => {
         if (fail) throw Object.assign(new Error("gone"), { statusCode: 410 });
         sent.push({ endpoint: sub.endpoint, payload });
       },
+      // report pushes are coalesced per interval: keep it short so the second report below is sent on its own
+      reportPushIntervalMs: 1,
     });
     const vapid = (await (await h.asKey(h.owner, "/push/vapid")).json()) as { publicKey: string };
     expect(vapid.publicKey.length).toBeGreaterThan(40);

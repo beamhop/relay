@@ -30,6 +30,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { API_BASE, baseHeaders, errorMessage, rawRequest } from "@/lib/api";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { isHex64, kindName, parseEventId, parsePubkey, shortNpub } from "@/lib/nostr";
+import { parseFiltersParam, sanitizeFilter } from "@/lib/sanitize";
 
 interface ContentSearch { f?: string }
 export const Route = createFileRoute("/_app/content")({
@@ -82,23 +83,14 @@ function filterToBuilder(f: Filter): Builder {
     search: f.search ?? "",
   };
 }
-function parseFilters(raw?: string): Filter[] {
-  if (!raw) return [{}];
-  try {
-    const v = JSON.parse(raw);
-    const arr = Array.isArray(v) ? v : [v];
-    return arr.filter((x) => x && typeof x === "object") as Filter[];
-  } catch {
-    return [{}];
-  }
-}
 const isEmptyFilter = (f: Filter) => Object.keys(f).filter((k) => k !== "limit").length === 0;
 
 // ---------------------------------------------------------------- page
 function ContentPage() {
   const { f: raw } = Route.useSearch();
   const navigate = useNavigate({ from: "/content" });
-  const filters = React.useMemo(() => parseFilters(raw).map(({ limit: _l, ...rest }) => rest as Filter), [raw]);
+  // `?f=` can come from any link: fields of the wrong type are dropped instead of crashing the chips and editor
+  const filters = React.useMemo(() => parseFiltersParam(raw).map(({ limit: _l, ...rest }) => rest as Filter), [raw]);
   const apply = (fs: Filter[]) => navigate({ search: { f: fs.length === 1 && isEmptyFilter(fs[0]) ? undefined : JSON.stringify(fs.length === 1 ? fs[0] : fs) }, replace: false });
   const q = useEventQuery(filters, 50);
   const items = React.useMemo(() => {
@@ -321,8 +313,8 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
           if (v === "json") setJson(JSON.stringify(builderToFilter(b), null, 2));
           else {
             try {
-              const p = JSON.parse(json);
-              setB(filterToBuilder(Array.isArray(p) ? (p[0] ?? {}) : p));
+              const p: unknown = JSON.parse(json);
+              setB(filterToBuilder(sanitizeFilter(Array.isArray(p) ? p[0] : p) ?? {}));
             } catch {
               /* keep builder */
             }

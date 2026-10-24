@@ -1,6 +1,7 @@
 import type { ChallengeResponse, LoginResponse, NostrEvent } from "@beamhop/sdk/admin-contract";
-import { api, API_BASE } from "./api";
+import { api } from "./api";
 import { queryClient } from "@/queries/client";
+import { resetPluginUis } from "@/plugins/loader";
 
 export interface EventSigner {
   signEvent(template: { kind: number; created_at: number; tags: string[][]; content: string }): Promise<NostrEvent>;
@@ -15,9 +16,7 @@ declare global {
 /** NIP-98 login: GET /auth/challenge → sign kind 27235 → POST /auth/nostr */
 async function loginWithSigner(signer: EventSigner): Promise<LoginResponse> {
   // the server names the exact URL to sign (its publicUrl), so logging in via a LAN IP / localhost works too
-  const res0 = await api.get<ChallengeResponse & { url?: string }>("/auth/challenge");
-  const { challenge } = res0;
-  const url = res0.url ?? `${window.location.origin}${API_BASE}/auth/nostr`;
+  const { challenge, url } = await api.get<ChallengeResponse>("/auth/challenge");
   const event = await signer.signEvent({
     kind: 27235,
     created_at: Math.floor(Date.now() / 1000),
@@ -136,6 +135,9 @@ export async function logout() {
 }
 
 function onLoggedIn(res: LoginResponse) {
+  // nothing cached by an earlier session (possibly another admin's, with other permissions) may carry over
+  queryClient.clear();
+  resetPluginUis();
   if (res?.me) queryClient.setQueryData(["me"], res.me);
   else queryClient.invalidateQueries({ queryKey: ["me"] });
 }

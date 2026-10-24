@@ -20,7 +20,6 @@ import type {
 } from "@beamhop/sdk";
 import { discoverPlugins, importSpecifier, type DiscoveredPlugin } from "./discovery";
 import { fileBody } from "../static";
-import { redactSecrets } from "./redact";
 
 export interface PluginManagerDeps {
   config: BeamhopConfig;
@@ -36,7 +35,7 @@ export interface PluginManagerDeps {
   defaultEnabled?: string[];
   /** skip filesystem discovery and use these instead (tests, embedding) */
   plugins?: { plugin: BeamhopPlugin; source?: "local" | "npm"; root?: string }[];
-  /** auto-discover beamhop-plugin-* in node_modules (default true) */
+  /** also import every beamhop-plugin-* package found in node_modules (default false; config plugins.autoDiscoverNpm) */
   autoDiscoverNpm?: boolean;
   cwd?: string;
 }
@@ -151,7 +150,7 @@ function stripAdminIdentity(req: Request): Request {
 export function createPluginManager(deps: PluginManagerDeps): ServerPluginManager {
   const log = deps.logger.child("plugins");
   const entries = new Map<string, Entry>();
-  const { kv, audit } = deps.stores;
+  const { kv } = deps.stores;
   const defaultEnabled = new Set(deps.defaultEnabled ?? []);
   const pluginConfig = redactConfigForPlugins(deps.config);
 
@@ -335,13 +334,13 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
   }
 
   const adminRoutes = new Hono();
+  // `/:name/*` also matches the bare `/:name`
   adminRoutes.all("/:name/*", async (c) => {
     const name = c.req.param("name");
     const e = entries.get(name);
     if (!e || e.status !== "running" || !e.adminHttp) return c.json({ error: `plugin ${name} is not running` }, 404);
     return e.adminHttp.fetch(rewriteRequest(c.req.raw, name, "/x"), c.env);
   });
-  adminRoutes.all("/:name", (c) => c.redirect(new URL(c.req.url).pathname + "/"));
 
   let loadedOnce: Promise<void> | undefined;
   /** Discover + import + validate plugins once (imports run module top-level code; setup only runs on enable). */
@@ -427,7 +426,7 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
       e.enabled = true;
       await kv.set(KV_NS, `enabled:${name}`, true);
       await serialize(e, () => enableEntry(e));
-      await audit.record({ actor, action: "plugin.enable", target: name, details: { status: e.status, ...(e.error ? { error: e.error } : {}) }, ip: null });
+      log.debug(`enable ${name} requested by ${actor}: ${e.status}`);
       if (e.status === "error") throw new PluginError(`plugin ${name} failed to start: ${e.error}`, 500);
     },
 
@@ -437,8 +436,7 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
       await kv.set(KV_NS, `enabled:${name}`, false);
       await serialize(e, () => deactivate(e));
       if (e.plugin) e.error = undefined;
-      await audit.record({ actor, action: "plugin.disable", target: name, details: {}, ip: null });
-      log.info(`disabled ${name}`);
+      log.info(`disabled ${name} (by ${actor})`);
     },
 
     async getSettings(name) {
@@ -460,9 +458,7 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
           log.warn(`settings listener of ${name} failed`, { error: errMsg(err) });
         }
       }
-      // never write credentials into the audit log (readable with audit.view)
-      const redacted = redactSecrets(parsed, info(e).settingsSchema);
-      await audit.record({ actor, action: "plugin.settings", target: name, details: { values: redacted }, ip: null });
+      log.debug(`settings of ${name} updated by ${actor}`);
       return parsed;
     },
 

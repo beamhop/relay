@@ -2,8 +2,8 @@ import * as React from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
-  BlobStatus, BulkResult, EventDeleteRequest, EventQueryRequest, EventQueryResponse, Filter, MediaItem, MediaStats,
-  Paged, ReportStatus, ReportView, ResolveReportRequest,
+  BlobStatus, EventDeleteRequest, EventQueryRequest, EventQueryResponse, Filter, MediaBulkResult, MediaItem, MediaStats,
+  Paged, ReportBulkResult, ReportStatus, ReportView, ResolveReportRequest,
 } from "@beamhop/sdk/admin-contract";
 import { api, enc } from "@/lib/api";
 import { useApiMutation } from "./client";
@@ -94,7 +94,7 @@ export function useResolveReports() {
     success: (_d, v) => (v.action === "dismiss" ? "Report dismissed" : "Report resolved"),
   });
   const bulk = useApiMutation({
-    fn: (body: ResolveReportRequest & { ids: string[] }) => api.post<BulkResult>("/reports/bulk-resolve", body),
+    fn: (body: ResolveReportRequest & { ids: string[] }) => api.post<ReportBulkResult>("/reports/bulk-resolve", body),
     invalidate: [["reports"], ["events"], ["users"]],
     success: (r, v) => `${r?.ok ?? v.ids.length} report(s) resolved${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
   });
@@ -130,7 +130,7 @@ export function useMediaActions() {
     success: (_d, v) => (v.block ? "Blob deleted and blocked" : "Blob deleted"),
   });
   const bulk = useApiMutation({
-    fn: (body: { sha256s: string[]; action: "approve" | "block" | "delete" }) => api.post<BulkResult>("/media/bulk", body),
+    fn: (body: { sha256s: string[]; action: "approve" | "block" | "delete" }) => api.post<MediaBulkResult>("/media/bulk", body),
     invalidate: keys,
     success: (r, v) => `${r?.ok ?? v.sha256s.length} blob(s) updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
   });

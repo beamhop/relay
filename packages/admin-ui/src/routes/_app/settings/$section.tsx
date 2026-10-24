@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { FlaskConical, Plus, Save, Trash2, Undo2 } from "lucide-react";
 import { RuntimeSettingsSchema } from "@beamhop/sdk-config";
 import type { RuntimeSettings } from "@beamhop/sdk/admin-contract";
-import { regexFilterInputLimit, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
+import { compileRegexFilter, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem } from "@/components/ui/form";
@@ -130,11 +130,14 @@ const SubHeading = ({ children, hint }: { children: React.ReactNode; hint?: stri
   </div>
 );
 const pubkeyValidate = (s: string) => (parsePubkey(s) ? undefined : "Invalid pubkey");
+// "members" = allow-listed users and staff, but in the public access mode every pubkey counts as a member
+// (blossom assertCanUpload, NIP-29 group creation), so on a public relay it is the same as "anyone"
 const ACCESS_OPTS = [
   { value: "anyone", label: "Anyone" },
-  { value: "members", label: "Members" },
+  { value: "members", label: "Members", hint: "allow-listed users and staff (on a public relay: every pubkey)" },
   { value: "admins", label: "Admins only" },
 ];
+const MEMBERS_NOTE = "A relay in the public access mode treats every pubkey as a member, so “Members” lets everyone in there.";
 
 // ---------------------------------------------------------------- sections
 function InfoFields({ control }: { control: Control<any> }) {
@@ -235,8 +238,9 @@ type WordFilter = RuntimeSettings["moderation"]["wordFilters"][number];
 const matches = (w: WordFilter, text: string) => {
   if (!w.pattern) return false;
   if (w.isRegex) {
-    const max = regexFilterInputLimit(w.pattern);
-    return max > 0 && new RegExp(w.pattern, "iu").test(text.slice(0, max));
+    // the relay's own matcher, so the preview scans long text exactly as the relay does
+    const compiled = compileRegexFilter(w.pattern);
+    return "test" in compiled && compiled.test(text);
   }
   return text.toLowerCase().includes(w.pattern.toLowerCase());
 };
@@ -255,7 +259,9 @@ function ModerationFields({ control, disabled }: { control: Control<any>; disabl
       </Grid>
       <NumberField control={control} name="autoBanReportThreshold" label="Auto-ban after N reports" min={0} description="Distinct members reporting the same pubkey (0 = off)" className="sm:max-w-xs" />
 
-      <SubHeading hint="Matched case-insensitively against event content.">Word filters</SubHeading>
+      <SubHeading hint="Matched case-insensitively against event content. Reject refuses the event; Shadow-ban tells the client it was accepted but drops it; Report accepts it, adds it to the Reports queue and raises an alert.">
+        Word filters
+      </SubHeading>
       <div className="space-y-2">
         {fields.map((f, i) => {
           const w = filters[i];
@@ -413,7 +419,7 @@ function Nip05Fields({ control }: { control: Control<any> }) {
   return (
     <>
       <SwitchField control={control} name="enabled" label="Serve /.well-known/nostr.json" description="Users with a NIP-05 name get name@domain identifiers" />
-      <TextField control={control} name="domain" label="Domain" placeholder="defaults to the host of publicUrl" />
+      <TextField control={control} name="domain" label="Domain" placeholder="relay.example.com" description="When set, /.well-known/nostr.json only answers requests for this host" />
       <ListField control={control} name="relays" label="Advertised relays" placeholder="wss://…" validate={(s) => (/^wss?:\/\//.test(s) ? undefined : "Must start with wss://")} />
     </>
   );
@@ -423,7 +429,7 @@ function GroupsFields({ control }: { control: Control<any> }) {
   return (
     <>
       <SwitchField control={control} name="enabled" label="Enable NIP-29 groups" />
-      <SelectField control={control} name="creation" label="Who can create groups" options={ACCESS_OPTS} className="sm:max-w-xs" />
+      <SelectField control={control} name="creation" label="Who can create groups" options={ACCESS_OPTS} description={MEMBERS_NOTE} className="sm:max-w-md" />
     </>
   );
 }
@@ -435,7 +441,7 @@ function BlossomFields({ control }: { control: Control<any> }) {
         <BytesField control={control} name="maxUploadBytes" label="Max upload size" />
         <BytesField control={control} name="defaultQuotaBytes" label="Default quota per user" zeroLabel="Unlimited" description="0 = unlimited" />
       </Grid>
-      <SelectField control={control} name="uploadAccess" label="Who can upload" options={ACCESS_OPTS} className="sm:max-w-xs" />
+      <SelectField control={control} name="uploadAccess" label="Who can upload" options={ACCESS_OPTS} description={MEMBERS_NOTE} className="sm:max-w-md" />
       <ListField control={control} name="allowedMimeTypes" label="Allowed MIME types" placeholder="image/*, video/mp4…" description="Wildcards like image/* are supported" />
       <div className="grid gap-2">
         <SwitchField control={control} name="stripExif" label="Strip EXIF metadata" description="Remove location and camera data from images" />

@@ -1,9 +1,10 @@
 import { z } from "zod";
-import type { BulkResult } from "@beamhop/sdk";
+import type { ReportBulkResult } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
+import { auditLists } from "../util/audit";
 import { parseEventId, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
@@ -35,23 +36,27 @@ export function registerReportRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/reports/:id/resolve", requirePermission("reports.resolve"), async (c) => {
     const id = parseEventId(c.req.param("id"));
     const body = await readBody(c, ResolveSchema);
-    const { report, effects } = await ctx.reports.resolve(id, body, principalOf(c));
+    const { report, effects } = await ctx.reports.resolve(id, body, principalOf(c), c.get("ip"));
     await ctx.audit(c, "report.resolve", id, { action: body.action, note: body.note, target: report.targetEventId ?? report.targetBlob ?? report.targetPubkey, ...effects });
     return c.json(report);
   });
 
   app.post("/reports/bulk-resolve", requirePermission("reports.resolve"), async (c) => {
     const body = await readBody(c, BulkSchema);
-    const result: BulkResult & { failed: { id: string; pubkey: string; error: string }[] } = { ok: 0, failed: [] };
+    const result: ReportBulkResult = { ok: 0, failed: [] };
+    const effects: Record<string, unknown>[] = [];
     for (const raw of body.ids) {
       try {
-        await ctx.reports.resolve(parseEventId(raw), body, principalOf(c));
+        const id = parseEventId(raw);
+        const r = await ctx.reports.resolve(id, body, principalOf(c), c.get("ip"));
+        if (Object.keys(r.effects).length) effects.push({ id, ...r.effects });
         result.ok++;
       } catch (err) {
-        result.failed.push({ id: raw, pubkey: raw, error: (err as Error).message });
+        result.failed.push({ id: raw, error: (err as Error).message });
       }
     }
-    await ctx.audit(c, "report.bulk-resolve", null, { ids: body.ids.slice(0, 100), action: body.action, note: body.note, ok: result.ok, failed: result.failed.length });
+    // the full target list and what each resolution did (bans, deletions), as the single-report route records
+    await ctx.audit(c, "report.bulk-resolve", null, { ...auditLists({ ids: body.ids, failed: result.failed, effects }), action: body.action, note: body.note, ok: result.ok });
     return c.json(result);
   });
 }

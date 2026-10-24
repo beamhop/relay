@@ -32,6 +32,8 @@ export interface MetricsOptions {
   maxPubkeysPerBucket?: number;
   /** pubkeys kept per closed hour in metrics_pubkeys */
   topPubkeysPerHour?: number;
+  /** distinct rejection (code, reason) pairs per hour; the rest count as "(other)" (memory + table bound) */
+  maxRejectionReasonsPerHour?: number;
   version?: string;
 }
 
@@ -64,6 +66,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
   const rollup = new Rollup(stores.db, Math.floor(startedAt / 1000), {
     maxPubkeysPerBucket: opts.maxPubkeysPerBucket ?? 10_000,
     topPubkeysPerHour: opts.topPubkeysPerHour ?? 1000,
+    maxRejectionReasonsPerHour: opts.maxRejectionReasonsPerHour,
     onDropped: (message) => logger.error(message),
   });
   const collector = new Collector(startedAt, rollup, geo);

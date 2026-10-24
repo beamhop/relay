@@ -58,6 +58,22 @@ function hash(s: string): string {
   return (h >>> 0).toString(36) + ":" + s.length;
 }
 
+/** Memory bounds of the scorer: anonymous writers control how many distinct messages and pubkeys it sees. */
+export interface SpamLimits {
+  /** distinct normalized messages tracked for duplicate detection (pubkeys per message: duplicateMaxPubkeys + 1) */
+  maxContentKeys: number;
+  /** pubkeys tracked for the new-account rate limit (and the role cache) */
+  maxTrackedPubkeys: number;
+}
+export const DEFAULT_SPAM_LIMITS: SpamLimits = { maxContentKeys: 50_000, maxTrackedPubkeys: 50_000 };
+
+/** Inserts `key` as the most recently used entry and evicts the least recently used ones beyond `max`. */
+export function remember<K, V>(map: Map<K, V>, key: K, value: V, max: number) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value as K);
+}
+
 /** In-memory state of the scorer; exported for tests. */
 export class SpamScorer {
   /** content hash → pubkey → last seen (ms) */
@@ -70,10 +86,12 @@ export class SpamScorer {
 
   private s: () => SpamSettings;
   private now: () => number;
+  private limits: SpamLimits;
 
-  constructor(settings: () => SpamSettings, now: () => number = Date.now) {
+  constructor(settings: () => SpamSettings, now: () => number = Date.now, limits: Partial<SpamLimits> = {}) {
     this.s = settings;
     this.now = now;
+    this.limits = { ...DEFAULT_SPAM_LIMITS, ...limits };
   }
 
   score(event: NostrEvent, opts: { firstSeenAt?: number } = {}): SpamVerdict {
@@ -116,14 +134,16 @@ export class SpamScorer {
     const norm = normalize(text);
     if (norm.length >= s.duplicateMinLength) {
       const key = hash(norm);
-      let byPubkey = this.content.get(key);
-      if (!byPubkey) this.content.set(key, (byPubkey = new Map()));
+      const byPubkey = this.content.get(key) ?? new Map<string, { at: number; count: number }>();
+      remember(this.content, key, byPubkey, this.limits.maxContentKeys);
       const windowMs = s.duplicateWindowSec * 1000;
       for (const [pk, v] of byPubkey) if (now - v.at > windowMs) byPubkey.delete(pk);
       const mine = byPubkey.get(event.pubkey) ?? { at: now, count: 0 };
       mine.at = now;
       mine.count++;
-      byPubkey.set(event.pubkey, mine);
+      // one more pubkey than the duplicate threshold is all the verdict needs: past it the message is flagged for
+      // everyone, so an evicted pubkey's repeat count no longer matters (and any threshold keeps working)
+      remember(byPubkey, event.pubkey, mine, s.duplicateMaxPubkeys + 1);
       if (byPubkey.size > s.duplicateMaxPubkeys) {
         score += s.duplicateWeight;
         reasons.push(`same content from ${byPubkey.size} pubkeys`);
@@ -139,7 +159,7 @@ export class SpamScorer {
     const isNew = now - firstSeenMs < s.newAccountAgeSec * 1000;
     const times = (this.rate.get(event.pubkey) ?? []).filter((t) => now - t < 60_000);
     times.push(now);
-    this.rate.set(event.pubkey, times);
+    remember(this.rate, event.pubkey, times, this.limits.maxTrackedPubkeys);
     if (isNew) {
       if (times.length > s.newAccountEventsPerMinute) {
         score += s.rateWeight;
@@ -202,7 +222,7 @@ const plugin: BeamhopPlugin<typeof Settings> = {
       if (c && Date.now() - c.at < 60_000) return c;
       const u = await ctx.users.get(pubkey);
       const v = { at: Date.now(), firstSeenAt: u?.firstSeenAt || undefined, admin: !!u?.role };
-      roleCache.set(pubkey, v);
+      remember(roleCache, pubkey, v, DEFAULT_SPAM_LIMITS.maxTrackedPubkeys);
       return v;
     };
 

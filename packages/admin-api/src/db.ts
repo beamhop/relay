@@ -97,6 +97,12 @@ CREATE TABLE IF NOT EXISTS admin_used_auth (
 CREATE INDEX IF NOT EXISTS admin_used_auth_expires ON admin_used_auth (expires_at);
 `,
   },
+  {
+    // the role of whoever banned an event (NIP-86 banevent): lifting the ban needs at least that rank. NULL for older
+    // rows, which fall back to the banner's current rank
+    id: "007_banned_event_role",
+    up: "ALTER TABLE admin_banned_events ADD COLUMN by_role TEXT",
+  },
 ];
 
 export async function migrateAdmin(db: Db): Promise<void> {

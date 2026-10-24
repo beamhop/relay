@@ -1,12 +1,18 @@
 import * as React from "react";
 import type { Profile } from "@beamhop/sdk/admin-contract";
-import { cn, safeUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { autoMediaSrc } from "@/lib/media-policy";
+import { useMediaPolicy } from "@/lib/prefs";
 import { displayName, pubkeyHue } from "@/lib/nostr";
 
-/** Avatar with profile picture and a deterministic identicon fallback. */
+/**
+ * Avatar with profile picture and a deterministic identicon fallback. Remote pictures only load when the admin
+ * opted in to remote media (see lib/media-policy); this relay's own media always does.
+ */
 export function UserAvatar({ pubkey, profile, className, size = 36 }: { pubkey: string; profile?: Profile; className?: string; size?: number }) {
   const [failed, setFailed] = React.useState(false);
-  const pic = !failed ? safeUrl(profile?.picture) : undefined;
+  const policy = useMediaPolicy();
+  const pic = !failed ? autoMediaSrc(profile?.picture, policy) : undefined;
   const hue = pubkeyHue(pubkey);
   const name = displayName(pubkey, profile);
   return (

@@ -172,7 +172,11 @@ describe("upload validation", () => {
     expect(r.headers.get("x-reason")).toContain("quota");
     // re-uploading an owned blob doesn't count twice
     expect((await upload(PDF)).status).toBe(200);
+    // 0 = no storage at all (re-uploading an owned blob costs nothing, so it still works); null = the default
     await h.deps.stores.users.upsert(alice.pubkey, { blossomQuota: 0 });
+    expect((await upload(PNG_1x1)).status).toBe(413);
+    expect((await upload(PDF)).status).toBe(200);
+    await h.deps.stores.users.upsert(alice.pubkey, { blossomQuota: null });
     expect((await upload(PNG_1x1)).status).toBe(201);
   });
 

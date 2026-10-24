@@ -2,6 +2,7 @@ import type { AdminUiPluginApi } from "@beamhop/sdk/ui-contract";
 import type { PluginView } from "@beamhop/sdk/admin-contract";
 import { API_BASE, baseHeaders } from "@/lib/api";
 import { registry, type PluginComponent } from "./registry";
+import { pluginFetchUrl } from "./paths";
 
 let hostReady: Promise<void> | null = null;
 const loaded = new Set<string>();
@@ -34,9 +35,16 @@ function createPluginApi(name: string): AdminUiPluginApi {
       registry.set((s) => ({ ...s, eventActions: [...s.eventActions.filter((a) => !(a.plugin === name && a.id === action.id)), { ...action, plugin: name }] }));
     },
     fetch(path, init) {
+      let url: string;
+      try {
+        // stays inside /plugins/x/<name>/: no absolute URLs, no `..` into the rest of the admin API
+        url = pluginFetchUrl(API_BASE, name, path);
+      } catch (e) {
+        return Promise.reject(e);
+      }
       const headers = new Headers(init?.headers);
       for (const [k, v] of Object.entries(baseHeaders)) headers.set(k, v);
-      return fetch(`${API_BASE}/plugins/x/${encodeURIComponent(name)}/${path.replace(/^\//, "")}`, { ...init, headers, credentials: "include" });
+      return fetch(url, { ...init, headers, credentials: "include" });
     },
   };
   return api;

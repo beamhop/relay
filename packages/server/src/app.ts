@@ -2,7 +2,6 @@ import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { generateSecretKey } from "nostr-tools/pure";
 import {
-  DEFAULT_TRUSTED_PROXIES,
   EventBus,
   HookRegistry,
   createLogger,
@@ -23,6 +22,7 @@ import {
 } from "@beamhop/sdk";
 import type { ServerExtras } from "./config";
 import { createPluginManager, PluginError, type ServerPluginManager } from "./plugins/manager";
+import { PROMETHEUS_CONTENT_TYPE } from "@beamhop/metrics";
 import { createAssetSource, serveAdminAsset, type AssetSource } from "./static";
 import { proxyMatcher } from "./runtime/common";
 import { LANDING_CSP, renderLanding } from "./landing";
@@ -88,6 +88,9 @@ export const isRelayUpgrade = (req: Request) => req.method === "GET" && isWebSoc
 export const isNip86 = (req: Request) => (req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/nostr+json+rpc");
 const acceptsNostrJson = (req: Request) => (req.headers.get("accept") ?? "").includes("application/nostr+json");
 
+/** Peers allowed to read /metrics without a token. */
+const LOOPBACK = ["127.0.0.0/8", "::1/128"];
+
 /** Headers a reverse proxy / CDN adds to requests it relays. */
 const FORWARDING_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip", "cf-connecting-ip", "true-client-ip", "fly-client-ip"];
 
@@ -131,17 +134,28 @@ async function loadFactories(over: Partial<BeamhopFactories>, needBlossom: boole
   return f as BeamhopFactories;
 }
 
-/** Generates and persists secrets that were not provided by config. */
-async function ensureSecrets(config: BeamhopConfig, stores: Stores, logger: Logger) {
-  if (!config.relaySecretKey) {
-    let k = await stores.kv.get<string>("server", "relaySecretKey");
-    if (!k) {
-      k = Buffer.from(generateSecretKey()).toString("hex");
-      await stores.kv.set("server", "relaySecretKey", k);
+/**
+ * Generates and persists secrets that were not provided by config. The relay key is written insert-if-absent and
+ * read back, so instances booting together on one database all end up with the same key.
+ */
+export async function ensureSecrets(config: BeamhopConfig, stores: Stores, logger: Logger) {
+  if (config.relaySecretKey) return;
+  const NS = "server";
+  const KEY = "relaySecretKey";
+  let k = await stores.kv.get<string>(NS, KEY);
+  if (!k) {
+    const fresh = Buffer.from(generateSecretKey()).toString("hex");
+    if (stores.kv.setIfAbsent) {
+      if (await stores.kv.setIfAbsent(NS, KEY, fresh)) logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
+      k = await stores.kv.get<string>(NS, KEY);
+    } else {
+      await stores.kv.set(NS, KEY, fresh);
       logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
+      k = fresh;
     }
-    config.relaySecretKey = k;
+    if (!k) throw new Error("relay secret key could not be stored in kv server/relaySecretKey");
   }
+  config.relaySecretKey = k;
 }
 
 /** Constant-time string comparison (length is not secret). */
@@ -186,7 +200,11 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
     const assets = overrides.assets ?? createAssetSource(config.admin.uiDir);
     if (config.admin.enabled) log.info(assets.kind === "none" ? "admin UI not built — serving placeholder at /admin" : `admin UI served from ${assets.location}`);
     if (extras.prometheus && !extras.metricsToken) {
-      log.warn("/metrics has no BEAMHOP_METRICS_TOKEN: it is only served to loopback / private-network clients reaching beamhop directly; set a token to scrape it from elsewhere");
+      log.warn(
+        config.server.trustProxy
+          ? "/metrics is disabled: behind a reverse proxy (server.trustProxy) it needs BEAMHOP_METRICS_TOKEN, since proxied internet clients arrive from loopback too"
+          : "/metrics has no BEAMHOP_METRICS_TOKEN: it is only served to loopback clients reaching beamhop directly; set a token to scrape it from anywhere else (e.g. Prometheus in another container)",
+      );
     }
 
     const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, checkHealth: () => stores.db.get("SELECT 1 AS ok") });
@@ -272,7 +290,7 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
   app.post("/", async (c, next) => {
     if (!isNip86(c.req.raw)) return next();
     if (!d.adminApi) return c.json({ error: "relay management API disabled" }, 404);
-    return d.adminApi.nip86(c.req.raw);
+    return d.adminApi.nip86(c.req.raw, c.env);
   });
 
   // 3. relay HTTP (NIP-11, NIP-05). GET / goes to the relay only when NIP-11 JSON is requested.
@@ -326,22 +344,26 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
   // Prometheus scrape endpoint
   if (d.extras.prometheus && d.renderPrometheus) {
     const render = d.renderPrometheus;
-    const localNetwork = proxyMatcher(DEFAULT_TRUSTED_PROXIES);
+    const loopback = proxyMatcher(LOOPBACK);
     app.get("/metrics", async (c) => {
       if (d.extras.metricsToken) {
         if (!safeEqual(c.req.header("authorization") ?? "", `Bearer ${d.extras.metricsToken}`)) {
           return c.text("unauthorized", 401, { "www-authenticate": 'Bearer realm="metrics"' });
         }
+      } else if (d.config.server.trustProxy) {
+        // behind a reverse proxy, a proxy on this host relays internet clients from loopback — with no forwarding
+        // header at all in nginx's default proxy_pass — so a loopback peer proves nothing: a token is required
+        return c.text("forbidden: behind a reverse proxy (server.trustProxy), /metrics requires BEAMHOP_METRICS_TOKEN", 403);
       } else {
-        // No token: a scraper on this host or its private network (e.g. Prometheus in the compose network), talking to
-        // beamhop directly. Anything relayed by a proxy carries a forwarding header — the proxy's own address is
-        // private too, and without trustProxy it would stand in for every internet client.
+        // No token, no proxy: only a scraper on this host, talking to beamhop directly. Private-network peers don't
+        // qualify: NAT and L4 hops (Docker's userland proxy for IPv6 clients, a Kubernetes Service, nginx without
+        // forwarding headers, HAProxy in TCP mode) make internet clients arrive from private addresses.
         const ip = (c.env as ServerEnv | undefined)?.ip ?? "unknown";
-        if (!localNetwork(ip) || FORWARDING_HEADERS.some((h) => c.req.header(h) !== undefined)) {
-          return c.text("forbidden: without BEAMHOP_METRICS_TOKEN, /metrics is only served to the local network", 403);
+        if (!loopback(ip) || FORWARDING_HEADERS.some((h) => c.req.header(h) !== undefined)) {
+          return c.text("forbidden: without BEAMHOP_METRICS_TOKEN, /metrics is only served to loopback clients", 403);
         }
       }
-      return c.body(await render(d.metrics), 200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" });
+      return c.body(await render(d.metrics), 200, { "content-type": PROMETHEUS_CONTENT_TYPE, "cache-control": "no-store" });
     });
   }
 

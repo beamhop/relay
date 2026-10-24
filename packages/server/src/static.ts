@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { dirname, extname, join, normalize, posix, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, normalize, posix, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { isBun } from "@beamhop/sdk";
@@ -68,22 +68,24 @@ function dirSource(dir: string): AssetSource {
   };
 }
 
-/** Candidate admin-ui dist folders: explicit → next to the node bundle → workspace package. */
-export function uiDirCandidates(uiDir?: string): string[] {
+/**
+ * Candidate admin-ui dist folders: explicit → next to the node bundle → the workspace package when running from
+ * source. Never relative to the working directory or other folders outside the install: whatever index.html is found
+ * is served on the admin API's origin.
+ */
+export function uiDirCandidates(uiDir?: string, here = dirname(fileURLToPath(import.meta.url))): string[] {
   if (uiDir) return [uiDir];
-  const here = dirname(fileURLToPath(import.meta.url));
-  return [
-    join(here, "admin-ui"), // dist/node/admin-ui (node build)
-    resolve(here, "../../admin-ui/dist"), // packages/server/src → packages/admin-ui/dist
-    resolve(process.cwd(), "packages/admin-ui/dist"),
-    resolve(process.cwd(), "admin-ui"),
-  ];
+  const out = [join(here, "admin-ui")]; // dist/node/admin-ui (node build)
+  // packages/server/src → packages/admin-ui/dist (source checkout only)
+  if (basename(here) === "src" && basename(dirname(here)) === "server") out.push(resolve(here, "../../admin-ui/dist"));
+  return out;
 }
 
 export function createAssetSource(uiDir?: string): AssetSource {
   if (!uiDir && embedded && Object.keys(embedded).length) {
     const files = embedded;
-    return { kind: "embedded", location: "(embedded)", resolve: (rel) => files[rel] };
+    // own keys only: `constructor`, `__proto__`, `toString` … must not resolve to Object.prototype members
+    return { kind: "embedded", location: "(embedded)", resolve: (rel) => (Object.hasOwn(files, rel) ? files[rel] : undefined) };
   }
   for (const d of uiDirCandidates(uiDir)) {
     if (existsSync(join(d, "index.html"))) return dirSource(d);
@@ -94,8 +96,12 @@ export function createAssetSource(uiDir?: string): AssetSource {
 /**
  * CSP for the admin SPA document. Scripts: same-origin files plus the inline scripts of the built index.html
  * (theme bootstrap + plugin import map), allowed by hash — so an injected inline script or a script URL on
- * another origin never runs. Images/media/connections stay open: avatars and banners come from arbitrary hosts,
- * NIP-46 signers and profile lookups talk to arbitrary relays, the world map fetches remote tiles.
+ * another origin never runs. `'self'` rather than an `<origin>/admin/` source: behind a proxy the browser's origin
+ * may match neither server.publicUrl nor the Host the server sees, and a host source would then blank the panel.
+ * Same-origin user content can't pass as a script anyway: Blossom and the admin raw-media route serve JS types as
+ * text/plain and refuse script/worker fetches (Sec-Fetch-Dest), and plugin public routes are trusted in-process code.
+ * Images/media/connections stay open: avatars and banners come from arbitrary hosts, NIP-46 signers and profile
+ * lookups talk to arbitrary relays, the world map fetches remote tiles.
  */
 export function adminCsp(html: string): string {
   const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(

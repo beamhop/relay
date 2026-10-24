@@ -34,10 +34,8 @@
     "@beamhop/sdk": "workspace:*",
     "@beamhop/storage": "workspace:*",
     "@hono/node-server": "^2.1.5",
-    "better-sqlite3": "^13.0.3",
     "hono": "^4.13.13",
     "nostr-tools": "^2.25.2",
-    "postgres": "^3.4.9",
     "ws": "^8.22.0",
     "zod": "^4.6.7"
   },

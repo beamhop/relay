@@ -71,6 +71,8 @@ export const ConfigSchema = z.object({
           minUploadBytesPerSec: z.number().int().min(0).optional(),
           /** destination ports BUD-04 mirroring may connect to (default [80, 443]) */
           mirrorPorts: z.array(z.number().int().min(1).max(65535)).optional(),
+          /** whole BUD-04 mirror transfer (connect, redirects, body), ms (default 30000) */
+          mirrorTimeoutMs: z.number().int().min(1000).optional(),
         })
         .optional(),
     })
@@ -122,6 +124,7 @@ export const ConfigSchema = z.object({
 export type BeamhopConfig = z.infer<typeof ConfigSchema>;
 
 export const AccessModeSchema = z.enum(["public", "whitelist", "invite", "auth-required"]);
+/** Part of the plugin SDK contract (unused inside beamhop itself). */
 export type AccessMode = z.infer<typeof AccessModeSchema>;
 
 export const RetentionRuleSchema = z.object({

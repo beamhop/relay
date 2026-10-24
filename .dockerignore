@@ -1,3 +1,5 @@
+# Patterns are anchored at the build context root: prefix with **/ to match at any depth. Everything not excluded
+# here is copied into the runtime image, so local databases, blobs and env files must never get through.
 **/node_modules
 **/dist
 **/.build
@@ -5,13 +7,21 @@
 .github
 .vscode
 .idea
-data
-*.db
-*.db-*
-.env
-.env.*
-.DS_Store
-packages/server/test/.tmp-*
-beamhop.config.json
+# agent worktrees / local tool state: full checkouts that may hold their own data/ and .env files
+.claude
+# runtime data from a server started anywhere in the tree (e.g. `bun run dev` inside packages/server)
+**/data
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/*.mmdb
+**/.env
+**/.env.*
+**/beamhop.config.json
+**/.tmp-*
+**/coverage
+**/.DS_Store
+*.tsbuildinfo
 Dockerfile
 docker-compose.yml

@@ -126,7 +126,8 @@ describe("NIP-86", () => {
     expect(await (await rpc(h, h.owner, { method: "listdisallowedkinds" })).json()).toEqual({ result: [7] });
   });
 
-  test("responses carry CORS headers, including errors and 401; OPTIONS preflight", async () => {
+  // the preflight itself is answered by the relay's HTTP routes (the server only routes POST / here)
+  test("responses carry CORS headers, including errors and 401", async () => {
     const h = await createHarness();
     const ok = await rpc(h, h.owner, { method: "supportedmethods" });
     expect(ok.headers.get("access-control-allow-origin")).toBe("*");
@@ -135,9 +136,5 @@ describe("NIP-86", () => {
     expect(unauth.headers.get("access-control-allow-origin")).toBe("*");
     const err = await rpc(h, h.owner, { method: "nope" });
     expect(err.headers.get("access-control-allow-origin")).toBe("*");
-    const pre = await h.api.nip86(new Request(PUBLIC_URL, { method: "OPTIONS" }));
-    expect(pre.status).toBe(204);
-    expect(pre.headers.get("access-control-allow-origin")).toBe("*");
-    expect(pre.headers.get("access-control-allow-headers")).toContain("Authorization");
   });
 });

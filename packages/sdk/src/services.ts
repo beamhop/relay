@@ -99,6 +99,8 @@ export interface BlobRecord {
   owners: string[];
   createdAt: number;
   status: BlobStatus;
+  /** pubkey of the admin who set the current pending/blocked status; null when approved or held back automatically */
+  moderatedBy?: string | null;
   hasThumbnail: boolean;
   /** public URL `${publicUrl}/${sha256}.${ext}` */
   url: string;
@@ -109,9 +111,10 @@ export interface BlossomService {
   app: Hono;
   list(q: { pubkey?: string; status?: BlobStatus; type?: string; limit?: number; offset?: number }): Promise<{ items: BlobRecord[]; total: number }>;
   get(sha256: string): Promise<BlobRecord | undefined>;
-  setStatus(sha256: string, status: BlobStatus, actor: string): Promise<void>;
-  /** Removes blob data + record; when `block` true adds hash to blocklist so it can't be re-uploaded. */
-  delete(sha256: string, actor: string, opts?: { block?: boolean }): Promise<void>;
+  /** `ip`: the requester's address, recorded in the audit entry (and the bus "admin.action" event). */
+  setStatus(sha256: string, status: BlobStatus, actor: string, opts?: { ip?: string | null }): Promise<void>;
+  /** Removes blob data + record; when `block` true adds hash to blocklist so it can't be re-uploaded. `ip` as for setStatus. */
+  delete(sha256: string, actor: string, opts?: { block?: boolean; ip?: string | null }): Promise<void>;
   deleteByPubkey(pubkey: string, actor: string): Promise<number>;
   usage(pubkey: string): Promise<{ count: number; bytes: number }>;
   /** Raw blob (or its thumbnail) regardless of moderation status — for authenticated admin previews. */
@@ -121,8 +124,8 @@ export interface BlossomService {
   block?(sha256: string, reason: string, actor: string): Promise<void>;
   /** Removes a hash from the blocklist; false when it wasn't blocked. */
   unblock?(sha256: string, actor: string): Promise<boolean>;
-  /** Blocked hashes, newest first. */
-  blocklist?(): Promise<{ sha256: string; reason: string; createdAt: number }[]>;
+  /** Blocked hashes, newest first. `blockedBy`: pubkey of the admin who blocked it (null when unknown). */
+  blocklist?(): Promise<{ sha256: string; reason: string; createdAt: number; blockedBy?: string | null }[]>;
 }
 export type CreateBlossom = (deps: CoreDeps) => Promise<BlossomService>;
 
@@ -191,6 +194,7 @@ export interface PluginInfo {
   /** URL of the admin-ui ESM bundle if the plugin has UI */
   uiUrl?: string;
 }
+/** Enable/disable/settings changes are not audited here: the caller (admin API) records them once, with the request's IP. */
 export interface PluginManager {
   list(): PluginInfo[];
   enable(name: string, actor: string): Promise<void>;
@@ -213,7 +217,7 @@ export interface AdminApiDeps extends CoreDeps {
 export interface AdminApi {
   /** mounted at /admin/api */
   app: Hono;
-  /** NIP-86 handler: server routes POST / with Content-Type application/nostr+json+rpc here */
-  nip86(req: Request): Promise<Response>;
+  /** NIP-86 handler: server routes POST / with Content-Type application/nostr+json+rpc here (`env.ip`: client IP, for audit) */
+  nip86(req: Request, env?: { ip?: string }): Promise<Response>;
 }
 export type CreateAdminApi = (deps: AdminApiDeps) => Promise<AdminApi>;

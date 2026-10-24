@@ -6,6 +6,10 @@ scrape_configs:
       - targets: ["otel-collector:8889"]
   - job_name: beamhop
     metrics_path: /metrics
-    # set bearer_token if BEAMHOP_METRICS_TOKEN is configured
+    # beamhop only serves /metrics without a token to loopback clients; the compose file writes BEAMHOP_METRICS_TOKEN
+    # to this file before starting Prometheus (set the same token on the beamhop service)
+    authorization:
+      type: Bearer
+      credentials_file: /prometheus/beamhop-metrics-token
     static_configs:
       - targets: ["beamhop:3334"]

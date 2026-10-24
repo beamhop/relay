@@ -17,17 +17,21 @@ http://host/health    → liveness probe (JSON; 503 if the database is unreachab
 ## Features
 
 - **Relay**:
-  - NIPs 1, 4, 5, 9, 11, 13, 17, 29, 40, 42, 45, 50, 56, 59, 62, 70, 77 and 86 (advertised in NIP-11).
+  - NIPs 1, 4, 5, 9, 11, 13, 17, 29, 40, 42, 45, 50, 56, 59, 62, 70, 77 and 86 (advertised in NIP-11; 5, 29 and 86 only while NIP-05, groups and the admin API are enabled).
   - Client-side NIPs such as 2, 10, 22, 28, 44, 51 and 65 work through generic NIP-01 storage; per NIP-11 they are not advertised.
   - Full-text search, NIP-42 auth, proof-of-work, NIP-29 groups, negentropy sync and expiration.
   - Rate limits, IP rules and allow/ban lists.
 - **Blossom**:
   - Filesystem or S3-compatible storage.
   - Upload/mirror/media endpoints and range requests.
-  - Optional EXIF stripping (off by default, since it changes the blob hash), plus thumbnails when `sharp` is installed.
+  - Optional EXIF stripping (off by default, since it changes the blob hash; it also drops images appended after a JPEG's main image, such as MPF/MPO secondary images and gain maps), plus thumbnails when `sharp` is installed.
+  - Per-user quotas: empty uses the relay default (where 0 means unlimited); a per-user quota of 0 means no uploads, and "unlimited" in the panel stores 2^53−1 bytes. Per-user quotas of 0 set before this change (which meant unlimited) are migrated to that value.
+  - Blobs are never servable as script: JavaScript is served as `text/plain`, WebAssembly as opaque bytes, and script/worker/XSLT loads (`Sec-Fetch-Dest`) are refused.
 - **Admin panel** (`/admin/`):
   - An installable PWA with live dashboard, connections, users and roles, content moderation, reports, media, settings, plugins, audit log, push notifications and a metrics map.
   - Sign in with NIP-07, a private key (nsec/hex, kept in the browser), a password, TOTP or passkeys.
+  - Privacy: images and video from other hosts (avatars, banners, media in notes) and the world map's tiles are only loaded after you opt in, per browser (Account → Privacy). Media in reported content never loads on its own.
+  - Scripting the admin API: NIP-98 callers need nothing extra; any other client (cookie sessions, password logins) must send `X-Requested-With: beamhop` (or the relay's `Origin`) and a JSON body on every POST/PUT/PATCH/DELETE, logins included.
 - **Storage**: SQLite (`bun:sqlite` or `better-sqlite3`) or PostgreSQL 12 or newer (generated columns).
 - **Observability**: built-in metrics with rollups, a Prometheus endpoint, OTLP export and GeoIP.
 - **Plugins**:
@@ -74,7 +78,7 @@ docker compose up -d                         # SQLite + filesystem blobs in the 
 BEAMHOP_OWNERS=npub1… docker compose up -d
 docker compose --profile postgres up -d      # + PostgreSQL   (set BEAMHOP_DB_DRIVER=postgres)
 docker compose --profile s3 up -d            # + MinIO        (set BEAMHOP_BLOSSOM_DRIVER=s3)
-docker compose --profile observability up -d # + OTel collector, Prometheus, Grafana
+BEAMHOP_METRICS_TOKEN=… docker compose --profile observability up -d # + OTel collector, Prometheus, Grafana
 ```
 
 Or use plain Docker:
@@ -107,12 +111,12 @@ The binary uses `bun:sqlite`. Thumbnails are disabled because `sharp` is not bun
 beamhop [start]                         start the server (default)
 beamhop init [--force]                  write beamhop.config.json with sensible defaults
 beamhop admin add <npub|hex> [--role owner|admin|moderator|viewer]
-beamhop admin remove <npub|hex>
+beamhop admin remove <npub|hex>         revoke the role; also ends their sessions and push devices and removes password, TOTP and passkeys
 beamhop admin password <npub|hex>       set a password login (reads stdin or prompts); ends all of that admin's sessions
-                    [--reset-2fa]      …and removes two-factor authentication (recovery for a lost or hijacked authenticator)
+                    [--reset-2fa]      …and removes TOTP and passkeys (recovery for a lost or hijacked authenticator)
 beamhop user ban <npub|hex> [--reason text]
 beamhop user unban <npub|hex>
-beamhop export [--filter '<json>'] > events.jsonl
+beamhop export [--filter '<json>'] > events.jsonl   (NIP-50 "search" filters are refused: results aren't in time order)
 beamhop import [--skip-verify] < events.jsonl
 beamhop migrate                         apply core, admin, blossom and enabled-plugin migrations (plugins.dir / plugins.packages only)
 beamhop --version | --help
@@ -139,11 +143,11 @@ Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Bloss
 | --- | --- | --- |
 | `BEAMHOP_PORT` / `PORT` | `server.port` | `3334` |
 | `BEAMHOP_HOST` | `server.host` | `0.0.0.0` |
-| `BEAMHOP_PUBLIC_URL` | `server.publicUrl` | `http://localhost:<port>` |
+| `BEAMHOP_PUBLIC_URL` | `server.publicUrl` | `http://localhost:<port>`. Set it to the address users reach: NIP-42 relay tags, NIP-98 / passkey logins and Blossom descriptor URLs are checked against or built from it |
 | `BEAMHOP_TRUST_PROXY` | `server.trustProxy` | `false`. Enable only behind exactly one reverse proxy — and do enable it there: otherwise every client shares the proxy's address, so per-IP limits (connections, rate limits, Blossom's 4 concurrent uploads per IP) apply to all users at once. The client IP is then read from `server.proxyIpHeader`; non-IP values are ignored |
 | `BEAMHOP_PROXY_IP_HEADER` | `server.proxyIpHeader` | `x-forwarded-for`: the *rightmost* entry, i.e. the hop your proxy appended (nginx `$proxy_add_x_forwarded_for`, Caddy, Traefik, HAProxy `option forwardfor`) — values the client sends itself are ignored. If your proxy instead *sets* a single-address header and passes the client's own `X-Forwarded-For` through (e.g. nginx with only `proxy_set_header X-Real-IP $remote_addr`), set this to that header (`x-real-ip`, `cf-connecting-ip`, …) or the client IP is spoofable. If a request carries no `X-Forwarded-For` at all, `X-Real-IP` is used instead |
 | `BEAMHOP_TRUSTED_PROXIES` | `server.trustedProxies` | Comma-separated addresses / CIDR ranges of your reverse proxy. Only requests whose socket peer is in this list get their client IP from `server.proxyIpHeader`; anyone else (e.g. a client reaching the port directly) is identified by their own address, whatever headers they send. Default: loopback and private networks (`127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`). Behind a CDN that connects to beamhop directly (e.g. Cloudflare without a local proxy), list the CDN's published ranges |
-| `BEAMHOP_METRICS_TOKEN` | `server.metricsToken` | unset: `/metrics` is then only served to clients on loopback or a private network that reach beamhop directly (no forwarding headers), e.g. Prometheus in the compose network. When set, `/metrics` requires `Authorization: Bearer <token>` from anywhere. A known placeholder such as `change-me` or the example file's `REPLACE-WITH-…` value disables `/metrics` (with an error in the log) |
+| `BEAMHOP_METRICS_TOKEN` | `server.metricsToken` | unset: `/metrics` is then only served to loopback clients (`127.0.0.0/8`, `::1`) that reach beamhop directly (no forwarding headers), and not at all when `server.trustProxy` is on (a proxy on the same host would make every client look local). Anything else, including Prometheus in the compose network (the `observability` profile needs this variable set), must send `Authorization: Bearer <token>`. A known placeholder such as `change-me` or the example file's `REPLACE-WITH-…` value disables `/metrics` (with an error in the log) |
 | `BEAMHOP_MEMORY_LIMIT` | — | unset. Memory limit in bytes for the dashboard's memory gauge (otherwise the cgroup limit, then total RAM) |
 | `BEAMHOP_PROMETHEUS` | `server.prometheus` | `true`. Set `false` to disable `/metrics` |
 | `BEAMHOP_DB_DRIVER` | `database.driver` | `sqlite` (or `postgres`) |
@@ -163,7 +167,7 @@ Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Bloss
 | `BEAMHOP_METRICS_RETENTION_DAYS` | `metrics.retentionDays` | `30` |
 | `BEAMHOP_ADMIN_ENABLED` | `admin.enabled` | `true` |
 | `BEAMHOP_OWNERS` (comma separated npub/hex) | `admin.owners` | none |
-| `BEAMHOP_ADMIN_UI_DIR` | `admin.uiDir` | auto-detected (embedded, next to the bundle, or `packages/admin-ui/dist`) |
+| `BEAMHOP_ADMIN_UI_DIR` | `admin.uiDir` | auto-detected: embedded, next to the bundle, or (only when running from source) `packages/admin-ui/dist`. The working directory is never searched |
 | `BEAMHOP_VAPID_PUBLIC_KEY`, `_PRIVATE_KEY`, `_SUBJECT` | `admin.vapid.*` | generated |
 | `BEAMHOP_PLUGINS_DIR` | `plugins.dir` | `./plugins` |
 | `BEAMHOP_PLUGINS` (comma separated) | `plugins.packages` | none. Extra npm packages to load |

@@ -56,9 +56,12 @@ export class SubscriptionIndex {
   /** All subscriptions with at least one filter matching the event. */
   match(event: NostrEvent): Set<Subscription> {
     const out = new Set<Subscription>();
+    // search filters compare against the lowercased content: computed once per event, not once per filter
+    let lower: string | undefined;
+    const lowered = () => (lower ??= event.content.toLowerCase());
     const check = (set: Set<Entry> | undefined) => {
       if (!set) return;
-      for (const e of set) if (!out.has(e.sub) && matchCompiled(e.filter, event)) out.add(e.sub);
+      for (const e of set) if (!out.has(e.sub) && matchCompiled(e.filter, event, lowered)) out.add(e.sub);
     };
     check(this.index.get(`i:${event.id}`));
     check(this.index.get(`a:${event.pubkey}`));

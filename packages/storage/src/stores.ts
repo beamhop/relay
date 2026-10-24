@@ -17,6 +17,7 @@ export interface CreateStoresOptions {
 export interface StorageStores extends Stores {
   events: SqlEventStore;
   users: SqlUserStore;
+  kv: SqlKvStore;
   /** writes buffered data (user activity) to the database */
   flush(): Promise<void>;
   /** flushes and closes the database (same as `db.close()`) */

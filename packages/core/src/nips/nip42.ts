@@ -3,9 +3,9 @@ import type { RelayContext } from "../context";
 import type { Connection } from "../protocol/connection";
 import { sameRelayUrl } from "../util/url";
 
-export const AUTH_KIND = 22242;
+const AUTH_KIND = 22242;
 /** NIP-42: created_at must be within ~10 minutes */
-export const AUTH_WINDOW_SEC = 600;
+const AUTH_WINDOW_SEC = 600;
 
 /** Returns a rejection reason or undefined when the AUTH event is valid for this connection. */
 export async function verifyAuthEvent(ctx: RelayContext, conn: Connection, event: NostrEvent): Promise<string | undefined> {

@@ -37,6 +37,42 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
   return PUSH_HOSTS.has(host) || PUSH_HOST_SUFFIXES.some((sfx) => host.endsWith(sfx) && host.length > sfx.length);
 }
 
+/**
+ * Rate-limits a stream of notifications to one per `intervalMs`: the first one after a quiet period goes out right away
+ * (`offer()` → true, sent with its own details); those arriving while the interval runs are only counted and sent as one
+ * digest (`flush(count)`) when it ends, which starts another interval. So a flood of anonymous reports costs every admin
+ * device one push per interval, never one per report. Timer-based only (no clock), unref'd.
+ */
+export class PushCoalescer {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private pending = 0;
+  constructor(
+    private readonly intervalMs: number,
+    private readonly flush: (count: number) => void,
+  ) {}
+
+  offer(): boolean {
+    if (this.timer) {
+      this.pending++;
+      return false;
+    }
+    this.arm();
+    return true;
+  }
+
+  private arm() {
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      if (!this.pending) return;
+      const n = this.pending;
+      this.pending = 0;
+      this.arm();
+      this.flush(n);
+    }, this.intervalMs);
+    (this.timer as { unref?: () => void }).unref?.();
+  }
+}
+
 export interface PushPayload {
   title: string;
   body: string;

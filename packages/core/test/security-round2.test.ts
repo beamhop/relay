@@ -272,10 +272,11 @@ describe("NIP-29", () => {
     const add = sign(admin, { kind: 9000, tags: h("g", [["p", bob.pk]]) });
     await c.publish(add);
     await c.publish(sign(admin, { kind: 9001, tags: h("g", [["p", bob.pk]]) }));
-    // removed from storage without a NIP-09 tombstone (9005)
+    // removed from storage by a 9005, which tombstones it
     await c.publish(sign(admin, { kind: 9005, tags: h("g", [["e", add.id]]) }));
     const replay = await connect("6.6.6.6").publish(add);
-    expect(replay[3]).toMatch(/^duplicate:/);
+    expect(replay[2]).toBe(false);
+    expect(replay[3]).toMatch(/^blocked: .*deleted/);
     expect((await relay.groups.get("g"))?.memberList.some((m) => m.pubkey === bob.pk)).toBe(false);
   });
 

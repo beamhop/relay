@@ -30,24 +30,15 @@ export function validate<S extends z.ZodType>(schema: S, value: unknown): z.outp
   return r.data;
 }
 
-const IP_HEADER_CANDIDATES = ["x-forwarded-for", "x-real-ip", "cf-connecting-ip"];
-
 /**
- * Best-effort client IP.
+ * Best-effort client IP. Forwarding headers are never read here: the server adapter resolves them (against
+ * server.trustedProxies) and binds the result as `c.env.ip`.
  * - `c.env.ip`: set by the server adapter (already proxy-aware and normalized) — always preferred
- * - trustProxy (standalone use): X-Forwarded-For (last hop — the address appended by the trusted proxy;
- *   earlier entries are client-supplied and spoofable) / X-Real-IP / CF-Connecting-IP
- * - otherwise Bun `server.requestIP`, @hono/node-server `incoming.socket`.
+ * - otherwise (the app mounted on its own) Bun `server.requestIP`, @hono/node-server `incoming.socket`.
  */
-export function clientIp(c: Context, trustProxy: boolean): string | null {
+export function clientIp(c: Context): string | null {
   const bound = (c.env as { ip?: unknown } | undefined)?.ip;
   if (typeof bound === "string" && bound) return normalizeIp(bound);
-  if (trustProxy) {
-    for (const h of IP_HEADER_CANDIDATES) {
-      const v = c.req.header(h);
-      if (v) return normalizeIp(v.split(",").at(-1)!.trim()) || null;
-    }
-  }
   const env = c.env as Record<string, unknown> | undefined;
   if (env && typeof env === "object") {
     const server = (env.server ?? env) as { requestIP?: (r: Request) => { address: string } | null };

@@ -2,12 +2,11 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { EventBus, HookRegistry, RuntimeSettingsSchema, createLogger, type BeamhopPlugin } from "@beamhop/sdk";
+import { EventBus, HookRegistry, RuntimeSettingsSchema, createLogger, maskSecretValues, type BeamhopPlugin } from "@beamhop/sdk";
 import { z } from "zod";
 import { loadConfig } from "../src/config";
 import { LANDING_CSP, renderLanding, safeHttpUrl } from "../src/landing";
 import { createPluginManager } from "../src/plugins/manager";
-import { redactSecrets } from "../src/plugins/redact";
 import { clientIp } from "../src/runtime/common";
 import { adminCsp, createAssetSource, serveAdminAsset } from "../src/static";
 import { stubMetrics, stubRelay, stubSettings, stubStores, testConfig } from "./stubs";
@@ -128,16 +127,24 @@ describe("config (B4/B12)", () => {
   test("blossom upload limits come from config / BEAMHOP_BLOSSOM_* env", () => {
     const { config } = loadConfig({
       cwd: dir,
-      env: { BEAMHOP_BLOSSOM_MAX_UPLOADS_PER_IP: "16", BEAMHOP_BLOSSOM_MAX_BUFFERED_UPLOAD_BYTES: "1073741824", BEAMHOP_BLOSSOM_MIRROR_PORTS: "80,443,8443" },
+      env: {
+        BEAMHOP_BLOSSOM_MAX_UPLOADS_PER_IP: "16",
+        BEAMHOP_BLOSSOM_MAX_BUFFERED_UPLOAD_BYTES: "1073741824",
+        BEAMHOP_BLOSSOM_MIRROR_PORTS: "80,443,8443",
+        BEAMHOP_BLOSSOM_MIRROR_TIMEOUT_MS: "120000",
+      },
     });
     expect(config.blossom.limits?.maxConcurrentUploadsPerIp).toBe(16);
     expect(config.blossom.limits?.maxBufferedUploadBytes).toBe(1073741824);
     expect(config.blossom.limits?.mirrorPorts).toEqual([80, 443, 8443]);
+    expect(config.blossom.limits?.mirrorTimeoutMs).toBe(120000);
   });
 });
 
+const redact = (v: unknown) => (v === undefined || v === null || v === "" ? v : "[redacted]");
+
 describe("plugin settings never reach the audit log in cleartext", () => {
-  test("redactSecrets: schema hints and key names, at any depth", () => {
+  test("the shared secret walker: schema hints and key names, at any depth", () => {
     const schema = {
       type: "object",
       properties: {
@@ -145,7 +152,7 @@ describe("plugin settings never reach the audit log in cleartext", () => {
         list: { type: "array", items: { type: "object", properties: { label: { type: "string" }, value: { type: "string", writeOnly: true } } } },
       },
     };
-    const out = redactSecrets(
+    const out = maskSecretValues(
       {
         webhook: { url: "https://h.test", signing: "s1" },
         list: [{ label: "a", value: "v1" }],
@@ -155,6 +162,7 @@ describe("plugin settings never reach the audit log in cleartext", () => {
         emptySecret: "",
       },
       schema,
+      redact,
     );
     expect(out).toEqual({
       webhook: "[redacted]", // a webhook URL is itself a credential, so the whole entry is redacted
@@ -166,7 +174,7 @@ describe("plugin settings never reach the audit log in cleartext", () => {
     });
   });
 
-  test("updateSettings audits redacted values but stores the real ones", async () => {
+  test("updateSettings stores the real values and leaves auditing (masked) to the admin API", async () => {
     const plugin: BeamhopPlugin = {
       name: "secrets",
       version: "1.0.0",
@@ -181,10 +189,9 @@ describe("plugin settings never reach the audit log in cleartext", () => {
     await pm.start();
     const saved = await pm.updateSettings("secrets", { endpoint: "https://e.test", creds: { user: "u", password: "hunter2" } }, "admin1");
     expect((saved as { creds: { password: string } }).creds.password).toBe("hunter2");
-    const entry = stores.auditEntries.at(-1)!;
-    expect(entry.action).toBe("plugin.settings");
-    expect(JSON.stringify(entry.details)).not.toContain("hunter2");
-    expect(entry.details).toMatchObject({ values: { endpoint: "https://e.test", creds: { user: "u", password: "[redacted]" } } });
+    // one audit record per change, written by the admin API route (see admin-api security-round2); none here
+    expect(stores.auditEntries.filter((e) => e.action === "plugin.settings")).toEqual([]);
+    expect(JSON.stringify(stores.auditEntries)).not.toContain("hunter2");
     await pm.stop();
   });
 });

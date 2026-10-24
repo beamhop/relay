@@ -99,7 +99,7 @@ export function isPrivateAddress(ip: string): boolean {
 const notAllowed = () => new BlossomError(403, "mirror target not allowed");
 
 /** Rejects URLs whose host is (or resolves to) a loopback/private/link-local address (basic SSRF protection). */
-export async function assertPublicUrl(url: URL): Promise<void> {
+async function assertPublicUrl(url: URL): Promise<void> {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost")) throw notAllowed();
   const addrs = isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((a) => a.address);
@@ -173,19 +173,20 @@ export function pinnedFetch(url: URL, init: { signal: AbortSignal }): Promise<Re
   });
 }
 
-export interface FetchRemoteOptions {
+interface FetchRemoteOptions {
   /** custom fetch (tests); when omitted a DNS-pinned node:http(s) client is used */
   fetch?: typeof fetch;
   allowPrivate: boolean;
-  timeoutMs: number;
-  maxRedirects?: number;
   /** destination ports allowed when `allowPrivate` is off (default 80 and 443) */
   allowedPorts?: number[];
-  /** abort signal covering the whole transfer (default: a fresh `timeoutMs` timeout) */
+  /** abort signal covering the whole transfer (pass one to tell afterwards whether a cut-off body was a timeout) */
   signal?: AbortSignal;
+  /** without a `signal`: timeout for the whole transfer (default 30 s) */
+  timeoutMs?: number;
 }
 
-export const DEFAULT_MIRROR_PORTS = [80, 443];
+const DEFAULT_MIRROR_PORTS = [80, 443];
+const MAX_REDIRECTS = 5;
 
 /** Fetches a remote blob following redirects manually so every hop is SSRF-checked. */
 export async function fetchRemote(rawUrl: string, opts: FetchRemoteOptions): Promise<Response> {
@@ -195,8 +196,8 @@ export async function fetchRemote(rawUrl: string, opts: FetchRemoteOptions): Pro
   } catch {
     throw new BlossomError(400, "invalid mirror url");
   }
-  const signal = opts.signal ?? AbortSignal.timeout(opts.timeoutMs);
-  for (let hop = 0; hop <= (opts.maxRedirects ?? 5); hop++) {
+  const signal = opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 30_000);
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new BlossomError(400, "mirror url must be http(s)");
     if (!opts.allowPrivate) {
       // no port scanning of internal services through us: only the usual web ports

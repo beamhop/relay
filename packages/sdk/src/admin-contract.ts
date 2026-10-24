@@ -1,7 +1,7 @@
 /**
  * Admin REST API contract shared by @beamhop/admin-api (server) and @beamhop/admin-ui (client).
  * Base path: /admin/api. JSON in/out. Auth: httpOnly cookie `bh_session` OR `Authorization: Nostr <base64 NIP-98 event>`.
- * Errors: HTTP 4xx/5xx with body ApiError. Lists: { items, total }.
+ * Errors: HTTP 4xx/5xx with body ApiError. Lists: { items } — paginated ones (documented as → Paged<T>) also carry `total`.
  * Live data: GET /admin/api/stream (Server-Sent Events) — see StreamEvents.
  */
 import type { NostrEvent, Filter } from "./nostr";
@@ -39,12 +39,17 @@ export const ROLE_PERMISSIONS: Record<AdminRole, readonly Permission[]> = {
 };
 
 // ------------------------------------------------------------- auth   /auth/*
-/** GET /auth/challenge */
-export interface ChallengeResponse { challenge: string; expiresAt: number }
-/** POST /auth/nostr — body: signed kind 27235 (NIP-98) event with tags u=<publicUrl>/admin/api/auth/nostr, method=POST, challenge=<challenge>. */
+/** GET /auth/challenge — `url` is the exact `u` tag the signed login event must carry (always publicUrl-based) */
+export interface ChallengeResponse { challenge: string; expiresAt: number; url: string }
+/** POST /auth/nostr — body: a signed kind 27235 (NIP-98) event with tags u=<url from /auth/challenge>, method=POST, challenge=<challenge> */
 export interface NostrLoginRequest { event: NostrEvent }
 /** POST /auth/password — login is npub, hex pubkey or nip05 name */
 export interface PasswordLoginRequest { login: string; password: string; totp?: string }
+/**
+ * Every mutating request that isn't NIP-98 authenticated (logins included) must send `X-Requested-With: beamhop` or an
+ * Origin equal to the relay's public origin, and a body (if any) must be JSON (`application/json`, or NDJSON for
+ * /events/import) — so another site can't submit forms to the API.
+ */
 /** POST /auth/passkey/login/options {login?} → PublicKeyCredentialRequestOptionsJSON; POST /auth/passkey/login/verify {response} */
 /** POST /auth/passkey/register/options → creation options; POST /auth/passkey/register/verify {response, name}; DELETE /auth/passkey/:id */
 /** POST /auth/password/set {password, currentPassword?}; POST /auth/logout */
@@ -97,7 +102,8 @@ export interface BanRequest { reason?: string; deleteEvents?: boolean; deleteMed
 /** DELETE /users/:pubkey  (users.delete) — removes the record, events and media; not a ban → DeleteUserResult */
 export interface DeleteUserResult { deletedEvents: number; deletedMedia: number; disconnected: number }
 /** POST /users/:pubkey/unban ; POST /users/:pubkey/mute ; POST /users/:pubkey/unmute */
-/** PUT /users/:pubkey/role  (admins.manage) */
+/** PUT /users/:pubkey/role (admins.manage). Removing a role ends the admin's sessions and drops their push devices and login
+ *  factors (password, TOTP, passkeys). Deleting a user who has a role also needs admins.manage. */
 export interface RoleRequest { role: AdminRole | null }
 /** POST /users/bulk */
 export interface BulkUserRequest {
@@ -107,13 +113,13 @@ export interface BulkUserRequest {
   tag?: string;
 }
 export interface BulkResult { ok: number; failed: { pubkey: string; error: string }[] }
-/** GET /users/:pubkey/events?limit&until → {items: NostrEvent[]} */
+/** GET /users/:pubkey/events?limit&until&kinds=1,7 → {items: NostrEvent[]} */
 /** POST /users  {pubkey, allowed?, notes?, tags?} — add user manually (e.g. allowlist) */
 
 /** GET /admins → {items: UserView[]} users with a role */
 
 // ------------------------------------------------------------- invites & ip rules
-/** GET /invites → {items: Invite[]}; POST /invites {maxUses?, expiresAt?, note?, count?} → {items: Invite[]}; DELETE /invites/:code */
+/** GET /invites → {items: InviteView[]}; POST /invites {maxUses?, expiresAt?, note?, count?} → {items: InviteView[]}; DELETE /invites/:code */
 export type InviteView = Invite & { url: string };
 /**
  * GET /ip-rules → {items: IpRule[]}; POST /ip-rules IpRuleInput; DELETE /ip-rules/:cidr (url-encoded).
@@ -159,18 +165,23 @@ export interface ReportView {
 /** GET /reports?status&type&target&limit&offset → Paged<ReportView>; a pubkey `target` matches ReportView.targetPubkey (the content's author), not the report's `p` tag */
 /** POST /reports/:id/resolve */
 export interface ResolveReportRequest { action: "dismiss" | "delete-event" | "ban-user" | "delete-and-ban" | "delete-media"; note?: string }
-/** POST /reports/bulk-resolve {ids: string[], action, note?} → BulkResult-like {ok, failed} */
+/** POST /reports/bulk-resolve {ids: string[], action, note?} → ReportBulkResult */
+export interface ReportBulkResult { ok: number; failed: { id: string; error: string }[] }
 
 // ------------------------------------------------------------- media (blossom)
 /** GET /media?pubkey&status&type&limit&offset → Paged<BlobRecord> ; GET /media/stats */
 export interface MediaStats { count: number; bytes: number; byType: { type: string; count: number; bytes: number }[]; pending: number }
-/** POST /media/:sha256/status {status: BlobStatus} ; DELETE /media/:sha256?block=true ; POST /media/bulk {sha256s, action:"approve"|"block"|"delete"} */
+/**
+ * POST /media/:sha256/status {status: BlobStatus} ; DELETE /media/:sha256?block=true ; POST /media/bulk {sha256s, action:"approve"|"block"|"delete"} → MediaBulkResult.
+ * Below owner, deleting, blocking or hiding (status pending/blocked) a blob uploaded by a peer or superior is refused (403 forbidden_target).
+ */
 export type MediaStatusRequest = { status: BlobStatus };
+export interface MediaBulkResult { ok: number; failed: { sha256: string; error: string }[] }
 export type MediaItem = BlobRecord;
 
 // ------------------------------------------------------------- settings
 /** GET /settings → SettingsResponse ; PATCH /settings DeepPartial<RuntimeSettings> → SettingsResponse */
-export interface SettingsResponse { settings: RuntimeSettings; schema: Record<string, unknown> /* JSON Schema */ }
+export interface SettingsResponse { settings: RuntimeSettings }
 export type SettingsPatch = DeepPartial<RuntimeSettings>;
 
 // ------------------------------------------------------------- groups (NIP-29)
@@ -190,6 +201,7 @@ export type AuditView = AuditEntry;
 // ------------------------------------------------------------- push notifications
 /** GET /push/vapid → {publicKey: string | null}; POST /push/subscribe {subscription: PushSubscriptionJSON, topics?: PushTopic[]}; POST /push/unsubscribe {endpoint} */
 export type PushTopic = "reports" | "alerts";
+/** "reports" pushes are coalesced: at most one per minute per device, the reports filed meanwhile arrive as one digest. */
 
 // ------------------------------------------------------------- SSE  GET /stream?events=1&kinds=1,7
 /** Server-sent event names and payloads */
@@ -197,7 +209,7 @@ export interface StreamEvents {
   snapshot: LiveSnapshot; // every 2s
   event: { event: NostrEvent; status: "accepted" | "rejected"; reason?: string; ip?: string; country?: string }; // only if ?events=1
   alert: { level: "info" | "warning" | "critical"; title: string; message: string; url?: string };
-  report: ReportView;
+  report: ReportView; // relatedCount is not computed here (0): GET /reports has it
 }
 
 export type { AdminRole, AuditEntry, BlobRecord, BlobStatus, ConnectionSummary, GeoPoint, GroupSummary, Invite, IpRule, LiveSnapshot, PluginInfo, UserRecord, UserStatus, RuntimeSettings, DeepPartial, NostrEvent, Filter };

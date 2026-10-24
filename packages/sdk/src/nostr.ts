@@ -25,6 +25,7 @@ export interface Filter {
 export const isReplaceable = (k: number) => k === 0 || k === 3 || (k >= 10000 && k < 20000);
 export const isEphemeral = (k: number) => k >= 20000 && k < 30000;
 export const isAddressable = (k: number) => k >= 30000 && k < 40000;
+/** Part of the plugin SDK contract (unused inside beamhop itself). */
 export const isRegular = (k: number) => !isReplaceable(k) && !isEphemeral(k) && !isAddressable(k);
 
 export const getTag = (e: Pick<NostrEvent, "tags">, name: string) => e.tags.find((t) => t[0] === name)?.[1];

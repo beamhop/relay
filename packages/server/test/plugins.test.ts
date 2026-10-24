@@ -51,12 +51,14 @@ describe("plugin manager", () => {
     expect(byName.good.uiUrl).toBe("/admin/plugins-ui/good.js?v=1.2.3");
   });
 
-  test("enable registers hooks, routes, jobs, listeners; runs migrations; audits", async () => {
+  test("enable registers hooks, routes, jobs, listeners; runs migrations (auditing is the admin API's job)", async () => {
+    const audited = stores.auditEntries.length;
     await pm.enable("good", "admin1");
     expect(pm.get("good")).toMatchObject({ enabled: true, status: "running" });
     expect(stores.db.migrations["plugin:good"]).toEqual(["001"]);
     expect(stores.kvData.get("plugins/enabled:good")).toBe(true);
-    expect(stores.auditEntries.at(-1)).toMatchObject({ actor: "admin1", action: "plugin.enable", target: "good" });
+    // the admin API records plugin.enable once, with the request's IP; the manager must not add a second record
+    expect(stores.auditEntries.length).toBe(audited);
 
     expect((await hooks.runWrite(ev("buy spam now"), { source: "ws" })).result).toBe("reject");
     expect((await hooks.runWrite(ev("hello"), { source: "ws" })).result).toBe("next");
@@ -85,7 +87,7 @@ describe("plugin manager", () => {
     expect(stores.kvData.get("plugins/settings:good")).toEqual({ word: "casino", limit: 3 });
     expect((await hooks.runWrite(ev("casino!"), { source: "ws" })).result).toBe("reject");
     expect((await hooks.runWrite(ev("spam"), { source: "ws" })).result).toBe("next");
-    expect(stores.auditEntries.at(-1)).toMatchObject({ action: "plugin.settings" });
+    expect(stores.auditEntries.some((e) => e.action === "plugin.settings")).toBe(false);
   });
 
   test("disable tears down and removes hooks/routes/jobs/listeners (hot)", async () => {

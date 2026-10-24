@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { type EventSource, type GroupSummary, type NostrEvent, getDTag, getTag, nowSec } from "@beamhop/sdk";
+import { type EventSource, type Filter, type GroupSummary, type NostrEvent, getDTag, getTag, nowSec } from "@beamhop/sdk";
+import { canSeeGated } from "../../subscriptions/visibility";
 import { isHex64 } from "../../util/hex";
+import { Lru } from "../../util/lru";
 import type { RelayContext } from "../../context";
 import { type GroupRepo, type GroupState } from "./repo";
 
@@ -26,18 +28,29 @@ export const CONTROL_KINDS: readonly number[] = Array.from({ length: 23 }, (_, i
 const GROUP_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 /** How many recent group events `previous` tags may reference (NIP-29 suggests the last 50). */
 const PREVIOUS_WINDOW = 100;
+/** `previous` references per event (NIP-29 clients send a few). */
+const MAX_PREVIOUS_REFS = 50;
+/** Ids listed per window while looking up `previous` references (id-only rows, no event bodies). */
+const PREVIOUS_SCAN = 1_000;
 /**
  * Group control events (9000-9022) from clients, sync and plugins must be recent: NIP-29 asks relays to
  * prevent late publication, and it stops old moderation/join/leave events from being replayed after
  * state changed (younger replays are caught by the applied-control record).
  */
-export const GROUP_CONTROL_MAX_AGE_SEC = 10 * 60;
+const GROUP_CONTROL_MAX_AGE_SEC = 10 * 60;
 /** Sources whose group control events must be recent and may not carry relay-signed group metadata. */
 const UNTRUSTED_SOURCES: ReadonlySet<EventSource> = new Set(["ws", "sync", "plugin"]);
 /** Invite codes are chosen by group moderators; very short ones are guessable. */
-export const MIN_INVITE_CODE_LENGTH = 6;
+const MIN_INVITE_CODE_LENGTH = 6;
 /** Failed invite-code join attempts (closed groups), per group and per client address, per minute. */
-export const INVITE_ATTEMPTS_PER_MINUTE = { group: 60, ip: 10 };
+const INVITE_ATTEMPTS_PER_MINUTE = { group: 60, ip: 10 };
+/**
+ * Groups one pubkey (and one client address) may create per hour (staff exempt). Every group stays in memory and
+ * makes the relay sign and store four metadata events, and read visibility checks scale with the number of groups.
+ */
+export const GROUP_CREATES_PER_HOUR = { pubkey: 10, ip: 40 };
+/** Authed-pubkey sets whose unreadable() result is kept (until group state changes). */
+const UNREADABLE_CACHE_SIZE = 256;
 /** `previous` may also reference any event stored on this relay within this many seconds (cheap bounded lookup). */
 const PREVIOUS_RECENT_SEC = 24 * 3600;
 const PREVIOUS_RECENT_LIMIT = 500;
@@ -46,7 +59,7 @@ const LATE_PUBLICATION_SEC = 3600;
 /** Standard 39000 flags; a 9002 carries the full metadata set, so an absent flag means off. */
 const FLAG_TAGS = ["private", "closed", "restricted", "hidden"] as const;
 
-export const DEFAULT_ROLES: Record<string, string> = {
+const DEFAULT_ROLES: Record<string, string> = {
   admin: "Full control over the group",
   moderator: "Can add and remove members, create invites and delete events",
 };
@@ -91,13 +104,22 @@ const canInvite = (roles: string[] | undefined) => !!roles?.some((r) => PERMISSI
  */
 export class GroupsService {
   private groups = new Map<string, GroupState>();
+  /** bumped on every change to groups, members or flags; unreadable() results are cached per revision */
+  private revision = 0;
+  private unreadableCache = new Lru<string, { revision: number; value: { privateIds: string[]; hiddenIds: string[] } }>(UNREADABLE_CACHE_SIZE);
 
   constructor(private readonly ctx: RelayContext, private readonly repo: GroupRepo) {}
+
+  /** Invalidates cached visibility (call after any change to the group map, a member list or a flag). */
+  private changed(): void {
+    this.revision++;
+  }
 
   async init(): Promise<void> {
     await this.repo.migrate();
     await this.repo.hashPlaintextInvites(hashCode);
     for (const g of await this.repo.loadAll()) this.groups.set(g.id, g);
+    this.changed();
   }
 
   get size() {
@@ -143,8 +165,20 @@ export class GroupsService {
     return false;
   }
 
-  /** Groups whose content (private), metadata / control events (hidden) the authed pubkeys may not read. */
+  /**
+   * Groups whose content (private), metadata / control events (hidden) the authed pubkeys may not read. Runs for
+   * every filter of every REQ / COUNT / NEG-OPEN, so results are cached per authed set until group state changes.
+   */
   unreadable(authed: ReadonlySet<string>): { privateIds: string[]; hiddenIds: string[] } {
+    const key = authed.size === 0 ? "" : [...authed].sort().join(",");
+    const hit = this.unreadableCache.get(key);
+    if (hit && hit.revision === this.revision) return hit.value;
+    const value = this.computeUnreadable(authed);
+    this.unreadableCache.set(key, { revision: this.revision, value });
+    return value;
+  }
+
+  private computeUnreadable(authed: ReadonlySet<string>): { privateIds: string[]; hiddenIds: string[] } {
     const privateIds: string[] = [];
     const hiddenIds: string[] = [];
     for (const g of this.groups.values()) {
@@ -164,6 +198,16 @@ export class GroupsService {
   /** Whether a filter explicitly targets a private group (used for COUNT gating). */
   isPrivateGroup(id: string): boolean {
     return !!this.groups.get(id)?.private;
+  }
+
+  /** Whether the event belongs to a group whose existence or content isn't public (private, hidden, being deleted). */
+  inRestrictedGroup(event: NostrEvent): boolean {
+    for (const t of event.tags) {
+      if (t[0] !== "h" || t[1] === undefined) continue;
+      const g = this.groups.get(t[1]);
+      if (g && (g.private || g.hidden || g.deleting)) return true;
+    }
+    return false;
   }
 
   async handleWrite(event: NostrEvent, actor: GroupActor): Promise<GroupWriteDecision> {
@@ -234,22 +278,63 @@ export class GroupsService {
   }
 
   /**
-   * NIP-29 timeline references: every `previous` id prefix must match an event this relay has — one of the
-   * group's recent events or anything stored recently (bounded queries, no prefix index needed).
+   * NIP-29 timeline references: every `previous` id prefix must match an event this relay has that the author may
+   * read — one of the group's recent events or anything stored recently. Candidates are listed by id only (no event
+   * bodies); just the matches are loaded, for the visibility check.
    */
   private async checkPrevious(event: NostrEvent, g: GroupState): Promise<GroupWriteDecision> {
-    const prev = event.tags.filter((t) => t[0] === "previous").flatMap((t) => t.slice(1)).filter(Boolean);
+    const prev = [...new Set(event.tags.filter((t) => t[0] === "previous").flatMap((t) => t.slice(1)).filter(Boolean))];
     if (!prev.length) return undefined;
+    if (prev.length > MAX_PREVIOUS_REFS) return { reject: `invalid: too many previous references (max ${MAX_PREVIOUS_REFS})` };
     if (prev.some((p) => !/^[0-9a-f]{8,64}$/.test(p))) return { reject: "invalid: malformed previous tag" };
-    const recent = await this.ctx.stores.events.query(
-      [
-        { "#h": [g.id], limit: PREVIOUS_WINDOW },
-        { since: nowSec() - PREVIOUS_RECENT_SEC, limit: PREVIOUS_RECENT_LIMIT },
-      ],
-      { maxLimit: PREVIOUS_RECENT_LIMIT },
+    const notFound = { reject: "invalid: previous tag references an event not found on this relay" };
+    const ids = [
+      ...(await this.newestIds({ "#h": [g.id] }, PREVIOUS_WINDOW, 0)),
+      ...(await this.newestIds({}, PREVIOUS_RECENT_LIMIT, nowSec() - PREVIOUS_RECENT_SEC)),
+    ];
+    const matches = new Map<string, string[]>();
+    for (const p of prev) {
+      const hits = [...new Set(ids.filter((id) => id.startsWith(p)))];
+      if (!hits.length) return notFound;
+      matches.set(p, hits);
+    }
+    const wanted = [...new Set([...matches.values()].flat())];
+    const events = await this.ctx.stores.events.query([{ ids: wanted }], { maxLimit: wanted.length });
+    const authed: ReadonlySet<string> = new Set([event.pubkey]);
+    const reader = { id: "", ip: "", authedPubkeys: authed, connectedAt: 0 };
+    const readable = new Set(
+      events
+        .filter((ev) => canSeeGated(ev, authed) && this.canRead(ev, authed) && this.ctx.hooks.isVisible(ev, { conn: reader, source: "ws" }))
+        .map((ev) => ev.id),
     );
-    const ok = prev.every((p) => recent.some((ev) => ev.id.startsWith(p)));
-    return ok ? undefined : { reject: "invalid: previous tag references an event not found on this relay" };
+    for (const hits of matches.values()) if (!hits.some((id) => readable.has(id))) return notFound;
+    return undefined;
+  }
+
+  /**
+   * Ids of at least the `want` newest events matching `filter` (fewer if the store has fewer) created at or after
+   * `floor`. The store lists ids oldest first, so time windows are walked backwards from now, each listed whole
+   * (narrowed when one holds more than PREVIOUS_SCAN ids).
+   */
+  private async newestIds(filter: Filter, want: number, floor: number): Promise<string[]> {
+    const out: string[] = [];
+    let upper: number | undefined; // inclusive; none at first, so events dated slightly in the future count too
+    let span = 600;
+    for (let round = 0; round < 16 && out.length < want; round++) {
+      const top = upper ?? nowSec();
+      if (top < floor) break;
+      const since = Math.max(floor, top - span);
+      const rows = await this.ctx.stores.events.queryIdsForSync({ ...filter, since, ...(upper !== undefined ? { until: upper } : {}), limit: PREVIOUS_SCAN + 1 });
+      if (rows.length > PREVIOUS_SCAN && span > 1) {
+        span = Math.max(1, Math.floor(span / 16));
+        continue;
+      }
+      for (const r of rows) out.push(r.id);
+      if (since <= floor) break;
+      upper = since - 1;
+      span *= 8;
+    }
+    return out;
   }
 
   // ------------------------------------------------------------ handlers
@@ -265,6 +350,9 @@ export class GroupsService {
       (creation === "members" && (actor.isRelayMember || s.access.mode === "public"));
     if (!allowed) return { reject: "restricted: you are not allowed to create groups on this relay" };
     if (hasSubgroupTags(event.tags)) return { reject: "invalid: subgroups are not supported" };
+    if (!actor.isStaff && UNTRUSTED_SOURCES.has(actor.source) && !this.takeCreateToken(event.pubkey, actor.ipKey)) {
+      return { reject: "rate-limited: too many groups created, try again later" };
+    }
     const g: GroupState = {
       id,
       name: id,
@@ -287,6 +375,7 @@ export class GroupsService {
       commit: async () => {
         if (this.groups.has(id)) throw new GroupConflict("duplicate: group already exists");
         this.groups.set(id, g);
+        this.changed();
         try {
           await this.repo.saveGroup(g);
           await this.repo.saveRoles(g);
@@ -294,12 +383,25 @@ export class GroupsService {
         } catch (err) {
           // undo, so a retry of the same create isn't refused as "already exists"
           if (this.groups.get(id) === g) this.groups.delete(id);
+          this.changed();
           await this.repo.deleteGroup(id).catch(() => {});
           throw err;
         }
       },
       after: () => this.publishMetadata(g, METADATA_KINDS),
     };
+  }
+
+  /** Per-pubkey and per-address group creation buckets (GROUP_CREATES_PER_HOUR, a full hour's worth as burst). */
+  private takeCreateToken(pubkey: string, ipKey: string | undefined): boolean {
+    const L = GROUP_CREATES_PER_HOUR;
+    const pkKey = `grp:create:${pubkey}`;
+    if (!this.ctx.rate.take(pkKey, L.pubkey / 60, 1, L.pubkey)) return false;
+    if (ipKey && !this.ctx.rate.take(`grp:create-ip:${ipKey}`, L.ip / 60, 1, L.ip)) {
+      this.ctx.rate.refund(pkKey, L.pubkey / 60, 1, L.pubkey);
+      return false;
+    }
+    return true;
   }
 
   private async onJoin(event: NostrEvent, g: GroupState, actor: GroupActor): Promise<GroupWriteDecision> {
@@ -341,6 +443,7 @@ export class GroupsService {
         if (hash && !useCode && g.closed) throw new GroupConflict("restricted: invite code was already used");
         if (useCode) g.invites.delete(hash!);
         g.members.set(event.pubkey, []);
+        this.changed();
         try {
           if (useCode) await this.repo.removeInvite(g.id, hash!);
           await this.repo.putMember(g.id, event.pubkey, [], nowSec());
@@ -348,6 +451,7 @@ export class GroupsService {
           // undo the in-memory change so a retry can apply it
           if (useCode) g.invites.add(hash!);
           g.members.delete(event.pubkey);
+          this.changed();
           throw err;
         }
       },
@@ -364,6 +468,7 @@ export class GroupsService {
     return {
       commit: async () => {
         g.members.delete(event.pubkey);
+        this.changed();
         await this.repo.removeMember(g.id, event.pubkey);
       },
       after: async () => {
@@ -396,6 +501,7 @@ export class GroupsService {
             for (const t of targets) {
               const roles = t.slice(2).filter(Boolean);
               g.members.set(t[1], roles);
+              this.changed();
               await this.repo.putMember(g.id, t[1], roles, event.created_at);
             }
           },
@@ -410,6 +516,7 @@ export class GroupsService {
           commit: async () => {
             for (const pk of targets) {
               g.members.delete(pk);
+              this.changed();
               await this.repo.removeMember(g.id, pk);
             }
           },
@@ -421,6 +528,7 @@ export class GroupsService {
         return {
           commit: async () => {
             applyMetadata(g, event.tags);
+            this.changed();
             await this.repo.saveGroup(g);
           },
           after: () => this.publishMetadata(g, [GROUP_KIND.METADATA]),
@@ -436,7 +544,8 @@ export class GroupsService {
               if (ev && getTag(ev, "h") === g.id) own.push(id);
             }
             if (own.length) {
-              await this.ctx.stores.events.deleteByIds(own);
+              // tombstoned, so nobody can publish a removed event again
+              await this.ctx.stores.events.deleteByIds(own, { tombstone: event.id });
               this.ctx.bus.emit("event.deleted", { ids: own, actor: event.pubkey, reason: `nip29 delete-event in ${g.id}` });
             }
           },
@@ -516,11 +625,13 @@ export class GroupsService {
    */
   private async deleteGroup(g: GroupState, actor: string): Promise<void> {
     g.deleting = true;
+    this.changed();
     const n = await this.ctx.stores.events.deleteByFilter([
       { "#h": [g.id] },
       { kinds: METADATA_KINDS, authors: [this.ctx.key.pubkey], "#d": [g.id] },
     ]);
     this.groups.delete(g.id);
+    this.changed();
     await this.repo.deleteGroup(g.id);
     this.ctx.logger.info("group deleted", { id: g.id, actor, events: n });
   }

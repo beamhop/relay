@@ -5,13 +5,13 @@
 import { createHash } from "node:crypto";
 import { bytesToHex, hexToBytes } from "../../util/hex";
 
-export const PROTOCOL_VERSION = 0x61;
-export const ID_SIZE = 32;
+const PROTOCOL_VERSION = 0x61;
+const ID_SIZE = 32;
 const FINGERPRINT_SIZE = 16;
 const BUCKETS = 16;
 const DOUBLE_BUCKETS = BUCKETS * 2;
 /** Timestamp used for the "infinity" bound */
-export const MAX_TIMESTAMP = Number.MAX_SAFE_INTEGER;
+const MAX_TIMESTAMP = Number.MAX_SAFE_INTEGER;
 
 const enum Mode {
   Skip = 0,
@@ -81,7 +81,7 @@ class ReadBuffer {
   }
 }
 
-export function encodeVarInt(n: number, out: WriteBuffer = new WriteBuffer()): WriteBuffer {
+function encodeVarInt(n: number, out: WriteBuffer = new WriteBuffer()): WriteBuffer {
   if (n === 0) {
     out.byte(0);
     return out;
@@ -95,7 +95,7 @@ export function encodeVarInt(n: number, out: WriteBuffer = new WriteBuffer()): W
   return out;
 }
 
-export function decodeVarInt(buf: ReadBuffer): number {
+function decodeVarInt(buf: ReadBuffer): number {
   let res = 0;
   for (let i = 0; ; i++) {
     if (i > 8) throw new Error("varint too long");
@@ -105,39 +105,9 @@ export function decodeVarInt(buf: ReadBuffer): number {
   }
 }
 
-// ------------------------------------------------------------------ fingerprint accumulator
+// ------------------------------------------------------------------ fingerprints
 
-const TWO_256 = 1n << 256n;
-
-function bytesToBigLE(b: Uint8Array): bigint {
-  let v = 0n;
-  for (let i = b.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(b[i]);
-  return v;
-}
-
-function bigToBytesLE(v: bigint): Uint8Array {
-  const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) {
-    out[i] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-  return out;
-}
-
-export function fingerprintOf(ids: Iterable<Uint8Array>): Uint8Array {
-  let sum = 0n;
-  let n = 0;
-  for (const id of ids) {
-    sum = (sum + bytesToBigLE(id)) % TWO_256;
-    n++;
-  }
-  return finalizeFingerprint(sum, n);
-}
-
-function finalizeFingerprint(sum: bigint, n: number): Uint8Array {
-  return finalizeFingerprintBytes(bigToBytesLE(sum), n);
-}
-
+/** NIP-77 fingerprint: sha256 of the 256-bit little-endian id sum and the varint item count, truncated. */
 function finalizeFingerprintBytes(sumLE: Uint8Array, n: number): Uint8Array {
   const h = createHash("sha256");
   h.update(sumLE);
@@ -148,51 +118,123 @@ function finalizeFingerprintBytes(sumLE: Uint8Array, n: number): Uint8Array {
 // ------------------------------------------------------------------ storage
 
 const LIMBS = 8; // 256-bit sums as 8 little-endian uint32 limbs
-const HEX_ID = /^[0-9a-f]{64}$/;
+
+/** Value of one hex digit (either case), or -1. */
+function hexDigit(c: number): number {
+  if (c >= 48 && c <= 57) return c - 48;
+  if (c >= 97 && c <= 102) return c - 87;
+  if (c >= 65 && c <= 70) return c - 55;
+  return -1;
+}
 
 /**
- * Sorted vector storage with prefix sums for O(1) fingerprints. Items are kept in flat typed arrays
- * (8 bytes timestamp + 32 bytes id + 32 bytes prefix sum per item) rather than one object per item.
+ * Sorted vector storage with prefix sums for O(1) fingerprints. Items are written straight into flat typed arrays
+ * (8 bytes timestamp + 32 bytes id per item while inserting, plus a 32-byte prefix sum once sealed) rather than one
+ * object per item, so a session over hundreds of thousands of ids stays compact while it is built, too.
  */
 export class NegentropyStorage {
-  private pending: { timestamp: number; id: string }[] | null = [];
+  private sealed = false;
   private n = 0;
-  private timestamps = new Float64Array(0);
-  private ids = new Uint8Array(0);
+  private timestamps = new Float64Array(256);
+  private ids = new Uint8Array(256 * ID_SIZE);
   /** prefix[i] = sum of ids[0..i) mod 2^256, LIMBS uint32 per entry (n + 1 entries) */
   private prefix = new Uint32Array(LIMBS);
 
-  insert(timestamp: number, idHex: string): void {
-    if (!this.pending) throw new Error("already sealed");
-    const id = idHex.toLowerCase();
-    if (!HEX_ID.test(id)) throw new Error("bad id size");
-    this.pending.push({ timestamp, id });
+  /** Items inserted so far (duplicates are only merged by seal()). */
+  get inserted(): number {
+    return this.n;
   }
 
-  seal(): void {
-    const items = this.pending;
-    if (!items) throw new Error("already sealed");
-    this.pending = null;
-    // lowercase hex compares like the raw bytes
-    items.sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    const n = items.length;
-    this.n = n;
-    this.timestamps = new Float64Array(n);
-    this.ids = new Uint8Array(n * ID_SIZE);
-    this.prefix = new Uint32Array((n + 1) * LIMBS);
+  insert(timestamp: number, idHex: string): void {
+    if (this.sealed) throw new Error("already sealed");
+    if (idHex.length !== ID_SIZE * 2) throw new Error("bad id size");
+    if (this.n === this.timestamps.length) this.grow();
+    const off = this.n * ID_SIZE;
+    for (let i = 0; i < ID_SIZE; i++) {
+      const hi = hexDigit(idHex.charCodeAt(2 * i));
+      const lo = hexDigit(idHex.charCodeAt(2 * i + 1));
+      if (hi < 0 || lo < 0) throw new Error("bad id size");
+      this.ids[off + i] = (hi << 4) | lo;
+    }
+    this.timestamps[this.n++] = timestamp;
+  }
+
+  /** The inserted items in insertion order (before seal()). */
+  pendingItems(): { id: string; created_at: number }[] {
+    if (this.sealed) throw new Error("already sealed");
+    const out: { id: string; created_at: number }[] = [];
+    for (let i = 0; i < this.n; i++) out.push({ id: bytesToHex(this.ids.subarray(i * ID_SIZE, (i + 1) * ID_SIZE)), created_at: this.timestamps[i] });
+    return out;
+  }
+
+  /** Sorts the items, merges duplicates and leaves out `exclude` (items that may not be disclosed), then builds the prefix sums. */
+  seal(exclude: Iterable<{ id: string; created_at: number }> = []): void {
+    if (this.sealed) throw new Error("already sealed");
+    this.sealed = true;
+    const n = this.n;
+    const ts = this.timestamps;
+    const ids = this.ids;
+    // sort an index by (timestamp, id bytes); the first 4 id bytes settle almost every tie
+    const head = new Uint32Array(n);
     for (let i = 0; i < n; i++) {
-      if (i > 0 && items[i - 1].timestamp === items[i].timestamp && items[i - 1].id === items[i].id) throw new Error("duplicate item inserted");
-      this.timestamps[i] = items[i].timestamp;
-      this.ids.set(hexToBytes(items[i].id), i * ID_SIZE);
-      // prefix[i + 1] = prefix[i] + id (mod 2^256), limb by limb with carry
-      const view = new DataView(this.ids.buffer, i * ID_SIZE, ID_SIZE);
+      const o = i * ID_SIZE;
+      head[i] = ((ids[o] << 24) | (ids[o + 1] << 16) | (ids[o + 2] << 8) | ids[o + 3]) >>> 0;
+    }
+    const order = new Uint32Array(n);
+    for (let i = 0; i < n; i++) order[i] = i;
+    order.sort((a, b) => ts[a] - ts[b] || head[a] - head[b] || compareBytes(ids.subarray(a * ID_SIZE + 4, (a + 1) * ID_SIZE), ids.subarray(b * ID_SIZE + 4, (b + 1) * ID_SIZE)));
+    const at = (k: number) => ids.subarray(order[k] * ID_SIZE, (order[k] + 1) * ID_SIZE);
+    const keep = new Uint8Array(n).fill(1);
+    for (let k = 1; k < n; k++) if (ts[order[k]] === ts[order[k - 1]] && compareBytes(at(k), at(k - 1)) === 0) keep[k] = 0;
+    for (const it of exclude) {
+      const id = new Uint8Array(ID_SIZE);
+      if (it.id.length !== ID_SIZE * 2) continue;
+      for (let i = 0; i < ID_SIZE; i++) id[i] = (hexDigit(it.id.charCodeAt(2 * i)) << 4) | hexDigit(it.id.charCodeAt(2 * i + 1));
+      let lo = 0;
+      let hi = n;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        const c = ts[order[mid]] !== it.created_at ? (ts[order[mid]] < it.created_at ? -1 : 1) : compareBytes(at(mid), id);
+        if (c < 0) lo = mid + 1;
+        else hi = mid;
+      }
+      // duplicates sit next to each other
+      for (let k = lo; k < n && ts[order[k]] === it.created_at && compareBytes(at(k), id) === 0; k++) keep[k] = 0;
+    }
+    let count = 0;
+    for (let k = 0; k < n; k++) count += keep[k];
+    const outTs = new Float64Array(count);
+    const outIds = new Uint8Array(count * ID_SIZE);
+    const prefix = new Uint32Array((count + 1) * LIMBS);
+    const view = new DataView(outIds.buffer);
+    let j = 0;
+    for (let k = 0; k < n; k++) {
+      if (!keep[k]) continue;
+      outTs[j] = ts[order[k]];
+      outIds.set(at(k), j * ID_SIZE);
+      // prefix[j + 1] = prefix[j] + id (mod 2^256), limb by limb with carry
       let carry = 0;
       for (let l = 0; l < LIMBS; l++) {
-        const v = this.prefix[i * LIMBS + l] + view.getUint32(l * 4, true) + carry;
-        this.prefix[(i + 1) * LIMBS + l] = v >>> 0;
+        const v = prefix[j * LIMBS + l] + view.getUint32(j * ID_SIZE + l * 4, true) + carry;
+        prefix[(j + 1) * LIMBS + l] = v >>> 0;
         carry = v > 0xffffffff ? 1 : 0;
       }
+      j++;
     }
+    this.n = count;
+    this.timestamps = outTs;
+    this.ids = outIds;
+    this.prefix = prefix;
+  }
+
+  private grow() {
+    const cap = this.timestamps.length * 2;
+    const ts = new Float64Array(cap);
+    ts.set(this.timestamps);
+    const ids = new Uint8Array(cap * ID_SIZE);
+    ids.set(this.ids);
+    this.timestamps = ts;
+    this.ids = ids;
   }
 
   size(): number {
@@ -247,7 +289,7 @@ export class NegentropyStorage {
   }
 
   private check() {
-    if (this.pending) throw new Error("not sealed");
+    if (!this.sealed) throw new Error("not sealed");
   }
   private checkBounds(begin: number, end: number) {
     if (begin > end || end > this.n) throw new Error("bad range");

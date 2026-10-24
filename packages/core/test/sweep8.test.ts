@@ -23,11 +23,11 @@ describe("word filter regex safety (ReDoS)", () => {
     expect(warns.length).toBe(1);
   });
 
-  test("regex filters only look at the first REGEX_FILTER_MAX_INPUT characters", () => {
+  test("regex filters look past the first REGEX_FILTER_MAX_INPUT characters (in windows)", () => {
     const settings = new FakeSettings({ moderation: { wordFilters: [filter("spamword")] } });
     const policy = new ContentPolicy(settings, silentLogger);
     expect(policy.evaluate(sign(keypair(), { content: "x spamword" })).action).toBe("reject");
-    expect(policy.evaluate(sign(keypair(), { content: "x".repeat(REGEX_FILTER_MAX_INPUT) + " spamword" })).action).toBe("pass");
+    expect(policy.evaluate(sign(keypair(), { content: "x".repeat(REGEX_FILTER_MAX_INPUT) + " spamword" })).action).toBe("reject");
   });
 });
 

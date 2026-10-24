@@ -1,10 +1,10 @@
 import { fileTypeFromBuffer } from "file-type";
 import type { BlobRecord, BlobStatus, BlossomService, CoreDeps, Logger, UserRecord } from "@beamhop/sdk";
-import { domainsFromPublicUrl } from "./auth";
+import { CREATED_AT_SKEW, domainsFromPublicUrl, MAX_AUTH_LIFETIME } from "./auth";
 import { createBlobDriver, type BlobDriver } from "./driver";
 import { BlossomError, sha256Hex, type ReadLimits } from "./http";
 import { createImageProcessor, type ImageProcessor } from "./image";
-import { DEFAULT_MIME, extFromMime, isMimeAllowed, normalizeMime, topLevelType, typeOfUnrecognized } from "./mime";
+import { DEFAULT_MIME, extFromMime, isMimeAllowed, isSvgText, normalizeMime, servedType, topLevelType, typeOfUnrecognized } from "./mime";
 import { BlobRepo, type BlobRow } from "./repo";
 import { ByteBudget, ExpiringSet, ipBucket, KeyedConcurrency, Semaphore, WindowLimiter } from "./limits";
 import { isPrivateAddress } from "./mirror";
@@ -18,7 +18,7 @@ export interface BlossomOptions {
   fetch?: typeof fetch;
   /** allow mirroring from loopback/private addresses (default false; SSRF protection) */
   allowPrivateMirror?: boolean;
-  /** mirror fetch timeout (default 30s) */
+  /** whole BUD-04 mirror transfer (connect, redirects, body), ms (default 30 s) */
   mirrorTimeoutMs?: number;
   /** destination ports BUD-04 mirroring may connect to (default 80, 443) */
   mirrorPorts?: number[];
@@ -56,11 +56,13 @@ export interface BlobDescriptor {
   nip94?: string[][];
 }
 
-export interface IngestInput {
+interface IngestInput {
   data: Uint8Array;
   /** sha256 of `data` as received */
   sha256: string;
   pubkey: string;
+  /** `created_at` of the upload token: refused when the signer deleted this blob after signing it */
+  tokenCreatedAt: number;
   declaredType?: string | null;
   /** trust `declaredType` over sniffing when it is a specific, valid mime (BUD-04 mirror origin Content-Type) */
   preferDeclaredType?: boolean;
@@ -114,6 +116,7 @@ export class BlossomCore {
    */
   readonly usedDeleteTokens = new ExpiringSet(100_000);
   private usedTokenWrites = 0;
+  private deletionWrites = 0;
 
   constructor(
     readonly deps: CoreDeps,
@@ -216,6 +219,43 @@ export class BlossomCore {
     }
   }
 
+  /**
+   * An owner deleting their copy of a blob voids their upload tokens for it signed before then: upload tokens are
+   * reusable, so anyone holding one (another server it was sent to, a proxy log) could otherwise put the blob back
+   * in the signer's name. `at` is the delete token's created_at (the signer's clock, like the upload token's).
+   */
+  async recordDeletion(sha256: string, pubkey: string, at: number): Promise<void> {
+    // a stripped blob's originals too: a mirror stores them byte-identical, so an old token for the EXIF-carrying
+    // original must not bring the photo back (unstripped) either
+    for (const sha of [sha256, ...(await this.repo.originalsOf(sha256))]) await this.repo.recordDeletion(sha, pubkey, at);
+    if (++this.deletionWrites % 1000 === 0) void this.pruneDeletions();
+  }
+
+  /** Drops deletion records older than any upload token that could still be valid. */
+  async pruneDeletions(): Promise<void> {
+    try {
+      await this.repo.pruneDeletions(now() - MAX_AUTH_LIFETIME - 2 * CREATED_AT_SKEW);
+    } catch (err) {
+      this.log.warn("pruning blob deletion records failed", { error: String(err) });
+    }
+  }
+
+  /** False when the upload token was signed before its signer deleted this blob (or the blob it was stripped into). */
+  async tokenCurrent(sha256: string, pubkey: string, tokenCreatedAt: number): Promise<boolean> {
+    const stripped = await this.repo.strippedTo(sha256);
+    for (const sha of stripped && stripped !== sha256 ? [sha256, stripped] : [sha256]) {
+      const deleted = await this.repo.deletedAt(sha, pubkey);
+      if (deleted !== undefined && tokenCreatedAt < deleted) return false;
+    }
+    return true;
+  }
+
+  async assertTokenCurrent(sha256: string, pubkey: string, tokenCreatedAt: number): Promise<void> {
+    if (!(await this.tokenCurrent(sha256, pubkey, tokenCreatedAt))) {
+      throw new BlossomError(401, "auth token predates your deletion of this blob; sign a new one");
+    }
+  }
+
   blobUrl(sha256: string, type: string) {
     return `${this.baseUrl}/${sha256}.${extFromMime(type)}`;
   }
@@ -238,6 +278,7 @@ export class BlossomCore {
       owners,
       createdAt: row.createdAt,
       status: row.status,
+      moderatedBy: row.moderatedBy,
       hasThumbnail: row.hasThumbnail,
       url: this.blobUrl(row.sha256, row.type),
       thumbnailUrl: row.hasThumbnail ? this.thumbnailUrl(row.sha256) : undefined,
@@ -250,11 +291,14 @@ export class BlossomCore {
     return this.deps.config.admin.owners.includes(pubkey);
   }
 
-  /** Any admin-panel role (incl. viewer) may view pending/blocked blobs. */
+  /**
+   * Any admin-panel role (incl. viewer) may view pending/blocked blobs. A banned or deny-listed user has no admin
+   * access (same rule as the admin API's role resolution), though the stored role is kept.
+   */
   async isStaff(pubkey: string, user?: UserRecord): Promise<boolean> {
     if (this.isConfigOwner(pubkey)) return true;
     const u = user ?? (await this.deps.stores.users.get(pubkey));
-    return !!u?.role;
+    return !!u?.role && u.status !== "banned" && !u.denied;
   }
 
   /** Throws 403 when the pubkey may not upload under the current `uploadAccess` setting. */
@@ -276,15 +320,21 @@ export class BlossomCore {
     }
   }
 
+  /**
+   * Bytes the pubkey may store (Infinity = unlimited). A per-user quota wins, and 0 there means no storage at all;
+   * without one (null) the default applies, where 0 means unlimited.
+   */
   async quotaFor(pubkey: string, user?: UserRecord): Promise<number> {
     const u = user ?? (await this.deps.stores.users.get(pubkey));
-    return u?.blossomQuota ?? this.settings.defaultQuotaBytes;
+    if (u?.blossomQuota != null) return Math.max(0, u.blossomQuota);
+    const fallback = this.settings.defaultQuotaBytes;
+    return fallback > 0 ? fallback : Infinity;
   }
 
-  /** Throws 413 when adding `size` bytes would exceed the pubkey's quota (0 = unlimited). */
+  /** Throws 413 when adding `size` bytes would exceed the pubkey's quota. */
   async assertQuota(pubkey: string, size: number, user?: UserRecord): Promise<void> {
     const quota = await this.quotaFor(pubkey, user);
-    if (!quota || quota <= 0) return;
+    if (quota === Infinity) return;
     const { bytes } = await this.repo.usage(pubkey);
     if (bytes + size > quota) throw new BlossomError(413, `storage quota exceeded (${bytes}/${quota} bytes used)`);
   }
@@ -292,23 +342,31 @@ export class BlossomCore {
   /** Bytes the pubkey can still store (Infinity = unlimited quota). */
   async quotaRemaining(pubkey: string, user?: UserRecord): Promise<number> {
     const quota = await this.quotaFor(pubkey, user);
-    if (!quota || quota <= 0) return Infinity;
+    if (quota === Infinity) return Infinity;
     return Math.max(0, quota - (await this.repo.usage(pubkey)).bytes);
   }
 
-  async assertNotBlocked(sha256: string): Promise<void> {
-    if (await this.repo.isBlocked(sha256)) throw new BlossomError(403, "blob is blocked on this server");
+  async assertNotRefused(sha256: string): Promise<void> {
+    if (await this.isRefused(sha256)) throw new BlossomError(403, "blob is blocked on this server");
   }
 
-  /** Blocklisted, or moderated to "blocked" (the row's status). */
-  private async isRefused(sha256: string): Promise<boolean> {
-    return (await this.repo.isBlocked(sha256)) || (await this.repo.get(sha256))?.status === "blocked";
+  /**
+   * Blocklisted, moderated to "blocked" (the row's status), or bytes whose stripped form is one of those (a blocked
+   * stripped upload can't come back byte-identical, e.g. through a mirror, which never strips).
+   */
+  async isRefused(sha256: string): Promise<boolean> {
+    if ((await this.repo.isBlocked(sha256)) || (await this.repo.get(sha256))?.status === "blocked") return true;
+    const stripped = await this.repo.strippedTo(sha256);
+    return !!stripped && stripped !== sha256 && ((await this.repo.isBlocked(stripped)) || (await this.repo.get(stripped))?.status === "blocked");
   }
 
-  /** Status a purged blob was held back in (see `releaseOwnership`); a re-upload starts out in it. */
-  private async heldStatus(sha256: string): Promise<BlobStatus | undefined> {
-    const s = await this.deps.stores.kv.get<string>(HELD_STATUS_NS, sha256);
-    return s === "pending" || s === "blocked" ? s : undefined;
+  /** Status (and moderator) a purged blob was held back with (see `releaseOwnership`); a re-upload starts out in it. */
+  private async heldStatus(sha256: string): Promise<{ status: BlobStatus; by: string | null } | undefined> {
+    // older entries are the bare status string
+    const v = await this.deps.stores.kv.get<string | { status?: unknown; by?: unknown }>(HELD_STATUS_NS, sha256);
+    const s = typeof v === "string" ? v : v?.status;
+    const by = typeof v === "object" && typeof v?.by === "string" ? v.by : null;
+    return s === "pending" || s === "blocked" ? { status: s, by } : undefined;
   }
 
   assertAllowedType(type: string) {
@@ -317,12 +375,15 @@ export class BlossomCore {
 
   // ------------------------------------------------------------ ingest pipeline
 
+  /** Type from magic bytes; an SVG with an XML prolog (which file-type calls application/xml) is image/svg+xml. */
   async sniffType(data: Uint8Array): Promise<string | undefined> {
+    let mime: string | undefined;
     try {
-      return (await fileTypeFromBuffer(data))?.mime;
+      mime = (await fileTypeFromBuffer(data))?.mime;
     } catch {
       return undefined;
     }
+    return mime === "application/xml" && isSvgText(data) ? "image/svg+xml" : mime;
   }
 
   /** Sniffed type, else (unrecognised bytes) a declared text type only when the bytes are text. */
@@ -341,13 +402,14 @@ export class BlossomCore {
     // early quota check below has to wait for the strip: it counts the stored size and is skipped for a blob the
     // uploader already owns, and both depend on the stripped bytes.
     if (await this.isRefused(originalSha)) throw new BlossomError(403, "blob is blocked on this server");
+    await this.assertTokenCurrent(originalSha, input.pubkey, input.tokenCreatedAt);
     let type: string;
     const declared = input.preferDeclaredType ? normalizeMime(input.declaredType) : undefined;
     if (declared && declared !== DEFAULT_MIME) {
       // the declared type must not be a way around the allowlist: bytes recognised as something else have to be
-      // allowed too, and unrecognised bytes keep a declared type only when it's text and they are text
+      // allowed too, and text (incl. SVG, whatever it's labelled) keeps a declared type only when it's text too
       const sniffed = await this.sniffType(input.data);
-      if (sniffed) {
+      if (sniffed && sniffed !== "image/svg+xml") {
         type = declared;
         if (sniffed !== type) this.assertAllowedType(sniffed);
       } else type = typeOfUnrecognized(input.data, declared);
@@ -374,7 +436,11 @@ export class BlossomCore {
           storedType = res.type;
           this.assertAllowedType(storedType);
         }
-        if (sha256 !== originalSha && (await this.isRefused(sha256))) throw new BlossomError(403, "blob is blocked on this server");
+        if (sha256 !== originalSha) {
+          if (await this.isRefused(sha256)) throw new BlossomError(403, "blob is blocked on this server");
+          // the signer deleted the stored (stripped) blob: an old token for the original mustn't bring it back
+          await this.assertTokenCurrent(sha256, input.pubkey, input.tokenCreatedAt);
+        }
       }
     }
 
@@ -400,17 +466,13 @@ export class BlossomCore {
       const existing = await this.repo.get(sha256);
       // block()/delete({block}) take this lock too, so a block that landed while hooks ran (an admin, or the
       // hook itself) is seen here and the blob is never stored after being blocked
-      if (
-        existing?.status === "blocked" ||
-        (await this.repo.isBlocked(sha256)) ||
-        (sha256 !== originalSha && (await this.isRefused(originalSha)))
-      ) {
+      if ((await this.isRefused(sha256)) || (sha256 !== originalSha && (await this.isRefused(originalSha)))) {
         throw new BlossomError(403, "blob is blocked on this server");
       }
 
       let wroteNew = false;
       let fresh: BlobRow | undefined;
-      let held: BlobStatus | undefined;
+      let held: { status: BlobStatus; by: string | null } | undefined;
       if (existing) {
         if (!(await this.driver.has(sha256, { hidden: existing.status !== "approved" }))) {
           await this.driver.put(sha256, data, existing.type, { hidden: existing.status !== "approved" });
@@ -418,7 +480,7 @@ export class BlossomCore {
       } else {
         // deleting a blob held back for review and uploading it again doesn't skip the review
         held = await this.heldStatus(sha256);
-        const status: BlobStatus = held ?? (settings.requireApproval ? "pending" : "approved");
+        const status: BlobStatus = held?.status ?? (settings.requireApproval ? "pending" : "approved");
         const hidden = status !== "approved";
         await this.driver.put(sha256, data, storedType, { hidden });
         wroteNew = true;
@@ -434,7 +496,7 @@ export class BlossomCore {
             }
           }
         }
-        fresh = { sha256, size: data.byteLength, type: storedType, createdAt: now(), status, hasThumbnail };
+        fresh = { sha256, size: data.byteLength, type: storedType, createdAt: now(), status, moderatedBy: held?.by ?? null, hasThumbnail };
       }
 
       try {
@@ -453,9 +515,12 @@ export class BlossomCore {
             if (held) await this.deps.stores.kv.delete(HELD_STATUS_NS, sha256).catch((err) => this.log.warn("clearing held blob status failed", { sha256, error: String(err) }));
           } else row = existing!;
           await this.repo.addOwner(sha256, input.pubkey, at);
+          if (sha256 !== originalSha) await this.repo.addStripped(originalSha, sha256, at);
           this.deps.bus.emit("blob.uploaded", { sha256, size: row.size, type: row.type, pubkey: input.pubkey });
           const extra = sha256 !== originalSha ? [["ox", originalSha]] : [];
-          return { row, descriptor: this.descriptor(row, row.createdAt, extra), created };
+          // `uploaded` is this owner's upload time, as in their /list
+          const uploaded = (alreadyOwner && (await this.repo.ownedAt(sha256, input.pubkey))) || at;
+          return { row, descriptor: this.descriptor(row, uploaded, extra), created };
         });
       } catch (err) {
         // bytes stored for a blob that never got a row (quota refused, db error): don't leave orphans behind
@@ -473,6 +538,8 @@ export class BlossomCore {
   /** Removes record + data; the caller must hold the blob lock (`lockBlob`). */
   async purgeLocked(sha256: string, actor: string): Promise<void> {
     await this.repo.remove(sha256);
+    // its original → stored mappings only matter while the blob exists or one of the hashes is blocked
+    await this.repo.pruneStripped(sha256).catch((err) => this.log.warn("pruning stripped-hash mappings failed", { sha256, error: String(err) }));
     try {
       await this.driver.delete(sha256);
     } catch (err) {
@@ -484,15 +551,19 @@ export class BlossomCore {
   /**
    * Removes one owner; purges the blob when no owners remain. Returns true if ownership was removed.
    * A moderation decision outlives that purge, so deleting and re-uploading can't undo it: a blocked blob's hash
-   * goes on the blocklist (an admin can lift it there), and a pending one comes back pending.
+   * goes on the blocklist (an admin can lift it there), and a pending one comes back pending. The owner's upload
+   * tokens for the blob signed before `deletedAt` stop working: the delete token's created_at, so both sides are on
+   * the signer's own clock (a client running slow can re-sign right away); without a token (an admin removing a
+   * user's blobs) the server's clock minus the skew allowance.
    */
-  async releaseOwnership(sha256: string, pubkey: string, actor: string): Promise<boolean> {
+  async releaseOwnership(sha256: string, pubkey: string, actor: string, deletedAt?: number): Promise<boolean> {
     return this.blobLock.run(sha256, async () => {
       const removed = await this.repo.removeOwner(sha256, pubkey);
+      if (removed) await this.recordDeletion(sha256, pubkey, deletedAt ?? now() - CREATED_AT_SKEW);
       if (removed && (await this.repo.ownerCount(sha256)) === 0) {
-        const status = (await this.repo.get(sha256))?.status;
-        if (status === "blocked") await this.repo.block(sha256, "blocked by a moderator, then deleted by its owner", now());
-        else if (status && status !== "approved") await this.deps.stores.kv.set(HELD_STATUS_NS, sha256, status);
+        const row = await this.repo.get(sha256);
+        if (row?.status === "blocked") await this.repo.block(sha256, "blocked by a moderator, then deleted by its owner", now(), row.moderatedBy);
+        else if (row && row.status !== "approved") await this.deps.stores.kv.set(HELD_STATUS_NS, sha256, { status: row.status, by: row.moderatedBy });
         await this.purgeLocked(sha256, actor);
       }
       return removed;
@@ -500,11 +571,23 @@ export class BlossomCore {
   }
 }
 
-export type BlossomServiceImpl = BlossomService & {
+/** Who asked for an admin action, for the audit entry (the admin API passes the request's client IP). */
+interface ActionOpts {
+  ip?: string | null;
+}
+
+export type BlossomServiceImpl = Omit<BlossomService, "setStatus" | "delete" | "deleteByPubkey" | "block" | "unblock" | "blocklist"> & {
   readonly driver: BlobDriver;
   /** whether sharp is available (thumbnails / re-encoding) */
   readonly sharp: boolean;
-} & Required<Pick<BlossomService, "block" | "unblock" | "blocklist">>;
+  setStatus(sha256: string, status: BlobStatus, actor: string, opts?: ActionOpts): Promise<void>;
+  /** Removes blob data + record; when `block` true adds hash to blocklist so it can't be re-uploaded. */
+  delete(sha256: string, actor: string, opts?: ActionOpts & { block?: boolean }): Promise<void>;
+  deleteByPubkey(pubkey: string, actor: string, opts?: ActionOpts): Promise<number>;
+  block(sha256: string, reason: string, actor: string, opts?: ActionOpts): Promise<void>;
+  unblock(sha256: string, actor: string, opts?: ActionOpts): Promise<boolean>;
+  blocklist: NonNullable<BlossomService["blocklist"]>;
+};
 
 export async function buildService(deps: CoreDeps, options: BlossomOptions, createApp: (core: BlossomCore) => BlossomService["app"]): Promise<BlossomServiceImpl> {
   const blossomLog = deps.logger.child("blossom");
@@ -513,9 +596,15 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
   const core = new BlossomCore(deps, driver, images, options);
   await core.repo.migrate();
   void core.pruneUsedDeleteTokens();
+  void core.pruneDeletions();
   if (!images.sharp) core.log.info("sharp not available: thumbnails disabled, using pure-js EXIF stripping");
-  const audit = (actor: string, action: string, target: string, details: Record<string, unknown> = {}) =>
-    deps.stores.audit.record({ actor, action, target, details, ip: null }).catch((err) => core.log.warn("audit failed", { error: String(err) }));
+  /** Audit entry + bus "admin.action", like the admin API's own audit helper. */
+  const audit = async (actor: string, action: string, target: string, details: Record<string, unknown> = {}, opts?: ActionOpts) => {
+    const at = now();
+    const ip = opts?.ip ?? null;
+    await deps.stores.audit.record({ actor, action, target, details, ip, at }).catch((err) => core.log.warn("audit failed", { error: String(err) }));
+    deps.bus.emit("admin.action", { entry: { at, actor, action, target, details, ip } });
+  };
 
   const withOwners = async (rows: BlobRow[]) => {
     const owners = await core.repo.owners(rows.map((r) => r.sha256));
@@ -543,37 +632,43 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
       const hidden = row.status !== "approved";
       const obj = opts?.thumbnail ? await driver.getThumbnail(sha256, { hidden }) : await driver.get(sha256, undefined, { hidden });
       if (!obj) return undefined;
-      return { body: obj.body, size: obj.size, type: opts?.thumbnail ? "image/webp" : row.type };
+      // the Content-Type to serve it with (admin previews come from the admin origin): JavaScript as text/plain
+      return { body: obj.body, size: obj.size, type: opts?.thumbnail ? "image/webp" : servedType(row.type) };
     },
 
-    async setStatus(sha256: string, status: BlobStatus, actor: string) {
+    async setStatus(sha256, status, actor, opts) {
       await core.lockBlob(sha256, async () => {
         const row = await core.repo.get(sha256);
         if (!row) throw new Error(`blob ${sha256} not found`);
         // public object storage: move the bytes out of (or back into) public reach before the status flips
         await driver.setHidden?.(sha256, status !== "approved", { hasThumbnail: row.hasThumbnail });
-        if (!(await core.repo.setStatus(sha256, status))) throw new Error(`blob ${sha256} not found`);
+        if (!(await core.repo.setStatus(sha256, status, actor))) throw new Error(`blob ${sha256} not found`);
       });
-      await audit(actor, "blob.status", sha256, { status });
+      await audit(actor, "blob.status", sha256, { status }, opts);
     },
 
     async delete(sha256, actor, opts) {
       // under the blob lock: an in-flight first upload of this sha can't slip its row/bytes in between
       const row = await core.lockBlob(sha256, async () => {
         const row = await core.repo.get(sha256);
-        if (opts?.block) await core.repo.block(sha256, "deleted by admin", now());
-        if (row) await core.purgeLocked(sha256, actor);
-        else await driver.delete(sha256).catch(() => {});
+        if (opts?.block) await core.repo.block(sha256, "deleted by admin", now(), actor);
+        if (row) {
+          // the owners' existing upload tokens mustn't put it back (a token signed within the clock-skew allowance
+          // before now still works, so an owner re-signing right away isn't refused over a second of drift)
+          const at = now() - CREATED_AT_SKEW;
+          for (const pubkey of (await core.repo.owners([sha256])).get(sha256) ?? []) await core.recordDeletion(sha256, pubkey, at);
+          await core.purgeLocked(sha256, actor);
+        } else await driver.delete(sha256).catch(() => {});
         return row;
       });
-      await audit(actor, opts?.block ? "blob.block" : "blob.delete", sha256, { size: row?.size, type: row?.type, block: !!opts?.block });
+      await audit(actor, opts?.block ? "blob.block" : "blob.delete", sha256, { size: row?.size, type: row?.type, block: !!opts?.block }, opts);
     },
 
-    async deleteByPubkey(pubkey, actor) {
+    async deleteByPubkey(pubkey, actor, opts) {
       const shas = await core.repo.shasOwnedBy(pubkey);
       let n = 0;
       for (const sha of shas) if (await core.releaseOwnership(sha, pubkey, actor)) n++;
-      if (n) await audit(actor, "blob.deleteByPubkey", pubkey, { count: n });
+      if (n) await audit(actor, "blob.deleteByPubkey", pubkey, { count: n }, opts);
       return n;
     },
 
@@ -596,17 +691,18 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
       return { count, bytes, byType: [...groups.values()].sort((a, b) => b.bytes - a.bytes) };
     },
 
-    async block(sha256, reason, actor) {
+    async block(sha256, reason, actor, opts) {
       await core.lockBlob(sha256, async () => {
-        await core.repo.block(sha256, reason, now());
+        await core.repo.block(sha256, reason, now(), actor);
         if (await core.repo.get(sha256)) await core.purgeLocked(sha256, actor);
       });
-      await audit(actor, "blob.block", sha256, { reason });
+      await audit(actor, "blob.block", sha256, { reason }, opts);
     },
 
-    async unblock(sha256, actor) {
+    async unblock(sha256, actor, opts) {
       const ok = await core.repo.unblock(sha256);
-      if (ok) await audit(actor, "blob.unblock", sha256);
+      if (ok) await core.repo.pruneStripped(sha256).catch((err) => core.log.warn("pruning stripped-hash mappings failed", { sha256, error: String(err) }));
+      if (ok) await audit(actor, "blob.unblock", sha256, {}, opts);
       return ok;
     },
 

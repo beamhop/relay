@@ -6,6 +6,7 @@ import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 import { queryClient } from "@/queries/client";
 import { onUnauthorized } from "@/lib/api";
+import { resetPluginUis } from "@/plugins/loader";
 import { ThemeProvider } from "@/lib/theme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -33,10 +34,20 @@ declare module "@tanstack/react-router" {
   }
 }
 
+let leaving = false;
 onUnauthorized(() => {
-  if (router.state.location.pathname === "/login") return;
+  if (leaving || router.state.location.pathname === "/login") return;
+  leaving = true;
   queryClient.removeQueries({ queryKey: ["me"] });
-  router.navigate({ to: "/login", search: { redirect: router.state.location.pathname } });
+  // the next sign-in may be another admin with fewer permissions: drop everything this session loaded (cached
+  // responses, plugin UIs) once the app shell has unmounted, so mounted queries don't refetch into more 401s
+  router
+    .navigate({ to: "/login", search: { redirect: router.state.location.pathname } })
+    .finally(() => {
+      queryClient.clear();
+      resetPluginUis();
+      leaving = false;
+    });
 });
 
 createRoot(document.getElementById("root")!).render(

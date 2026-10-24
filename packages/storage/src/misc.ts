@@ -141,6 +141,14 @@ export class SqlKvStore implements KvStore {
     );
   }
 
+  async setIfAbsent(namespace: string, key: string, value: unknown): Promise<boolean> {
+    const r = await this.db.run(
+      "INSERT INTO kv (namespace, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (namespace, key) DO NOTHING",
+      [namespace, key, JSON.stringify(value ?? null), nowSec()],
+    );
+    return r.changes === 1;
+  }
+
   async delete(namespace: string, key: string): Promise<void> {
     await this.db.run("DELETE FROM kv WHERE namespace = ? AND key = ?", [namespace, key]);
   }

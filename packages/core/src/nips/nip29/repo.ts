@@ -1,6 +1,6 @@
 import type { Db, Migration } from "@beamhop/sdk";
 
-export const GROUP_MIGRATIONS: Migration[] = [
+const GROUP_MIGRATIONS: Migration[] = [
   {
     id: "001_groups",
     up: `

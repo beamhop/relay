@@ -2,6 +2,13 @@ import type { Db, Migration } from "@beamhop/sdk";
 
 export const NAMESPACE = "storage";
 
+/*
+ * Two columns are written but never read: event_tags.created_at (also part of event_tags_lookup_idx) and
+ * deleted_events.deletion_id. They are kept on purpose: dropping them means rewriting event_tags — the largest
+ * table — on SQLite (DROP COLUMN copies every row, and the index must go first) and rebuilding the lookup index
+ * under a write lock on Postgres, a long outage on a big relay for a few bytes per row.
+ */
+
 const eventsSqlite = `
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY,
@@ -160,6 +167,10 @@ INSERT INTO events_fts(events_fts) VALUES ('rebuild');
 
 export const FTS_MIGRATION_ID = "002_events_fts";
 
+/** "Unlimited" as a per-user quota: Number.MAX_SAFE_INTEGER bytes (fits postgres BIGINT and a JS number exactly). */
+export const UNLIMITED_QUOTA_BYTES = Number.MAX_SAFE_INTEGER;
+export const BLOSSOM_QUOTA_ZERO_MIGRATION_ID = "003_blossom_quota_zero_unlimited";
+
 export function storageMigrations(withFts: boolean): Migration[] {
   const list: Migration[] = [
     {
@@ -173,6 +184,10 @@ export function storageMigrations(withFts: boolean): Migration[] {
   // Postgres full-text search lives in 001 (generated tsvector column); the sqlite FTS5
   // migration is only offered when the sqlite build supports FTS5 (applied later if it becomes available).
   if (withFts) list.push({ id: FTS_MIGRATION_ID, up: { sqlite: ftsSqlite, postgres: "SELECT 1" } });
+  // A per-user blossom_quota of 0 used to mean "unlimited"; Blossom now reads it as "no uploads at all". Rows written
+  // under the old meaning become an explicit (effectively unlimited) quota so upgraded relays keep their behaviour.
+  // Runs once: a 0 set after the upgrade keeps its new meaning.
+  list.push({ id: BLOSSOM_QUOTA_ZERO_MIGRATION_ID, up: `UPDATE users SET blossom_quota = ${UNLIMITED_QUOTA_BYTES} WHERE blossom_quota = 0` });
   return list;
 }
 

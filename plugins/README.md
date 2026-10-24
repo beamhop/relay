@@ -98,6 +98,10 @@ If `setup()` throws, the plugin is marked **error** and the error message is sho
 Settings are defined by a zod (v4) schema. The admin panel renders it as a form, using the JSON Schema produced by `z.toJSONSchema`.
 Settings are validated on save, stored in the key-value store under `plugins/settings:<name>`, and delivered to `onChange` listeners.
 Use `.default()` on every field so that a freshly enabled plugin starts with valid settings.
+Mark credentials with `.meta({ format: "password" })` (or `writeOnly: true` / `"x-secret": true`). Marked fields — also inside
+`.nullable()`, unions and shared definitions — and fields whose name looks like a credential (`apiKey`, `smtpPassword`, …;
+an `…Auth` field only when its value looks like one, e.g. `proxyAuth: "user:pass"`, not `uploadAuth: "required"`) are
+masked for admins without `plugins.manage` and in the audit log.
 
 ### Migrations
 
@@ -174,4 +178,5 @@ mark those modules as `--external`. The shim approach works regardless.)
 - Name the package `beamhop-plugin-<name>` (or `@you/beamhop-plugin-<name>`) and add the keyword `beamhop-plugin`.
 - Put `@beamhop/sdk` and `zod` in `peerDependencies`, or in `devDependencies` if you only use types.
 - Ship compiled JS plus `dist/ui.js`.
-- Users install your package next to beamhop. It is discovered automatically and then enabled in the panel.
+- Users install your package next to beamhop and list it in `plugins.packages` / `BEAMHOP_PLUGINS` (npm auto-discovery
+  of `beamhop-plugin-*` packages is off unless they set `plugins.autoDiscoverNpm`), then enable it in the panel.

@@ -4,12 +4,12 @@ import { getTag, nowSec } from "@beamhop/sdk";
 import type { Verifier } from "../pipeline/verify";
 import { validateEventShape } from "../protocol/messages";
 
-export const HTTP_AUTH_KIND = 27235;
-export const HTTP_AUTH_WINDOW_SEC = 60;
+const HTTP_AUTH_KIND = 27235;
+const HTTP_AUTH_WINDOW_SEC = 60;
 
 export type Nip98Result = { ok: true; pubkey: string } | { ok: false; status: 401 | 403 | 503; error: string };
 /** Live replay-cache entries; when full of unexpired ids new requests are refused rather than old ids forgotten. */
-export const NIP98_REPLAY_CAP = 50_000;
+const NIP98_REPLAY_CAP = 50_000;
 const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
 /**

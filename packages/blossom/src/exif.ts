@@ -1,8 +1,9 @@
 /**
  * Pure-JS metadata strippers (no native deps). They remove privacy-sensitive metadata segments
  * losslessly without touching the image data:
- * - JPEG: APP1 (Exif / XMP), APP13 (Photoshop IRB / IPTC) and COM segments. ICC (APP2), JFIF (APP0)
- *   and Adobe (APP14) segments are kept. A non-default EXIF orientation is carried over into a minimal
+ * - JPEG: APP1 (Exif / XMP), APP13 (Photoshop IRB / IPTC) and COM segments, plus everything after the primary
+ *   image's EOI (MPF/MPO secondary images carry their own EXIF) and then the MPF index (APP2). ICC (APP2), JFIF
+ *   (APP0) and Adobe (APP14) segments are kept. A non-default EXIF orientation is carried over into a minimal
  *   APP1 holding only that tag, so the photo still displays upright.
  * - PNG: eXIf, tEXt, zTXt, iTXt and tIME chunks.
  * - WebP: EXIF and XMP chunks (VP8X flags and RIFF size are updated).
@@ -101,41 +102,125 @@ function orientationSegment(orientation: number): Uint8Array {
   return out;
 }
 
-export function stripJpegMetadata(data: Uint8Array): StripResult {
-  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return unchanged(data);
-  const drops: number[] = [];
+const MPF_HEADER = [0x4d, 0x50, 0x46, 0x00]; // "MPF\0"
+
+interface JpegScan {
+  /** header ranges to drop (fill bytes, metadata segments) */
+  drops: number[];
+  /** whether a metadata segment (EXIF/XMP, IPTC, comment) was found */
+  metadata: boolean;
+  /** a minimal APP1 carrying a non-default EXIF orientation */
+  orientation?: { at: number; bytes: Uint8Array };
+  /** [start, end) of an APP2 MPF segment (the index of images appended after the primary EOI) */
+  mpf?: [number, number];
+  /** offset just past the primary image's EOI; -1 when the image is truncated or the scan data malformed */
+  end: number;
+}
+
+/** Walks the header segments of a JPEG and finds where its primary image ends; undefined when malformed. */
+function scanJpeg(data: Uint8Array): JpegScan | undefined {
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return undefined;
+  const scan: JpegScan = { drops: [], metadata: false, end: -1 };
   let i = 2;
-  let stripped = false;
-  let orientation: { at: number; bytes: Uint8Array } | undefined;
   for (let n = 0; i < data.length; n++) {
-    if (data[i] !== 0xff || n >= MAX_JPEG_SEGMENTS) return unchanged(data);
+    if (data[i] !== 0xff || n >= MAX_JPEG_SEGMENTS) return undefined;
     // skip fill bytes (not copied)
     let j = i + 1;
     while (j < data.length && data[j] === 0xff) j++;
-    if (j >= data.length) return unchanged(data);
+    if (j >= data.length) return undefined;
     const marker = data[j];
     const segStart = j - 1;
-    if (segStart > i) drop(drops, i, segStart);
-    // start of scan / end of image: the remainder is kept verbatim
-    if (marker === 0xda || marker === 0xd9) break;
+    if (segStart > i) drop(scan.drops, i, segStart);
+    if (marker === 0xd9) {
+      scan.end = j + 1;
+      break;
+    }
+    if (marker === 0xda) {
+      scan.end = primaryEnd(data, segStart);
+      break;
+    }
     // standalone RST/TEM markers belong inside entropy-coded data, never between header segments
-    if ((marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) return unchanged(data);
-    if (j + 2 >= data.length) return unchanged(data);
+    if ((marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) return undefined;
+    if (j + 2 >= data.length) return undefined;
     const len = (data[j + 1] << 8) | data[j + 2];
     const end = j + 1 + len;
-    if (len < 2 || end > data.length) return unchanged(data);
+    if (len < 2 || end > data.length) return undefined;
     if (JPEG_STRIP_MARKERS.has(marker)) {
-      stripped = true;
-      drop(drops, segStart, end);
-      if (marker === 0xe1 && !orientation) {
+      scan.metadata = true;
+      drop(scan.drops, segStart, end);
+      if (marker === 0xe1 && !scan.orientation) {
         const o = exifOrientation(data.subarray(j + 3, end));
         // keep it where the EXIF segment was (right after SOI/APP0, before the frame header)
-        if (o && o !== 1) orientation = { at: segStart, bytes: orientationSegment(o) };
+        if (o && o !== 1) scan.orientation = { at: segStart, bytes: orientationSegment(o) };
       }
+    } else if (marker === 0xe2 && !scan.mpf && len >= 6 && MPF_HEADER.every((b, k) => data[j + 3 + k] === b)) {
+      scan.mpf = [segStart, end];
     }
     i = end;
   }
-  return stripped ? { data: excise(data, drops, data.length, orientation), stripped } : unchanged(data);
+  return scan;
+}
+
+/**
+ * Offset just past the EOI of the image whose first SOS marker is at `sos`: entropy-coded data runs until a marker
+ * other than byte stuffing (FF00) or a restart (RSTn); progressive scans are separated by length-delimited segments
+ * (DHT, SOS, …). -1 when it never ends (truncated) or is malformed. One pass, no allocation.
+ */
+function primaryEnd(data: Uint8Array, sos: number): number {
+  let i = sos;
+  for (let n = 0; n < MAX_JPEG_SEGMENTS; n++) {
+    // i: the FF of a length-delimited segment
+    if (i + 3 >= data.length) return -1;
+    const marker = data[i + 1];
+    const len = (data[i + 2] << 8) | data[i + 3];
+    let j = i + 2 + len;
+    if (len < 2 || j > data.length) return -1;
+    if (marker === 0xda) {
+      for (;;) {
+        j = data.indexOf(0xff, j);
+        if (j < 0 || j + 1 >= data.length) return -1;
+        const next = data[j + 1];
+        if (next === 0x00 || (next >= 0xd0 && next <= 0xd7) || next === 0xff) j++;
+        else break;
+      }
+    }
+    while (j + 1 < data.length && data[j] === 0xff && data[j + 1] === 0xff) j++; // fill bytes before a marker
+    if (data[j] !== 0xff || j + 1 >= data.length) return -1;
+    const next = data[j + 1];
+    if (next === 0xd9) return j + 2;
+    if ((next >= 0xd0 && next <= 0xd7) || next === 0x01 || next === 0xd8 || next === 0x00) return -1;
+    i = j;
+  }
+  return -1;
+}
+
+/** Whether a JPEG carries data after its primary image (MPF/MPO secondary images, vendor trailers). */
+export function jpegHasTrailer(data: Uint8Array): boolean {
+  const scan = scanJpeg(data);
+  return !!scan && scan.end > 0 && scan.end < data.length;
+}
+
+/**
+ * Anything after the primary image's EOI is dropped too: MPF/MPO secondary images (previews, stereo pairs, depth or
+ * HDR gain maps) carry their own EXIF, often with GPS. The primary's MPF index then points nowhere, so it goes too.
+ */
+export function stripJpegMetadata(data: Uint8Array): StripResult {
+  const scan = scanJpeg(data);
+  if (!scan) return unchanged(data);
+  const { orientation, mpf, end } = scan;
+  let drops = scan.drops;
+  if (end > 0 && end < data.length) {
+    if (mpf) {
+      // merge the MPF segment into the (ascending) header drops; it overlaps none of them
+      const pairs: [number, number][] = [mpf];
+      for (let k = 0; k < drops.length; k += 2) pairs.push([drops[k], drops[k + 1]]);
+      pairs.sort((a, b) => a[0] - b[0]);
+      drops = [];
+      for (const [from, to] of pairs) drop(drops, from, to);
+    }
+    drop(drops, end, data.length);
+  } else if (!scan.metadata) return unchanged(data);
+  return { data: excise(data, drops, data.length, orientation), stripped: true };
 }
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];

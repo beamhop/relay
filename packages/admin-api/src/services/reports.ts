@@ -7,6 +7,10 @@ import type { Actor, UserService } from "./users";
 const REPORT_KIND = 1984;
 /** max number of recent reports considered for listing/filtering */
 const WINDOW = 5000;
+/** report types are short NIP-56 words; longer values (reporter-controlled) are cut */
+export const MAX_REPORT_TYPE = 32;
+/** reports loaded to count open reports per target when building views */
+const RELATED_LIMIT = 10_000;
 
 export interface ParsedReport {
   targetPubkey: string;
@@ -26,7 +30,7 @@ function parseReport(ev: NostrEvent): ParsedReport {
   const p = ev.tags.find((t) => t[0] === "p" && t[1]);
   const e = ev.tags.find((t) => t[0] === "e" && t[1]);
   const x = ev.tags.find((t) => t[0] === "x" && t[1]);
-  const type = (e?.[2] || x?.[2] || p?.[2] || "other").toLowerCase();
+  const type = (e?.[2] || x?.[2] || p?.[2] || "other").slice(0, MAX_REPORT_TYPE).toLowerCase();
   return { targetPubkey: p?.[1] ?? "", targetEventId: e?.[1], targetBlob: x?.[1], type };
 }
 
@@ -118,11 +122,12 @@ export class ReportService {
     return (await this.views([ev]))[0];
   }
 
-  async view(ev: NostrEvent): Promise<ReportView> {
-    return (await this.views([ev]))[0];
+  /** `relatedLimit`: reports loaded to compute `relatedCount` (0 skips it: the count is then 0) */
+  async view(ev: NostrEvent, opts: { relatedLimit?: number } = {}): Promise<ReportView> {
+    return (await this.views([ev], undefined, opts))[0];
   }
 
-  async views(events: NostrEvent[], known?: Map<string, StatusRow>): Promise<ReportView[]> {
+  async views(events: NostrEvent[], known?: Map<string, StatusRow>, opts: { relatedLimit?: number } = {}): Promise<ReportView[]> {
     if (!events.length) return [];
     const statuses = known ?? (await this.statuses(events.map((e) => e.id)));
     const parsed = events.map(parseReport);
@@ -136,7 +141,7 @@ export class ReportService {
       subjectOf(p, p.targetEventId ? targets.get(p.targetEventId)?.pubkey : undefined, p.targetBlob ? blobs.get(p.targetBlob) : undefined),
     );
     const profiles = await this.profiles.getMany([...events.map((e) => e.pubkey), ...subjects.flatMap((s) => [s.pubkey, s.claimed ?? ""])]);
-    const related = await this.relatedCounts(parsed);
+    const related = await this.relatedCounts(parsed, opts.relatedLimit ?? RELATED_LIMIT);
     return events.map((ev, i) => {
       const p = parsed[i];
       const s = subjects[i];
@@ -207,7 +212,8 @@ export class ReportService {
   }
 
   /** count of open reports per target key */
-  private async relatedCounts(parsed: ParsedReport[]): Promise<Map<string, number>> {
+  private async relatedCounts(parsed: ParsedReport[], limit: number): Promise<Map<string, number>> {
+    if (limit <= 0) return new Map();
     const e = new Set<string>();
     const x = new Set<string>();
     const p = new Set<string>();
@@ -222,7 +228,7 @@ export class ReportService {
     if (p.size) filters.push({ kinds: [REPORT_KIND], "#p": [...p] });
     const counts = new Map<string, number>();
     if (!filters.length) return counts;
-    const reports = await this.deps.stores.events.query(filters, { maxLimit: 10_000 });
+    const reports = await this.deps.stores.events.query(filters, { maxLimit: limit });
     const statuses = await this.statuses(reports.map((r) => r.id));
     for (const r of reports) {
       if ((statuses.get(r.id)?.status ?? "open") !== "open") continue;
@@ -233,8 +239,8 @@ export class ReportService {
     return counts;
   }
 
-  /** Applies a resolution action. Caller is responsible for permission checks & auditing. */
-  async resolve(id: string, req: ResolveReportRequest, actor: Actor): Promise<{ report: ReportView; effects: Record<string, unknown> }> {
+  /** Applies a resolution action. Caller is responsible for permission checks & auditing. `ip`: the client's, for Blossom's audit entry. */
+  async resolve(id: string, req: ResolveReportRequest, actor: Actor, ip: string | null = null): Promise<{ report: ReportView; effects: Record<string, unknown> }> {
     const ev = await this.deps.stores.events.getById(id);
     if (!ev || ev.kind !== REPORT_KIND) throw notFound("report not found");
     const p = parseReport(ev);
@@ -255,6 +261,9 @@ export class ReportService {
     if (req.action === "delete-media") {
       if (!p.targetBlob) throw badRequest("report has no target blob");
       if (!this.deps.blossom) throw notFound("blossom disabled", "blossom_disabled");
+      // anyone can file a report naming any blob: deleting it follows the ranks against its uploaders
+      const blob = (await this.blobs([p.targetBlob])).get(p.targetBlob);
+      if (blob) await this.users.assertCanModerateBlob(actor, blob);
     }
 
     if (wantsDelete && p.targetEventId) {
@@ -268,7 +277,7 @@ export class ReportService {
       if (subject.claimed) effects.claimedPubkey = subject.claimed;
     }
     if (req.action === "delete-media" && p.targetBlob && this.deps.blossom) {
-      await this.deps.blossom.delete(p.targetBlob, actor.pubkey, { block: true });
+      await this.deps.blossom.delete(p.targetBlob, actor.pubkey, { block: true, ip });
       effects.deletedBlob = p.targetBlob;
     }
     await this.setStatus(id, req.action === "dismiss" ? "dismissed" : "resolved", req.action, actor.pubkey, req.note);

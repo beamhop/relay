@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, BellOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Plus, ShieldCheck, Sun, Trash2 } from "lucide-react";
+import { Bell, BellOff, EyeOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Plus, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { PushTopic } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PageHeader } from "@/components/page-header";
 import { UserAvatar } from "@/components/user-avatar";
@@ -23,6 +24,7 @@ import { api, enc, errorMessage, HttpError } from "@/lib/api";
 import { registerPasskey } from "@/lib/auth";
 import { currentSubscription, pushSupported, storedTopics, subscribePush, unsubscribePush } from "@/lib/push";
 import { useTheme, type Theme } from "@/lib/theme";
+import { remoteMediaPref, useBoolPref, WORLD_MAP_TILE_HOST, worldMapPref } from "@/lib/prefs";
 import { displayName, toNpub } from "@/lib/nostr";
 import { timeAgo } from "@/lib/format";
 
@@ -60,6 +62,7 @@ function AccountPage() {
         <TotpCard hasPassword={me.hasPassword} enabled={me.hasTotp} />
         <PasskeysCard passkeys={me.passkeys} hasPassword={me.hasPassword} />
         <PushCard />
+        <PrivacyCard />
         <ThemeCard />
       </div>
     </div>
@@ -428,7 +431,7 @@ function defaultPasskeyName() {
 
 const TOPICS: { key: PushTopic; label: string; hint: string }[] = [
   { key: "reports", label: "New reports", hint: "When a user files a report" },
-  { key: "alerts", label: "System alerts", hint: "High load, errors, plugin failures" },
+  { key: "alerts", label: "System alerts", hint: "Rejection spikes, memory and event-loop pressure, auto-bans, word-filter flags" },
 ];
 
 function PushCard() {
@@ -506,6 +509,44 @@ function PushCard() {
         </CardFooter>
       )}
     </Card>
+  );
+}
+
+/** Third-party fetches the panel makes only after an explicit opt-in, per browser. */
+function PrivacyCard() {
+  const [remote, setRemote] = useBoolPref(remoteMediaPref);
+  const [map, setMap] = useBoolPref(worldMapPref);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <EyeOff className="size-4" /> Privacy
+        </CardTitle>
+        <CardDescription>Stored on this device. Every remote fetch shows the other server your IP address and when you looked.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <PrefRow
+          label="Load remote images and video"
+          hint="Profile pictures, banners and note media hosted elsewhere. Off: generated avatars, and media loads only when you click it. Media on this relay always loads; reported media never loads on its own."
+          checked={remote}
+          onChange={setRemote}
+        />
+        <PrefRow label={`Load world map tiles from ${WORLD_MAP_TILE_HOST}`} hint="Draws the dashboard map (needs a GeoIP database)." checked={map} onChange={setMap} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function PrefRow({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+  const id = React.useId();
+  return (
+    <label htmlFor={id} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3">
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-xs text-muted-foreground">{hint}</span>
+      </span>
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+    </label>
   );
 }
 

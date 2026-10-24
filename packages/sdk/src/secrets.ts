@@ -20,7 +20,11 @@ function keyWords(key: string): string[] {
 /** Substrings that name a credential wherever they appear in the joined key (`relayNsecHex`, `smtpPassword`). */
 const SECRET_SUBSTRINGS = ["secret", "passw", "passphrase", "passcode", "pwd", "nsec", "mnemonic", "credential", "authorization", "apikey", "accesskey", "authtoken", "authheader", "basicauth", "privkey", "privatekey", "recoveryphrase", "recoverycode", "backupcode", "connectionstring", "webhook"];
 /** Whole words that name a credential on their own. */
-const SECRET_WORDS = new Set(["priv", "pem", "dsn", "pin", "sk", "cookie", "bearer", "nwc", "jwt", "otp", "totp", "hmac", "salt", "pepper", "pat"]);
+const SECRET_WORDS = new Set(["priv", "pem", "dsn", "pin", "sk", "cookie", "bearer", "nwc", "jwt", "otp", "totp", "hmac", "salt", "pepper", "pat", "cred", "creds", "pw"]);
+/** Words before a trailing `auth` that make it a plain switch whatever its value (`requireAuth`, `nip42Auth`). */
+const AUTH_FLAG_BEFORE = new Set(["require", "requires", "required", "enable", "enabled", "disable", "disabled", "use", "no", "skip", "allow", "force", "need", "needs", "with", "without", "has", "is", "nip"]);
+/** Words after `auth` that make it hold the credential itself (`authValue`, `authString`). */
+const AUTH_VALUE_NEXT = new Set(["value", "string", "pair", "data"]);
 /** Words after a secret word that describe it rather than hold it (`cookieName`, `cookieSameSite`). */
 const SECRET_WORD_META = new Set(["name", "domain", "path", "same", "secure", "http", "prefix", "relay", "relays"]);
 /** Words after `key` that describe the key rather than hold it (`keyName`, `apiKeyHeader`, `keyPath`). */
@@ -65,6 +69,8 @@ export function isSecretKeyName(key: string): boolean {
     const next = words[i + 1];
     const prev = words[i - 1];
     if (SECRET_WORDS.has(w) && !(next && SECRET_WORD_META.has(next))) return true;
+    // `authValue`, `authString` hold the credential itself (a trailing `…Auth` depends on its value: isAuthSlotName)
+    if (w === "auth" && next && AUTH_VALUE_NEXT.has(next)) return true;
     if (w === "token" || (w.endsWith("token") && w.length > 5 && i === words.length - 1)) {
       if (!next || !TOKEN_COUNTISH.has(next)) return true;
     }
@@ -108,4 +114,109 @@ export function looksLikeSecretValue(v: string): boolean {
   if (/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(v)) return true;
   if (SECRET_SHAPES.some((re) => re.test(v))) return true;
   return SECRET_PARAM.test(v);
+}
+
+/**
+ * `proxyAuth`, `upstreamAuth`, `httpAuth`: a trailing `auth` names either a credential (`"user:pass"`, a token) or a
+ * switch (`uploadAuth: "required"`, `readAuth: "members"`), so the name alone doesn't decide — see looksLikeAuthCredential.
+ */
+export function isAuthSlotName(key: string): boolean {
+  const words = keyWords(key);
+  const last = words.length - 1;
+  return last >= 1 && words[last] === "auth" && !AUTH_FLAG_BEFORE.has(words[last - 1]);
+}
+
+/** A value under an `…Auth` key that is a credential: `user:pass`, a credential-shaped string, or a long random token. */
+export function looksLikeAuthCredential(v: string): boolean {
+  if (looksLikeSecretValue(v) || v.includes(":")) return true;
+  return v.length >= 16 && !/\s/.test(v) && /\d/.test(v) && /[A-Za-z]/.test(v);
+}
+
+type SchemaNode = Record<string, unknown>;
+const isSchemaNode = (v: unknown): v is SchemaNode => !!v && typeof v === "object" && !Array.isArray(v);
+/** `format: "password"`, `writeOnly` or `x-secret` marks a settings field as a credential. */
+const isSecretNode = (n: SchemaNode) => n.format === "password" || n.writeOnly === true || n["x-secret"] === true;
+
+/** Resolves a local `$ref` (`#`, `#/$defs/x`, `#/definitions/x`) against the root schema. */
+function resolveRef(root: SchemaNode, ref: string): SchemaNode | undefined {
+  if (ref === "#") return root;
+  if (!ref.startsWith("#/")) return undefined;
+  let cur: unknown = root;
+  for (const raw of ref.slice(2).split("/")) {
+    let seg: string;
+    try {
+      seg = decodeURIComponent(raw).replace(/~1/g, "/").replace(/~0/g, "~");
+    } catch {
+      return undefined;
+    }
+    if (!cur || typeof cur !== "object" || !Object.hasOwn(cur, seg)) return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return isSchemaNode(cur) ? cur : undefined;
+}
+
+/** Every schema node that applies at one position: `$ref`s followed, `anyOf` / `oneOf` / `allOf` branches flattened. */
+function expandNodes(root: SchemaNode, nodes: unknown[]): SchemaNode[] {
+  const out: SchemaNode[] = [];
+  const seen = new Set<SchemaNode>();
+  const visit = (n: unknown) => {
+    if (!isSchemaNode(n) || seen.has(n)) return;
+    seen.add(n);
+    out.push(n);
+    if (typeof n.$ref === "string") visit(resolveRef(root, n.$ref));
+    for (const k of ["anyOf", "oneOf", "allOf"]) {
+      const branches = n[k];
+      if (Array.isArray(branches)) for (const b of branches) visit(b);
+    }
+  };
+  for (const n of nodes) visit(n);
+  return out;
+}
+
+/** Schemas of object member `key`: `properties[key]`, else `additionalProperties`. */
+function memberNodes(nodes: SchemaNode[], key: string): unknown[] {
+  const out: unknown[] = [];
+  for (const n of nodes) {
+    const props = n.properties;
+    if (isSchemaNode(props) && Object.hasOwn(props, key)) out.push(props[key]);
+    else if (isSchemaNode(n.additionalProperties)) out.push(n.additionalProperties);
+  }
+  return out;
+}
+
+/** Schemas of array element `index`: `prefixItems` / tuple `items` first, then `items` / `additionalItems`. */
+function elementNodes(nodes: SchemaNode[], index: number): unknown[] {
+  const out: unknown[] = [];
+  for (const n of nodes) {
+    if (Array.isArray(n.prefixItems) && index < n.prefixItems.length) out.push(n.prefixItems[index]);
+    else if (Array.isArray(n.items)) out.push(index < n.items.length ? n.items[index] : n.additionalItems);
+    else out.push(n.items);
+  }
+  return out;
+}
+
+/**
+ * Deep copy of `value` (plugin settings) with every credential handed to `replace`. A subtree is a credential when
+ * any JSON schema node that applies to it is `format: "password"`, `writeOnly` or `x-secret` — following
+ * `properties`, `additionalProperties`, `items`, `prefixItems`, `$ref` / `$defs` and every `anyOf` / `oneOf` /
+ * `allOf` branch (so `.nullable()`, unions and shared definitions keep their marking) — or when its key looks like
+ * one (`isSecretKeyName`; an `…Auth` key only when its value looks like a credential). Strings that carry a
+ * credential on their own (`looksLikeSecretValue`) are replaced too.
+ * The one walker behind the admin API's masking (viewers) and the server's redaction, so they can't drift apart.
+ */
+export function maskSecretValues(value: unknown, schema: unknown, replace: (secret: unknown) => unknown): unknown {
+  const root = isSchemaNode(schema) ? schema : undefined;
+  const expand = (nodes: unknown[]) => (root ? expandNodes(root, nodes) : []);
+  const walk = (v: unknown, nodes: SchemaNode[], key: string | undefined): unknown => {
+    if ((key !== undefined && isSecretKeyName(key)) || nodes.some(isSecretNode)) return replace(v);
+    // `proxyAuth: "user:pass"` is a credential, `uploadAuth: "required"` a switch
+    if (key !== undefined && typeof v === "string" && v !== "" && isAuthSlotName(key) && looksLikeAuthCredential(v)) return replace(v);
+    if (Array.isArray(v)) return v.map((x, i) => walk(x, expand(elementNodes(nodes, i)), undefined));
+    if (v && typeof v === "object") {
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, expand(memberNodes(nodes, k)), k)]));
+    }
+    if (typeof v === "string" && v !== "" && looksLikeSecretValue(v)) return replace(v);
+    return v;
+  };
+  return walk(value, expand([root]), undefined);
 }

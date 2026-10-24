@@ -9,20 +9,21 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { cn, safeUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { formatDate, timeAgo } from "@/lib/format";
 import { displayName, getTag, getTags, shortHex } from "@/lib/nostr";
+import { parseProfileContent, repostContent } from "@/lib/sanitize";
 import { usePluginRegistry } from "@/plugins/registry";
 import { copyText } from "./copy-button";
+import { ErrorBoundary } from "./error-boundary";
 import { JsonView } from "./json-view";
 import { KindBadge, ToneBadge } from "./badges";
+import { RemoteMedia } from "./remote-media";
 import { ResponsiveDialog } from "./responsive-dialog";
 import { UserAvatar } from "./user-avatar";
 import { toast } from "sonner";
 
-export function EventCard({
-  event, author, reports, selected, onSelect, onDelete, className, compact, footer,
-}: {
+type EventCardProps = {
   event: NostrEvent;
   author?: Profile;
   reports?: number;
@@ -32,7 +33,30 @@ export function EventCard({
   className?: string;
   compact?: boolean;
   footer?: React.ReactNode;
-}) {
+};
+
+/** Event content is attacker-controlled: one card that fails to render must not take the whole list down. */
+export function EventCard(props: EventCardProps) {
+  const { event } = props;
+  return (
+    <ErrorBoundary key={event.id} fallback={<BrokenEvent event={event} className={props.className} />}>
+      <EventCardInner {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function BrokenEvent({ event, className }: { event: NostrEvent; className?: string }) {
+  return (
+    <div className={cn("rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm sm:p-4", className)}>
+      <p className="font-medium">This event can’t be displayed</p>
+      <p className="font-mono text-xs break-all text-muted-foreground">
+        kind {String(event.kind)} · {String(event.id)}
+      </p>
+    </div>
+  );
+}
+
+function EventCardInner({ event, author, reports, selected, onSelect, onDelete, className, compact, footer }: EventCardProps) {
   const [json, setJson] = React.useState(false);
   const { eventActions } = usePluginRegistry();
   return (
@@ -128,7 +152,7 @@ const URL_RE = /(https?:\/\/[^\s<>"]+)/g;
 const IMG_RE = /\.(png|jpe?g|gif|webp|avif|svg)(\?.*)?$/i;
 const VID_RE = /\.(mp4|webm|mov|m4v)(\?.*)?$/i;
 
-function RichText({ text, compact, media = true }: { text: string; compact?: boolean; media?: boolean }) {
+function RichText({ text, compact, media = true, sensitive }: { text: string; compact?: boolean; media?: boolean; sensitive?: boolean }) {
   const [expanded, setExpanded] = React.useState(false);
   const limit = compact ? 280 : 900;
   const long = text.length > limit;
@@ -155,34 +179,37 @@ function RichText({ text, compact, media = true }: { text: string; compact?: boo
       )}
       {urls.length > 0 && (
         <div className={cn("grid gap-2", urls.length > 1 && "grid-cols-2")}>
-          {urls.map((u) =>
-            VID_RE.test(u) ? (
-              <video key={u} src={u} controls preload="metadata" className="max-h-72 w-full rounded-lg border bg-black" />
-            ) : (
-              <a key={u} href={u} target="_blank" rel="noreferrer noopener">
-                <img src={u} alt="" loading="lazy" referrerPolicy="no-referrer" className="max-h-72 w-full rounded-lg border object-cover" />
-              </a>
-            ),
-          )}
+          {[...new Set(urls)].map((u) => (
+            <RemoteMedia key={u} url={u} type={VID_RE.test(u) ? "video" : "image"} sensitive={sensitive} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-export function EventContent({ event, compact }: { event: NostrEvent; compact?: boolean }) {
+/**
+ * Renders an event's content. `sensitive` (reported content): media never loads on its own and shows blurred.
+ * Wrapped in an error boundary like EventCard, for the places that render content outside a card.
+ */
+export function EventContent(props: { event: NostrEvent; compact?: boolean; sensitive?: boolean }) {
+  return (
+    <ErrorBoundary key={props.event.id} fallback={<p className="text-sm text-muted-foreground italic">This event’s content can’t be displayed.</p>}>
+      <EventContentInner {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function EventContentInner({ event, compact, sensitive }: { event: NostrEvent; compact?: boolean; sensitive?: boolean }) {
   const { kind, content, tags } = event;
   switch (kind) {
     case 0: {
-      let p: Profile = {};
-      try {
-        p = JSON.parse(content);
-      } catch {
-        /* invalid */
-      }
+      const p = parseProfileContent(content);
+      // a reported profile's picture is reported media too: identicon only
+      const shown = sensitive ? { ...p, picture: undefined } : p;
       return (
         <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-2.5">
-          <UserAvatar pubkey={event.pubkey} profile={p} size={40} />
+          <UserAvatar pubkey={event.pubkey} profile={shown} size={40} />
           <div className="min-w-0 text-sm">
             <p className="truncate font-medium">{p.display_name || p.name || "Unnamed"}</p>
             {p.nip05 && <p className="truncate text-xs text-muted-foreground">{p.nip05}</p>}
@@ -201,20 +228,15 @@ export function EventContent({ event, compact }: { event: NostrEvent; compact?: 
       );
     case 6:
     case 16: {
-      let inner: NostrEvent | undefined;
-      try {
-        inner = content ? JSON.parse(content) : undefined;
-      } catch {
-        /* ignore */
-      }
+      const inner = repostContent(content);
       return (
         <div className="space-y-2">
           <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
             <Repeat2 className="size-4" /> Reposted {shortHex(getTag(tags, "e") ?? "", 6)}
           </p>
-          {inner?.content && (
+          {inner && (
             <div className="rounded-lg border bg-muted/30 p-2.5">
-              <RichText text={inner.content} compact media={false} />
+              <RichText text={inner} compact media={false} />
             </div>
           )}
         </div>
@@ -234,7 +256,7 @@ export function EventContent({ event, compact }: { event: NostrEvent; compact?: 
       return (
         <div className="space-y-1 text-sm">
           <p>
-            <ToneBadge t="red">{type}</ToneBadge> report against {e ? `event ${shortHex(e[1], 6)}` : `user ${shortHex(p?.[1] ?? "", 6)}`}
+            <ToneBadge t="red">{type}</ToneBadge> report against {e ? `event ${shortHex(e[1] ?? "", 6)}` : `user ${shortHex(p?.[1] ?? "", 6)}`}
           </p>
           {content && <p className="text-muted-foreground">{content}</p>}
         </div>
@@ -249,7 +271,7 @@ export function EventContent({ event, compact }: { event: NostrEvent; compact?: 
       const image = getTag(tags, "image");
       return (
         <div className="overflow-hidden rounded-lg border">
-          {safeUrl(image) && <img src={safeUrl(image)} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-36 w-full object-cover" />}
+          {image && <RemoteMedia url={image} type="image" sensitive={sensitive} className="h-36 max-h-36 rounded-none border-0" />}
           <div className="space-y-1 p-3">
             <p className="font-semibold">{title || "Untitled article"}</p>
             <p className="line-clamp-3 text-sm text-muted-foreground">{summary || content.slice(0, 300)}</p>
@@ -267,7 +289,7 @@ export function EventContent({ event, compact }: { event: NostrEvent; compact?: 
         return (
           <div className="space-y-1">
             {t && kind >= 30000 && <p className="text-sm font-medium">{t}</p>}
-            {content ? <RichText text={content} compact={compact} /> : <TagsSummary tags={tags} />}
+            {content ? <RichText text={content} compact={compact} sensitive={sensitive} /> : <TagsSummary tags={tags} />}
           </div>
         );
       return (

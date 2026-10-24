@@ -10,7 +10,7 @@ type Json = Record<string, unknown>;
 export interface ServerExtras {
   /** plugin names enabled on first boot (until toggled in the admin panel) */
   pluginsEnabled: string[];
-  /** bearer token required for GET /metrics (unset = public) */
+  /** bearer token required for GET /metrics (unset = only loopback clients reaching beamhop directly, and only without server.trustProxy) */
   metricsToken?: string;
   /** expose /metrics Prometheus endpoint */
   prometheus: boolean;
@@ -158,6 +158,7 @@ const ENV: EnvSpec[] = [
       return ports;
     },
   ],
+  ["BEAMHOP_BLOSSOM_MIRROR_TIMEOUT_MS", "blossom.limits.mirrorTimeoutMs", (v, n) => num(n, v)],
   ["BEAMHOP_OTEL_ENABLED", "metrics.otel.enabled", bool],
   ["BEAMHOP_OTEL_ENDPOINT", "metrics.otel.endpoint", (v) => v],
   ["BEAMHOP_OTEL_HEADERS", "metrics.otel.headers", (v, n) => kvList(v, n)],
@@ -248,12 +249,11 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
 
   const filePlugins = (fileJson.plugins as Json | undefined)?.enabled;
   const fileServer = fileJson.server as Json | undefined;
-  const ov = opts.overrides as { plugins?: { enabled?: string[] } } | undefined;
   // like every other BEAMHOP_* variable, an empty value (compose `${VAR:-}`) means "unset"
   const pluginsEnv = env.BEAMHOP_PLUGINS_ENABLED || undefined;
   const prometheusEnv = env.BEAMHOP_PROMETHEUS || undefined;
   const extras: ServerExtras = {
-    pluginsEnabled: ov?.plugins?.enabled ?? (pluginsEnv !== undefined ? list(pluginsEnv) : Array.isArray(filePlugins) ? filePlugins.map(String) : []),
+    pluginsEnabled: pluginsEnv !== undefined ? list(pluginsEnv) : Array.isArray(filePlugins) ? filePlugins.map(String) : [],
     metricsToken: env.BEAMHOP_METRICS_TOKEN || (typeof fileServer?.metricsToken === "string" ? fileServer.metricsToken : undefined),
     prometheus: prometheusEnv !== undefined ? bool(prometheusEnv) : fileServer?.prometheus !== false,
   };

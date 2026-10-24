@@ -6,7 +6,7 @@ import { randomBytes, scrypt as scryptCb } from "node:crypto";
 import { parseArgs } from "node:util";
 import { nip19 } from "nostr-tools";
 import { verifyEvent } from "nostr-tools/pure";
-import { createLogger, isBun, type AdminRole, type BeamhopConfig, type Filter, type NostrEvent, type Stores } from "@beamhop/sdk";
+import { createLogger, isBun, type AdminRole, type BeamhopConfig, type Db, type Filter, type NostrEvent, type Stores } from "@beamhop/sdk";
 import { loadConfig, toHexPubkey, type LoadedConfig } from "./config";
 import { VERSION } from "./version";
 
@@ -19,14 +19,15 @@ Commands:
   init [--force]                 write a beamhop.config.json with sensible defaults
   admin add <npub|hex> [--role owner|admin|moderator|viewer]
                                  grant an admin role (default: admin)
-  admin remove <npub|hex>        revoke an admin role
+  admin remove <npub|hex>        revoke an admin role; ends their sessions and removes password, 2FA and passkeys
   admin password <npub|hex>      set a password login for an admin (reads stdin / prompts); signs them out
-                                 everywhere. --reset-2fa also removes two-factor authentication
+                                 everywhere. --reset-2fa also removes two-factor authentication and passkeys
   user ban <npub|hex> [--reason text]
   user unban <npub|hex>
-  export [--filter '<json>']     write events as JSONL to stdout
+  export [--filter '<json>']     write events as JSONL to stdout (no NIP-50 "search")
   import [--skip-verify]         read events as JSONL from stdin
-  migrate                        run core/admin/blossom migrations and those of enabled local plugins, then exit
+  migrate                        run core/admin/blossom migrations and those of enabled plugins (plugins.dir /
+                                 plugins.packages; npm auto-discovery is not used), then exit
 
 Options:
   -c, --config <path>            config file (default ./beamhop.config.json, env BEAMHOP_CONFIG)
@@ -150,6 +151,21 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 const ROLES: AdminRole[] = ["owner", "admin", "moderator", "viewer"];
+
+/**
+ * What removing a role through the admin API does too (admin-api `revokeAdminAccess`): sessions, push devices and
+ * login factors (password, TOTP, passkeys) go, so a role granted again later can't be used with credentials from before.
+ */
+export async function revokeAdminAccess(db: Db, pubkey: string): Promise<void> {
+  for (const table of ["admin_sessions", "admin_push_subscriptions", "admin_passkeys", "admin_credentials"]) {
+    try {
+      await db.run(`DELETE FROM ${table} WHERE pubkey = ?`, [pubkey]);
+    } catch (err) {
+      // admin.enabled=false on a database the admin API never migrated: nothing to revoke
+      if (!/no such table|does not exist/i.test((err as Error).message)) throw err;
+    }
+  }
+}
 const npub = (hex: string) => nip19.npubEncode(hex);
 
 async function cmdStart(v: Values) {
@@ -205,12 +221,18 @@ async function cmdAdmin(v: Values, args: string[]) {
     });
     console.log(`${npub(pubkey)} is now ${role}`);
   } else if (sub === "remove") {
-    await withStores(config, async (stores) => {
-      await stores.users.upsert(pubkey, { role: null });
-      await stores.audit.record({ actor: "cli", action: "admin.remove", target: pubkey, details: {}, ip: null });
-    });
+    // full composition so the admin-api tables exist (fresh database) before their rows are deleted
+    const { createBeamhop } = await import("./app");
+    const bh = await createBeamhop({ ...config, logLevel: "warn" }, { autoDiscoverNpm: false });
+    try {
+      await bh.stores.users.upsert(pubkey, { role: null });
+      await revokeAdminAccess(bh.stores.db, pubkey);
+      await bh.stores.audit.record({ actor: "cli", action: "admin.remove", target: pubkey, details: {}, ip: null });
+    } finally {
+      await bh.stop();
+    }
     if (config.admin.owners.includes(pubkey)) console.warn("note: this pubkey is still an owner via config admin.owners / BEAMHOP_OWNERS");
-    console.log(`${npub(pubkey)} is no longer an admin`);
+    console.log(`${npub(pubkey)} is no longer an admin; signed out everywhere, password, two-factor and passkeys removed`);
   } else if (sub === "password") {
     const pw = await promptHidden(`new password for ${npub(pubkey).slice(0, 16)}…: `);
     if (pw.length < 8) throw new Error("password must be at least 8 characters");
@@ -232,12 +254,16 @@ async function cmdAdmin(v: Values, args: string[]) {
       // re-read sessions within seconds) and drop the push devices they registered
       await db.run("DELETE FROM admin_sessions WHERE pubkey = ?", [pubkey]);
       await db.run("DELETE FROM admin_push_subscriptions WHERE pubkey = ?", [pubkey]);
-      if (v["reset-2fa"]) await db.run("UPDATE admin_credentials SET totp_secret = NULL, totp_last_step = NULL WHERE pubkey = ?", [pubkey]);
+      if (v["reset-2fa"]) {
+        // a lost or hijacked authenticator: every second factor and passkey goes, the new password is the only way in
+        await db.run("UPDATE admin_credentials SET totp_secret = NULL, totp_last_step = NULL WHERE pubkey = ?", [pubkey]);
+        await db.run("DELETE FROM admin_passkeys WHERE pubkey = ?", [pubkey]);
+      }
       await bh.stores.audit.record({ actor: "cli", action: "admin.password", target: pubkey, details: { reset2fa: !!v["reset-2fa"] }, ip: null });
     } finally {
       await bh.stop();
     }
-    console.log(`password set for ${npub(pubkey)}; signed out everywhere${v["reset-2fa"] ? "; two-factor authentication removed" : ""}`);
+    console.log(`password set for ${npub(pubkey)}; signed out everywhere${v["reset-2fa"] ? "; two-factor authentication and passkeys removed" : ""}`);
   } else throw new Error(`unknown admin command: ${sub}`);
 }
 
@@ -263,6 +289,9 @@ async function cmdExport(v: Values) {
     } catch {
       throw new Error("--filter must be a JSON NIP-01 filter");
     }
+    if (!filter || typeof filter !== "object" || Array.isArray(filter)) throw new Error("--filter must be a JSON NIP-01 filter object");
+    // search results come back ranked by relevance, but export pages by created_at: it would repeat and skip events
+    if ("search" in filter) throw new Error('--filter: "search" (NIP-50) is not supported by export; filter by ids/authors/kinds/tags/since/until instead');
   }
   const PAGE = 1000;
   let total = 0;
@@ -297,8 +326,31 @@ async function cmdExport(v: Values) {
   console.error(`exported ${total} events`);
 }
 
+type ValidateEventShape = (e: unknown) => { event: NostrEvent } | { reason: string };
+
+/**
+ * One JSONL line → event, or undefined when it's not one the relay would accept: shape checked with core's own rules
+ * even with `skipVerify` (junk lines must not reach, and abort, the store), signature unless `skipVerify`.
+ */
+export function parseImportLine(line: string, validateEventShape: ValidateEventShape, skipVerify = false): NostrEvent | undefined {
+  try {
+    let raw: unknown = JSON.parse(line);
+    if (Array.isArray(raw)) raw = raw.find((x) => x && typeof x === "object" && !Array.isArray(x)); // ["EVENT", {...}]
+    const shape = validateEventShape(raw);
+    if (!("event" in shape)) return undefined;
+    if (!skipVerify && !verifyEvent({ ...shape.event } as never)) return undefined;
+    return shape.event;
+  } catch {
+    return undefined;
+  }
+}
+
 async function cmdImport(v: Values) {
   const { config } = load(v);
+  // the relay's own shape rules (kind range, non-empty string tags, no NUL, d-tag length …): import must not store
+  // events the relay would refuse
+  const { validateEventShape } = (await import("@beamhop/core")) as unknown as { validateEventShape?: ValidateEventShape };
+  if (typeof validateEventShape !== "function") throw new Error("import needs validateEventShape from @beamhop/core (is the package built/complete?)");
   const counts = { saved: 0, duplicate: 0, invalid: 0, other: 0, failed: 0 };
   await withStores(config, async (stores) => {
     const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -307,14 +359,8 @@ async function cmdImport(v: Values) {
       const s = line.trim();
       if (!s) continue;
       n++;
-      let ev: NostrEvent;
-      try {
-        ev = JSON.parse(s);
-        if (Array.isArray(ev)) ev = (ev as unknown[]).find((x) => x && typeof x === "object") as NostrEvent; // ["EVENT", {...}]
-        // shape is checked even with --skip-verify so junk lines can't reach (and abort) the store
-        if (!isEventShape(ev)) throw new Error("not an event");
-        if (!v["skip-verify"] && !verifyEvent({ ...ev } as never)) throw new Error("bad signature");
-      } catch {
+      const ev = parseImportLine(s, validateEventShape, !!v["skip-verify"]);
+      if (!ev) {
         counts.invalid++;
         continue;
       }
@@ -350,17 +396,6 @@ async function cmdMigrate(v: Values) {
   }
   const db = config.database.driver === "sqlite" ? config.database.sqlitePath : "postgres";
   console.log(`migrations up to date (${db}; checked ${plugins} enabled plugin(s) with migrations)`);
-}
-
-const HEX64 = /^[0-9a-f]{64}$/;
-const HEX128 = /^[0-9a-f]{128}$/;
-function isEventShape(e: unknown): e is NostrEvent {
-  const ev = e as NostrEvent;
-  return (
-    !!ev && typeof ev === "object" && typeof ev.id === "string" && HEX64.test(ev.id) && typeof ev.pubkey === "string" && HEX64.test(ev.pubkey) &&
-    typeof ev.sig === "string" && HEX128.test(ev.sig) && Number.isInteger(ev.kind) && ev.kind >= 0 && Number.isInteger(ev.created_at) &&
-    typeof ev.content === "string" && Array.isArray(ev.tags) && ev.tags.every((t) => Array.isArray(t) && t.every((x) => typeof x === "string"))
-  );
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
