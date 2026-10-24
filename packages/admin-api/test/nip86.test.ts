@@ -78,4 +78,66 @@ describe("NIP-86", () => {
     expect(await (await rpc(h, h.owner, { method: "banevent", params: [id, "bad"] })).json()).toEqual({ result: true });
     expect(((await (await rpc(h, h.owner, { method: "listbannedevents" })).json()) as { result: { id: string }[] }).result).toMatchObject([{ id, reason: "bad" }]);
   });
+
+  test("supportedmethods lists the other methods, filtered by the caller's role", async () => {
+    const h = await createHarness();
+    const all = ((await (await rpc(h, h.owner, { method: "supportedmethods" })).json()) as { result: string[] }).result;
+    expect(all).not.toContain("supportedmethods");
+    expect(all).toEqual(expect.arrayContaining(["banpubkey", "unbanevent", "listdisallowedkinds", "blockip"]));
+    const viewer = await h.addAdmin("viewer");
+    const some = ((await (await rpc(h, viewer, { method: "supportedmethods" })).json()) as { result: string[] }).result;
+    expect(some).toContain("listbannedpubkeys");
+    expect(some).not.toContain("banpubkey");
+  });
+
+  test("banpubkey removes from the allow list; allowpubkey lifts a ban; unbanpubkey doesn't allow or unmute", async () => {
+    const h = await createHarness();
+    const target = newKey();
+    expect(await (await rpc(h, h.owner, { method: "allowpubkey", params: [target.pk, "friend"] })).json()).toEqual({ result: true });
+    expect(await h.stores.users.get(target.pk)).toMatchObject({ allowed: true, status: "active" });
+    expect(await (await rpc(h, h.owner, { method: "banpubkey", params: [target.pk, "spam"] })).json()).toEqual({ result: true });
+    expect(await h.stores.users.get(target.pk)).toMatchObject({ allowed: false, status: "banned", banReason: "spam" });
+    expect(((await (await rpc(h, h.owner, { method: "listallowedpubkeys" })).json()) as { result: unknown[] }).result).toEqual([]);
+    expect(await (await rpc(h, h.owner, { method: "allowpubkey", params: [target.pk] })).json()).toEqual({ result: true });
+    expect(await h.stores.users.get(target.pk)).toMatchObject({ allowed: true, status: "active", banReason: null });
+    expect(((await (await rpc(h, h.owner, { method: "listbannedpubkeys" })).json()) as { result: unknown[] }).result).toEqual([]);
+
+    const other = newKey();
+    await rpc(h, h.owner, { method: "banpubkey", params: [other.pk] });
+    expect(await (await rpc(h, h.owner, { method: "unbanpubkey", params: [other.pk] })).json()).toEqual({ result: true });
+    expect(await h.stores.users.get(other.pk)).toMatchObject({ allowed: false, status: "active" });
+    const muted = newKey();
+    await h.stores.users.upsert(muted.pk, { status: "muted" });
+    await rpc(h, h.owner, { method: "unbanpubkey", params: [muted.pk] });
+    expect((await h.stores.users.get(muted.pk))?.status).toBe("muted");
+  });
+
+  test("unbanevent lifts an event ban; listdisallowedkinds", async () => {
+    const h = await createHarness();
+    const id = "e".repeat(64);
+    await rpc(h, h.owner, { method: "banevent", params: [id, "bad"] });
+    expect(await (await rpc(h, h.owner, { method: "unbanevent", params: [id.toUpperCase(), "ok now"] })).json()).toEqual({ result: true });
+    expect(((await (await rpc(h, h.owner, { method: "listbannedevents" })).json()) as { result: unknown[] }).result).toEqual([]);
+    expect(h.audit.entries.some((e) => e.action === "event.unban" && e.target === id)).toBe(true);
+    expect(await (await rpc(h, h.owner, { method: "unbanevent", params: ["nope"] })).json()).toMatchObject({ result: null, error: "invalid event id" });
+
+    expect(await (await rpc(h, h.owner, { method: "listdisallowedkinds" })).json()).toEqual({ result: [] });
+    await rpc(h, h.owner, { method: "disallowkind", params: [7] });
+    expect(await (await rpc(h, h.owner, { method: "listdisallowedkinds" })).json()).toEqual({ result: [7] });
+  });
+
+  test("responses carry CORS headers, including errors and 401; OPTIONS preflight", async () => {
+    const h = await createHarness();
+    const ok = await rpc(h, h.owner, { method: "supportedmethods" });
+    expect(ok.headers.get("access-control-allow-origin")).toBe("*");
+    const unauth = await rpc(h, null, { method: "supportedmethods" });
+    expect(unauth.status).toBe(401);
+    expect(unauth.headers.get("access-control-allow-origin")).toBe("*");
+    const err = await rpc(h, h.owner, { method: "nope" });
+    expect(err.headers.get("access-control-allow-origin")).toBe("*");
+    const pre = await h.api.nip86(new Request(PUBLIC_URL, { method: "OPTIONS" }));
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+    expect(pre.headers.get("access-control-allow-headers")).toContain("Authorization");
+  });
 });
