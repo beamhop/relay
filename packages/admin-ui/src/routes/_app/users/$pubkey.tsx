@@ -52,7 +52,7 @@ function UserPage() {
 
 function UserView({ u }: { u: UserDetail }) {
   const can = useCan();
-  const flow = useBanFlow(u.pubkey);
+  const flow = useBanFlow();
   const navigate = useNavigate();
   const npub = toNpub(u.pubkey);
   const name = displayName(u.pubkey, u.profile);
@@ -76,7 +76,8 @@ function UserView({ u }: { u: UserDetail }) {
             <UserAvatar pubkey={u.pubkey} profile={u.profile} size={88} className="ring-4 ring-card" />
             <div className="ml-auto flex flex-wrap gap-2">
               {can("users.ban") && !protectedUser && (
-                <>
+                // fieldset: one moderation action at a time (no double submit)
+                <fieldset disabled={flow.ban.isPending || flow.unban.isPending || flow.mute.isPending || flow.unmute.isPending} className="contents">
                   {u.status === "banned" ? (
                     <Button variant="outline" onClick={() => flow.unban.mutate(u.pubkey)}>
                       <CheckCircle2 /> Unban
@@ -97,7 +98,7 @@ function UserView({ u }: { u: UserDetail }) {
                       </Button>
                     )
                   )}
-                </>
+                </fieldset>
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -231,7 +232,7 @@ const formOf = (u: EditFields) => ({
 
 function EditCard({ u }: { u: UserDetail }) {
   const can = useCan();
-  const { patch } = useBanFlow(u.pubkey);
+  const { patch } = useBanFlow();
   const editable = can("users.edit");
   const init = React.useCallback(() => formOf(u), [u]);
   const [f, setF] = React.useState(init);
@@ -357,7 +358,7 @@ function ToggleRow({ label, hint, checked, onChange, disabled }: { label: string
 }
 
 function RoleCard({ u }: { u: UserDetail }) {
-  const { setRole, confirm } = useBanFlow(u.pubkey);
+  const { setRole, confirm } = useBanFlow();
   const { data: me } = useMe();
   const self = me?.pubkey === u.pubkey;
   const change = async (v: string) => {

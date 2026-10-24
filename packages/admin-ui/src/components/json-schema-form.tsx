@@ -230,9 +230,21 @@ function Field({ name, schema: raw, required, value, onChange, disabled, depth }
 function RawJson({ value, onChange, disabled }: { value: unknown; onChange: (v: unknown) => void; disabled?: boolean }) {
   const [text, setText] = React.useState(() => JSON.stringify(value ?? null, null, 2));
   const [err, setErr] = React.useState<string>();
+  const ref = React.useRef<HTMLTextAreaElement>(null);
+  // the value this editor last produced: anything else arriving (Discard, a refetch after save, another plugin)
+  // replaces the text instead of leaving stale JSON in the box
+  const emitted = React.useRef(value);
+  if (value !== emitted.current) {
+    emitted.current = value;
+    setText(JSON.stringify(value ?? null, null, 2));
+    setErr(undefined);
+  }
+  // invalid JSON blocks the form's submit (native validation), so Save can't send the last valid draft instead
+  React.useEffect(() => ref.current?.setCustomValidity(err ? `Invalid JSON: ${err}` : ""), [err]);
   return (
     <div className="space-y-1">
       <Textarea
+        ref={ref}
         rows={6}
         className="font-mono text-xs"
         spellCheck={false}
@@ -242,7 +254,9 @@ function RawJson({ value, onChange, disabled }: { value: unknown; onChange: (v: 
         onChange={(e) => {
           setText(e.target.value);
           try {
-            onChange(JSON.parse(e.target.value));
+            const v = JSON.parse(e.target.value);
+            emitted.current = v;
+            onChange(v);
             setErr(undefined);
           } catch (x) {
             setErr((x as Error).message);

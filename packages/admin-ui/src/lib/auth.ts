@@ -92,7 +92,8 @@ export async function startNostrConnect(onAuthUrl?: (url: string) => void, relay
   const done = (async () => {
     const signer = await BunkerSigner.fromURI(sk, uri, { onauth: (u) => (onAuthUrl ? onAuthUrl(u) : window.open(u, "_blank")) }, abort.signal);
     try {
-      return await withTimeout(loginWithSigner(signer), 120_000, "Signing timed out");
+      // the signal also covers this step, so Cancel works after the signer has connected
+      return await withTimeout(loginWithSigner(signer), 120_000, "Signing timed out", abort.signal);
     } finally {
       signer.close().catch(() => {});
     }
@@ -142,9 +143,12 @@ function onLoggedIn(res: LoginResponse) {
   else queryClient.invalidateQueries({ queryKey: ["me"] });
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
+    const aborted = () => reject(new DOMException("Cancelled", "AbortError"));
+    if (signal?.aborted) return aborted();
     const t = setTimeout(() => reject(new Error(msg)), ms);
+    signal?.addEventListener("abort", () => (clearTimeout(t), aborted()), { once: true });
     p.then((v) => (clearTimeout(t), resolve(v)), (e) => (clearTimeout(t), reject(e)));
   });
 }

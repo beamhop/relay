@@ -203,7 +203,7 @@ function ResourceChart({ range }: { range: RangeKey }) {
 const PIE_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--muted-foreground)"];
 
 function KindsCard({ range, className }: { range: RangeKey; className?: string }) {
-  const { data, isLoading } = useKindStats(range);
+  const { data, isLoading, error, refetch } = useKindStats(range);
   const [mode, setMode] = React.useState<"bar" | "pie">("bar");
   const rows = React.useMemo(() => {
     const sorted = [...(data ?? [])].sort((a, b) => b.count - a.count);
@@ -218,6 +218,8 @@ function KindsCard({ range, className }: { range: RangeKey; className?: string }
       title="Events by kind"
       className={className}
       loading={isLoading}
+      error={error}
+      retry={() => refetch()}
       empty={!rows.length}
       action={
         <ToggleGroup type="single" size="sm" variant="outline" value={mode} onValueChange={(v) => v && setMode(v as "bar" | "pie")}>
@@ -255,7 +257,7 @@ function KindsCard({ range, className }: { range: RangeKey; className?: string }
 }
 
 function GeoCard({ range, className }: { range: RangeKey; className?: string }) {
-  const { data, isLoading } = useGeo(range);
+  const { data, isLoading, error, refetch } = useGeo(range);
   const { data: sys } = useSystem();
   // the map's tiles come from a third party: only with GeoIP data to show, and only after the admin opts in
   const geoip = !!sys?.geoipEnabled;
@@ -304,8 +306,10 @@ function GeoCard({ range, className }: { range: RangeKey; className?: string }) 
             </div>
           ))}
         <div className={cn("overflow-y-auto", geoip && "max-h-72")}>
-          {!countries.length && !isLoading ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No geo data. Configure a GeoIP database to enable.</p>
+          {error ? (
+            <ErrorState error={error} retry={() => refetch()} />
+          ) : !countries.length && !isLoading ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">{geoip ? "No located connections in this range yet." : "No geo data. Configure a GeoIP database to enable."}</p>
           ) : (
             <ul className="space-y-2">
               {countries.slice(0, 30).map((c) => (
@@ -330,7 +334,7 @@ function GeoCard({ range, className }: { range: RangeKey; className?: string }) 
 }
 
 function TopPubkeysCard({ range }: { range: RangeKey }) {
-  const { data, isLoading } = useTopPubkeys(range, 10);
+  const { data, isLoading, error, refetch } = useTopPubkeys(range, 10);
   return (
     <Card className="gap-3">
       <CardHeader>
@@ -340,6 +344,8 @@ function TopPubkeysCard({ range }: { range: RangeKey }) {
       <CardContent>
         {isLoading ? (
           <Skeleton className="h-64 w-full" />
+        ) : error ? (
+          <ErrorState error={error} retry={() => refetch()} />
         ) : !data?.length ? (
           <EmptyState title="No activity yet" className="border-0" />
         ) : (
@@ -370,7 +376,7 @@ function TopPubkeysCard({ range }: { range: RangeKey }) {
 }
 
 function RejectionsCard({ range }: { range: RangeKey }) {
-  const { data, isLoading } = useRejections(range);
+  const { data, isLoading, error, refetch } = useRejections(range);
   const rows = [...(data ?? [])].sort((a, b) => b.count - a.count).slice(0, 10);
   const max = Math.max(1, ...rows.map((r) => r.count));
   return (
@@ -387,6 +393,8 @@ function RejectionsCard({ range }: { range: RangeKey }) {
       <CardContent>
         {isLoading ? (
           <Skeleton className="h-64 w-full" />
+        ) : error ? (
+          <ErrorState error={error} retry={() => refetch()} />
         ) : !rows.length ? (
           <EmptyState title="Nothing rejected" description="All incoming events passed your policies." className="border-0" />
         ) : (

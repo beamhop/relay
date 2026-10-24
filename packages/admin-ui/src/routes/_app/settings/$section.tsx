@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as React from "react";
+import { tryMutate } from "@/queries/client";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useFieldArray, useForm, useWatch, type Control, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -79,8 +80,8 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
       const bad = filters.find((w) => w.isRegex && regexError(w.pattern));
       if (bad) return void form.setError("root", { message: `Regex refused (invalid or unsafe): ${bad.pattern}` });
     }
-    await save.mutateAsync({ [sectionKey]: values } as any);
-    form.reset(values);
+    // failures are toasted; the form stays dirty so the edit isn't lost
+    if (await tryMutate(save, { [sectionKey]: values } as any)) form.reset(values);
   });
   const dirty = form.formState.isDirty;
   return (
@@ -105,6 +106,9 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
               "sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-10 flex items-center justify-end gap-2 rounded-xl border bg-background/90 p-2 shadow-sm backdrop-blur transition-opacity md:bottom-4",
               !dirty && "opacity-0 pointer-events-none",
             )}
+            // hidden but still in the tab order otherwise
+            inert={!dirty}
+            aria-hidden={!dirty}
           >
             <span className="mr-auto pl-2 text-sm text-muted-foreground">Unsaved changes</span>
             <Button type="button" variant="ghost" onClick={() => form.reset(structuredClone(value) as any, { keepDirtyValues: false, keepDefaultValues: false })}>
@@ -346,14 +350,14 @@ function ModerationFields({ control, disabled }: { control: Control<any>; disabl
   );
 }
 
-function InlineSwitch({ control, name, label }: { control: Control<any>; name: string; label: string }) {
+function InlineSwitch({ control, name, label, ariaLabel }: { control: Control<any>; name: string; label: string; ariaLabel?: string }) {
   return (
     <FormField
       control={control}
       name={name}
       render={({ field }) => (
         <label className="flex items-center gap-2 text-sm">
-          <Switch checked={!!field.value} onCheckedChange={field.onChange} />
+          <Switch checked={!!field.value} onCheckedChange={field.onChange} aria-label={ariaLabel} />
           {label}
         </label>
       )}
@@ -381,7 +385,7 @@ function RetentionFields({ control, disabled }: { control: Control<any>; disable
         {fields.map((f, i) => (
           <div key={f._key} className="space-y-3 rounded-lg border p-3">
             <div className="flex items-center gap-2">
-              <InlineSwitch control={control} name={`rules.${i}.enabled`} label="" />
+              <InlineSwitch control={control} name={`rules.${i}.enabled`} label="" ariaLabel={`Enable rule ${i + 1}`} />
               <p className="flex-1 text-sm">{describe(rules[i])}</p>
               <Button type="button" variant="ghost" size="icon" onClick={() => remove(i)} disabled={disabled} aria-label="Remove rule">
                 <Trash2 />

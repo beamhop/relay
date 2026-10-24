@@ -21,6 +21,7 @@ import { PullToRefresh } from "@/components/pull-to-refresh";
 import { useConfirm } from "@/components/confirm";
 import { useReport, useReports, useResolveReports } from "@/queries/content";
 import { useCan } from "@/queries/auth";
+import { tryMutate } from "@/queries/client";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { displayName } from "@/lib/nostr";
 import { formatDate, formatNumber, timeAgo } from "@/lib/format";
@@ -93,10 +94,11 @@ function ReportsPage() {
       if (!r) return false;
       note = r.input || undefined;
     }
-    if (ids.length === 1) await one.mutateAsync({ id: ids[0], action, note });
-    else await bulk.mutateAsync({ ids, action, note });
+    const ok = ids.length === 1 ? await tryMutate(one, { id: ids[0], action, note }) : await tryMutate(bulk, { ids, action, note });
+    if (!ok) return false;
     setSelected(new Set());
   };
+  const busy = one.isPending || bulk.isPending;
 
   return (
     <div className="space-y-4">
@@ -147,6 +149,7 @@ function ReportsPage() {
             <ReportCard
               r={linked.data}
               canResolve={can("reports.resolve") && linked.data.status === "open"}
+              busy={busy}
               selected={false}
               onSelect={() => {}}
               onAction={(a) => resolve([linked.data!.id], a, linked.data)}
@@ -154,7 +157,7 @@ function ReportsPage() {
           ) : null}
         </div>
       )}
-      {mobile && canResolve && items.length > 0 && <p className="text-xs text-muted-foreground">Swipe right to dismiss, left to delete & ban.</p>}
+      {mobile && canResolve && items.length > 0 && <p className="text-xs text-muted-foreground">Swipe right to dismiss, left to ban (and delete the reported event, if any).</p>}
 
       <PullToRefresh onRefresh={() => q.refetch()}>
         {q.isLoading ? (
@@ -170,6 +173,7 @@ function ReportsPage() {
                 <ReportCard
                   r={r}
                   canResolve={canResolve}
+                  busy={busy}
                   selected={selected.has(r.id)}
                   onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(r.id); else n.delete(r.id); return n; })}
                   onAction={(a) => resolve([r.id], a, r)}
@@ -179,7 +183,11 @@ function ReportsPage() {
                 <SwipeRow
                   key={r.id}
                   right={{ label: "Dismiss", icon: X, className: "bg-emerald-600 text-white", onTrigger: () => resolve([r.id], "dismiss", r) }}
-                  left={{ label: "Delete & ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => resolve([r.id], "delete-and-ban", r) }}
+                  left={
+                    r.targetEventId
+                      ? { label: "Delete & ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => resolve([r.id], "delete-and-ban", r) }
+                      : { label: "Ban user", icon: ShieldX, className: "bg-red-600 text-white", onTrigger: () => resolve([r.id], "ban-user", r) }
+                  }
                 >
                   {card}
                 </SwipeRow>
@@ -189,10 +197,10 @@ function ReportsPage() {
             })}
           </div>
         )}
-        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} onVisible={() => q.fetchNextPage()} />
+        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
 
-      <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={busy} onClear={() => setSelected(new Set())}>
         <Button size="sm" variant="ghost" className="rounded-full" onClick={() => resolve([...selected], "dismiss")}>
           <X /> Dismiss
         </Button>
@@ -207,7 +215,7 @@ function ReportsPage() {
   );
 }
 
-type ReportCardProps = { r: Report; canResolve: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void };
+type ReportCardProps = { r: Report; canResolve: boolean; busy?: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void };
 
 /** Reports carry attacker-chosen content: a card that fails to render must not hide the rest of the queue. */
 function ReportCard(props: ReportCardProps) {
@@ -230,8 +238,10 @@ function ReportCard(props: ReportCardProps) {
   );
 }
 
-function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: ReportCardProps) {
+function ReportCardInner({ r, canResolve, busy, selected, onSelect, onAction }: ReportCardProps) {
   const mobile = useIsMobile();
+  // touch screens can't hover: the first tap on the blurred media un-blurs it instead of opening it
+  const [revealed, setRevealed] = React.useState(false);
   return (
     <div className={cn("space-y-3 rounded-xl border bg-card p-3 sm:p-4", selected && "border-primary/60 bg-primary/5")}>
       <div className="flex items-start gap-3">
@@ -280,8 +290,18 @@ function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: Report
       ) : null}
       {r.targetBlob && (
         // admin media endpoint (session auth) — the public Blossom URL hides pending/blocked blobs, which reported media often is
-        <a href={mediaUrl({ sha256: r.targetBlob })} target="_blank" rel="noreferrer" className="block w-fit overflow-hidden rounded-lg border">
-          <img src={mediaUrl({ sha256: r.targetBlob })} alt="Reported media" className="max-h-48 max-w-full object-contain blur-md transition hover:blur-none" />
+        <a
+          href={mediaUrl({ sha256: r.targetBlob })}
+          target="_blank"
+          rel="noreferrer"
+          className="block w-fit overflow-hidden rounded-lg border"
+          onClick={(e) => {
+            if (revealed) return;
+            e.preventDefault();
+            setRevealed(true);
+          }}
+        >
+          <img src={mediaUrl({ sha256: r.targetBlob })} alt="Reported media" className={cn("max-h-48 max-w-full object-contain transition", !revealed && "blur-md hover:blur-none")} />
         </a>
       )}
       {r.resolution && (
@@ -291,7 +311,8 @@ function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: Report
         </p>
       )}
       {canResolve && (
-        <div className="flex flex-wrap gap-2">
+        // fieldset: disables every action while one is in flight (no double submit)
+        <fieldset disabled={busy} className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={() => onAction("dismiss")}>
             <X /> Dismiss
           </Button>
@@ -300,12 +321,18 @@ function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: Report
               <Trash2 /> Delete
             </Button>
           )}
-          {r.targetPubkey && (
+          {/* the server only accepts delete-and-ban when the report names an event; otherwise offer a plain ban */}
+          {r.targetPubkey && r.targetEventId && (
             <Button size="sm" variant="destructive" onClick={() => onAction("delete-and-ban")}>
               <Ban /> Delete & ban
             </Button>
           )}
-          {(r.targetPubkey || r.targetBlob) && (
+          {r.targetPubkey && !r.targetEventId && (
+            <Button size="sm" variant="destructive" onClick={() => onAction("ban-user")}>
+              <ShieldX /> Ban user
+            </Button>
+          )}
+          {((r.targetPubkey && r.targetEventId) || r.targetBlob) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" variant="ghost" aria-label="More">
@@ -313,14 +340,14 @@ function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: Report
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {r.targetPubkey && (
+                {r.targetPubkey && r.targetEventId && (
                   <DropdownMenuItem variant="destructive" onSelect={() => onAction("ban-user")}>
                     <ShieldX /> Ban user only
                   </DropdownMenuItem>
                 )}
                 {r.targetBlob && (
                   <>
-                    {r.targetPubkey && <DropdownMenuSeparator />}
+                    {r.targetPubkey && r.targetEventId && <DropdownMenuSeparator />}
                     <DropdownMenuItem variant="destructive" onSelect={() => onAction("delete-media")}>
                       <Trash2 /> Delete media
                     </DropdownMenuItem>
@@ -329,7 +356,7 @@ function ReportCardInner({ r, canResolve, selected, onSelect, onAction }: Report
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-        </div>
+        </fieldset>
       )}
     </div>
   );

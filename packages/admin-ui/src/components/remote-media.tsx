@@ -7,11 +7,12 @@ import { cn } from "@/lib/utils";
 /**
  * An image or video URL taken from event content. Loads right away only when the media policy allows it (this
  * relay's own origin, or the admin opted in to remote media); otherwise shows a placeholder naming the host and
- * loads on click. `sensitive` (reported content) never auto-loads, and stays blurred until hovered.
+ * loads on click. `sensitive` (reported content) never auto-loads, and stays blurred until hovered or tapped.
  */
 export function RemoteMedia({ url, type, sensitive, className }: { url: string; type: "image" | "video"; sensitive?: boolean; className?: string }) {
   const policy = useMediaPolicy();
   const [clicked, setClicked] = React.useState(false);
+  const [revealed, setRevealed] = React.useState(false);
   const v = mediaVerdict(url, policy);
   if (v.kind === "none") return null;
   const host = v.kind === "ask" ? v.host : new URL(v.src).host;
@@ -33,12 +34,20 @@ export function RemoteMedia({ url, type, sensitive, className }: { url: string; 
       </button>
     );
   }
-  const blur = sensitive && "blur-md transition hover:blur-none";
+  // touch screens have no hover: the first tap un-blurs, later taps behave normally
+  const blurred = sensitive && !revealed;
+  const blur = blurred && "blur-md transition hover:blur-none";
+  const reveal = (e: React.SyntheticEvent) => {
+    if (!blurred) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setRevealed(true);
+  };
   return type === "video" ? (
     // <video> has no referrerpolicy attribute; the document's Referrer-Policy (same-origin) keeps the referrer off
-    <video src={v.src} controls preload="metadata" className={cn("max-h-72 w-full rounded-lg border bg-black", blur, className)} />
+    <video src={v.src} controls={!blurred} preload="metadata" onClickCapture={reveal} className={cn("max-h-72 w-full rounded-lg border bg-black", blur, className)} />
   ) : (
-    <a href={v.src} target="_blank" rel="noreferrer noopener" className="block overflow-hidden rounded-lg">
+    <a href={v.src} target="_blank" rel="noreferrer noopener" onClick={reveal} className="block overflow-hidden rounded-lg">
       <img src={v.src} alt="" loading="lazy" referrerPolicy="no-referrer" className={cn("max-h-72 w-full rounded-lg border object-cover", blur, className)} />
     </a>
   );

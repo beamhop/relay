@@ -1,4 +1,5 @@
 import * as React from "react";
+import { tryMutate } from "@/queries/client";
 import { createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, Plus, ShieldBan, Trash2 } from "lucide-react";
 import type { IpRule } from "@beamhop/sdk/admin-contract";
@@ -61,7 +62,7 @@ function IpRulesPage() {
   const [filter, setFilter] = React.useState("");
   const doRemove = async (r: IpRule) => {
     if (!(await confirm({ title: `Remove rule for ${r.cidr}?`, destructive: true, confirmText: "Remove" }))) return false;
-    await remove.mutateAsync(r.cidr);
+    return !!(await tryMutate(remove, r.cidr));
   };
   const items = (data ?? []).filter((r) => !filter || r.cidr.includes(filter) || r.reason.toLowerCase().includes(filter.toLowerCase()));
   return (
@@ -75,11 +76,14 @@ function IpRulesPage() {
           </Button>
         }
       />
-      {(data?.length ?? 0) > 5 && <Input placeholder="Filter by IP or reason…" value={filter} onChange={(e) => setFilter(e.target.value)} />}
+      {/* also shown while a filter is set, so it can't stay applied with the box gone (after deleting rules) */}
+      {((data?.length ?? 0) > 5 || filter) && <Input placeholder="Filter by IP or reason…" value={filter} onChange={(e) => setFilter(e.target.value)} />}
       {isLoading ? (
         <ListSkeleton rows={3} />
       ) : error ? (
         <ErrorState error={error} retry={() => refetch()} />
+      ) : !items.length && filter ? (
+        <EmptyState icon={ShieldBan} title="No matching rules" description={`Nothing matches “${filter}”.`} action={<Button variant="outline" onClick={() => setFilter("")}>Clear filter</Button>} />
       ) : !items.length ? (
         <EmptyState icon={ShieldBan} title="No IP rules" description="Connections from all IPs are subject to normal policies." />
       ) : (
@@ -141,7 +145,7 @@ function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bool
     if (!valid) return;
     const rule = { cidr: cidr.trim(), action, reason };
     // null: the broad-range warning was cancelled, keep the form as it is
-    if (!(await add.mutateAsync({ ...rule, confirmBroad: () => confirmBroad(rule.cidr) }))) return;
+    if (!(await tryMutate(add, { ...rule, confirmBroad: () => confirmBroad(rule.cidr) }))?.data) return;
     setCidr("");
     setReason("");
     onOpenChange(false);

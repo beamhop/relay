@@ -19,6 +19,7 @@ import { EventCard } from "@/components/event-card";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ListSkeleton } from "@/components/page-skeleton";
 import { InfiniteSentinel } from "@/components/infinite-sentinel";
+import { tryMutate } from "@/queries/client";
 import { SelectionBar } from "@/components/selection-bar";
 import { SwipeRow } from "@/components/swipe-row";
 import { PullToRefresh } from "@/components/pull-to-refresh";
@@ -115,7 +116,7 @@ function ContentPage() {
       input: { label: "Reason (optional)" },
     });
     if (!r) return false;
-    await del.mutateAsync({ ids, reason: r.input || undefined });
+    if (!(await tryMutate(del, { ids, reason: r.input || undefined }))) return false;
     setSelected((s) => {
       const n = new Set(s);
       ids.forEach((i) => n.delete(i));
@@ -133,7 +134,7 @@ function ContentPage() {
     });
     if (!r) return;
     if (r.input !== "DELETE") return toast.error("Confirmation text did not match");
-    await del.mutateAsync({ filters });
+    await tryMutate(del, { filters });
   };
   const exportEvents = async () => {
     const id = toast.loading("Preparing export…");
@@ -236,7 +237,7 @@ function ContentPage() {
                 })}
               </div>
             )}
-            <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} onVisible={() => q.fetchNextPage()} />
+            <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
           </PullToRefresh>
         </div>
       </div>
@@ -244,7 +245,7 @@ function ContentPage() {
       <ResponsiveDialog open={mobile && filtersOpen} onOpenChange={setFiltersOpen} title="Filter events">
         <div className="pb-6">{builder}</div>
       </ResponsiveDialog>
-      <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={del.isPending} onClear={() => setSelected(new Set())}>
         <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => deleteIds([...selected])}>
           <Trash2 /> Delete
         </Button>
@@ -288,6 +289,8 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
   React.useEffect(() => {
     setB(filterToBuilder(filters[0] ?? {}));
     setJson(JSON.stringify(filters.length === 1 ? filters[0] : filters, null, 2));
+    // the builder edits a single filter: showing several there would drop all but the first on Apply
+    if (filters.length > 1) setMode("json");
   }, [filters]);
   const set = <K extends keyof Builder>(k: K, v: Builder[K]) => setB((s) => ({ ...s, [k]: v }));
 
@@ -314,6 +317,10 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
           else {
             try {
               const p: unknown = JSON.parse(json);
+              if (Array.isArray(p) && p.length > 1) {
+                toast.error("The builder edits a single filter", { description: "Keep editing several filters as JSON." });
+                return;
+              }
               setB(filterToBuilder(sanitizeFilter(Array.isArray(p) ? p[0] : p) ?? {}));
             } catch {
               /* keep builder */

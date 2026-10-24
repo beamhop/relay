@@ -6,10 +6,18 @@ const KEY = "beamhop-theme";
 interface ThemeCtx { theme: Theme; resolved: "light" | "dark"; setTheme(t: Theme): void }
 const Ctx = React.createContext<ThemeCtx>({ theme: "system", resolved: "light", setTheme: () => {} });
 
+function readTheme(): Theme {
+  try {
+    return (localStorage.getItem(KEY) as Theme) || "system";
+  } catch {
+    return "system"; // storage blocked
+  }
+}
+
 const mql = () => window.matchMedia("(prefers-color-scheme: dark)");
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = React.useState<Theme>(() => (localStorage.getItem(KEY) as Theme) || "system");
+  const [theme, setThemeState] = React.useState<Theme>(readTheme);
   const [systemDark, setSystemDark] = React.useState(() => mql().matches);
 
   React.useEffect(() => {
@@ -29,7 +37,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [resolved]);
 
   const setTheme = React.useCallback((t: Theme) => {
-    localStorage.setItem(KEY, t);
+    try {
+      localStorage.setItem(KEY, t);
+    } catch {
+      /* storage blocked: theme lasts for this tab only */
+    }
     setThemeState(t);
   }, []);
 

@@ -81,7 +81,7 @@ function AuditPage() {
             ))}
           </Card>
         )}
-        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} onVisible={() => q.fetchNextPage()} />
+        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
     </div>
   );

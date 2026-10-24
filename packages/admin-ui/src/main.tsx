@@ -42,7 +42,7 @@ onUnauthorized(() => {
   // the next sign-in may be another admin with fewer permissions: drop everything this session loaded (cached
   // responses, plugin UIs) once the app shell has unmounted, so mounted queries don't refetch into more 401s
   router
-    .navigate({ to: "/login", search: { redirect: router.state.location.pathname } })
+    .navigate({ to: "/login", search: { redirect: router.state.location.href } })
     .finally(() => {
       queryClient.clear();
       resetPluginUis();

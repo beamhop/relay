@@ -443,13 +443,15 @@ function PushCard() {
   React.useEffect(() => {
     currentSubscription().then(setSub, () => setSub(null));
   }, []);
-  const enable = async (t = topics) => {
+  const enable = async (t = topics, quiet = false) => {
     setBusy(true);
     try {
       setSub(await subscribePush(t));
-      toast.success("Push notifications enabled");
+      if (!quiet) toast.success("Push notifications enabled");
+      return true;
     } catch (e) {
-      toast.error("Could not enable notifications", { description: errorMessage(e) });
+      toast.error(quiet ? "Could not update notifications" : "Could not enable notifications", { description: errorMessage(e) });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -466,10 +468,15 @@ function PushCard() {
       setBusy(false);
     }
   };
-  const toggleTopic = (k: PushTopic, on: boolean) => {
+  const toggleTopic = async (k: PushTopic, on: boolean) => {
+    const prev = topics;
     const next = on ? [...new Set([...topics, k])] : topics.filter((t) => t !== k);
     setTopics(next);
-    if (sub) enable(next);
+    if (!sub) return;
+    // no topics left: a subscription for nothing would still read "enabled", so turn push off instead
+    if (!next.length) return disable();
+    if (await enable(next, true)) toast.success("Notification topics updated");
+    else setTopics(prev); // keep the checkboxes matching what the server has
   };
   const unavailable = !supported ? "This browser doesn't support web push. On iOS, add the app to your home screen first." : sys && !sys.pushEnabled ? "Push notifications are not configured on this server." : undefined;
   return (

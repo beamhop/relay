@@ -20,6 +20,8 @@ import { UserChip } from "@/components/user-chip";
 import { RoleBadge, ToneBadge, UserStatusBadge } from "@/components/badges";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ListSkeleton } from "@/components/page-skeleton";
+import { useLongPress } from "@/hooks/use-long-press";
+import { tryMutate } from "@/queries/client";
 import { InfiniteSentinel } from "@/components/infinite-sentinel";
 import { SelectionBar } from "@/components/selection-bar";
 import { SwipeRow } from "@/components/swipe-row";
@@ -67,6 +69,15 @@ function UsersPage() {
   const items = React.useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const total = q.data?.pages[0]?.total;
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  // drop users that left the list (deleted, filtered out after an action) so counts and bulk actions stay right
+  React.useEffect(() => {
+    setSelected((s) => {
+      if (!s.size) return s;
+      const keep = new Set(items.map((u) => u.pubkey));
+      const n = new Set([...s].filter((k) => keep.has(k)));
+      return n.size === s.size ? s : n;
+    });
+  }, [items]);
   // a bulk action must never hit users that are no longer visible under the current filters
   React.useEffect(() => setSelected(new Set()), [search.search, search.status, search.role, search.tag, search.allowed, search.sort]);
   const [adding, setAdding] = React.useState(false);
@@ -107,8 +118,7 @@ function UsersPage() {
       if (!r) return;
       reason = r.input || undefined;
     }
-    await flow.bulk.mutateAsync({ pubkeys, action, reason, tag });
-    setSelected(new Set());
+    if (await tryMutate(flow.bulk, { pubkeys, action, reason, tag })) setSelected(new Set());
   };
 
   const activeFilters = [search.status, search.role, search.tag, search.allowed].filter((v) => v !== undefined).length;
@@ -174,12 +184,12 @@ function UsersPage() {
             {items.map((u) => (
               <SwipeRow
                 key={u.pubkey}
-                disabled={!can("users.ban") || u.role === "owner"}
-                left={u.status !== "banned" ? { label: "Ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => flow.banWithConfirm(u.pubkey, u.profile) } : undefined}
+                disabled={u.role === "owner"}
+                left={can("users.ban") && u.status !== "banned" ? { label: "Ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => flow.banWithConfirm(u.pubkey, u.profile) } : undefined}
                 right={
                   u.status === "banned"
-                    ? { label: "Unban", icon: CheckCircle2, className: "bg-emerald-600 text-white", onTrigger: () => flow.unban.mutateAsync(u.pubkey) }
-                    : !u.allowed
+                    ? can("users.ban") ? { label: "Unban", icon: CheckCircle2, className: "bg-emerald-600 text-white", onTrigger: () => flow.unban.mutateAsync(u.pubkey) } : undefined
+                    : !u.allowed && can("users.edit")
                       ? { label: "Allow", icon: ShieldCheck, className: "bg-emerald-600 text-white", onTrigger: () => flow.patch.mutateAsync({ pubkey: u.pubkey, allowed: true }) }
                       : undefined
                 }
@@ -236,10 +246,10 @@ function UsersPage() {
             </Table>
           </Card>
         )}
-        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} onVisible={() => q.fetchNextPage()} />
+        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
 
-      <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={flow.bulk.isPending} onClear={() => setSelected(new Set())}>
         {can("users.ban") && (
           <>
             {(anyActive || anyMuted) && <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => runBulk("ban", true)}><Ban /> Ban</Button>}
@@ -315,22 +325,21 @@ function StatusBadges({ u }: { u: UserView }) {
 }
 
 function UserCardRow({ u, selected, onSelect, selecting }: { u: UserView; selected: boolean; onSelect: (v: boolean) => void; selecting: boolean }) {
+  const longPress = useLongPress(() => onSelect(!selected));
   return (
     <div className={`flex items-center gap-3 rounded-xl border bg-card p-3 ${selected ? "border-primary/60 bg-primary/5" : ""}`}>
       {selecting && <Checkbox checked={selected} onCheckedChange={(v) => onSelect(v === true)} aria-label="Select" />}
       <Link
         to="/users/$pubkey"
         params={{ pubkey: u.pubkey }}
-        className="min-w-0 flex-1"
+        // long-press starts selecting (no iOS link preview)
+        className="min-w-0 flex-1 select-none [-webkit-touch-callout:none]"
+        {...longPress}
         onClick={(e) => {
           if (selecting) {
             e.preventDefault();
             onSelect(!selected);
           }
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onSelect(!selected);
         }}
       >
         <UserChip pubkey={u.pubkey} profile={u.profile} link={false} size={40} />
@@ -398,7 +407,7 @@ function AddUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pubkey) return;
-    await add.mutateAsync({ pubkey, allowed, notes: notes || undefined });
+    if (!(await tryMutate(add, { pubkey, allowed, notes: notes || undefined }))) return;
     setInput("");
     setNotes("");
     onOpenChange(false);

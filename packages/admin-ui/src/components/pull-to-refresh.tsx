@@ -2,6 +2,14 @@ import * as React from "react";
 import { Loader2, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/** True when the touch started inside an inner scroll box that isn't at its top (dragging down scrolls it, not the page). */
+function inScrolledBox(target: EventTarget | null, root: HTMLElement): boolean {
+  for (let n = target instanceof Element ? target : null; n && n !== root; n = n.parentElement) {
+    if (n.scrollTop > 0 && /(auto|scroll)/.test(getComputedStyle(n).overflowY)) return true;
+  }
+  return false;
+}
+
 const TRIGGER = 72;
 const MAX = 120;
 
@@ -19,7 +27,7 @@ export function PullToRefresh({ onRefresh, children, className }: { onRefresh: (
     const el = ref.current;
     if (!el || !window.matchMedia("(pointer: coarse)").matches) return;
     const onStart = (e: TouchEvent) => {
-      if (window.scrollY > 0 || refreshing) return (start.current = null), undefined;
+      if (window.scrollY > 0 || refreshing || inScrolledBox(e.target, el)) return (start.current = null), undefined;
       start.current = { y: e.touches[0].clientY, x: e.touches[0].clientX };
     };
     const onMove = (e: TouchEvent) => {

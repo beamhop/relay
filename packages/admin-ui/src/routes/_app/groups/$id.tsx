@@ -1,4 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { tryMutate } from "@/queries/client";
 import { ArrowLeft, Lock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,8 +32,7 @@ function GroupPage() {
       confirmText: "Delete group",
     });
     if (!r) return;
-    await del.mutateAsync(id);
-    navigate({ to: "/groups" });
+    if (await tryMutate(del, id)) navigate({ to: "/groups" });
   };
   const members = g?.memberList ?? [];
   return (

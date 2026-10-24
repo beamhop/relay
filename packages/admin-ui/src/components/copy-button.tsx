@@ -4,15 +4,38 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export async function copyText(text: string, label = "Copied to clipboard") {
+/** execCommand fallback for insecure contexts (plain http, e.g. a LAN IP), where navigator.clipboard is missing. */
+function legacyCopy(text: string): boolean {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
   try {
-    await navigator.clipboard.writeText(text);
-    toast.success(label);
-    return true;
+    return document.execCommand("copy");
   } catch {
-    toast.error("Clipboard not available");
     return false;
+  } finally {
+    ta.remove();
   }
+}
+
+export async function copyText(text: string, label = "Copied to clipboard") {
+  let ok = false;
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch {
+    /* fall through */
+  }
+  if (!ok) ok = legacyCopy(text);
+  if (ok) toast.success(label);
+  else toast.error("Clipboard not available");
+  return ok;
 }
 
 export function CopyButton({ value, label, className, size = "icon-sm" }: { value: string; label?: string; className?: string; size?: "icon-sm" | "icon" | "icon-xs" }) {

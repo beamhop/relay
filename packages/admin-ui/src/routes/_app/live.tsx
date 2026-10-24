@@ -122,11 +122,13 @@ function EventStream() {
         </div>
       </CardHeader>
       <CardContent className="px-2 sm:px-6">
-        {!filtered.length ? (
+        {!filtered.length && events.length > 0 ? (
+          <EmptyState title="No events match" description={`None of the last ${events.length} events match these filters.`} className="border-0" />
+        ) : !filtered.length ? (
           <EmptyState title={paused ? "Paused" : "Waiting for events…"} description={paused ? "Resume to keep receiving events." : "Events appear here as clients publish them."} className="border-0" />
         ) : (
           <ul className="divide-y overflow-hidden rounded-lg border">
-            {filtered.slice(0, 200).map((e) => (
+            {filtered.map((e) => (
               <li key={e.key}>
                 <button className="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50 animate-in fade-in" onClick={() => setSelected(e)}>
                   <UserAvatar pubkey={e.event.pubkey} size={28} />

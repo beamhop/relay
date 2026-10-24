@@ -105,18 +105,29 @@ sw.addEventListener("push", (event: any) => {
 sw.addEventListener("notificationclick", (event: any) => {
   event.notification.close();
   const raw: string | undefined = event.notification.data?.url;
-  const target = raw ? new URL(raw.startsWith("/") && !raw.startsWith(new URL(SCOPE).pathname) ? raw.slice(1) : raw, SCOPE).href : SCOPE;
-  event.waitUntil(
-    (async () => {
-      const all = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
-      for (const c of all) {
-        if (c.url.startsWith(SCOPE)) {
-          await c.focus();
-          if ("navigate" in c) await c.navigate(target).catch(() => {});
-          return;
-        }
-      }
-      await sw.clients.openWindow(target);
-    })(),
-  );
+  event.waitUntil(focusOrOpen(raw ? pushTarget(raw) : SCOPE));
 });
+
+/**
+ * The server builds absolute links from its publicUrl; the PWA may be installed from another origin (e.g. a LAN
+ * IP), which is where the session lives. Keep only the path and re-root it under this worker's scope.
+ */
+function pushTarget(raw: string): string {
+  const scope = new URL(SCOPE);
+  const u = new URL(raw, scope);
+  let path = u.pathname + u.search + u.hash;
+  if (!u.pathname.startsWith(scope.pathname)) path = scope.pathname + path.replace(/^\//, "");
+  return new URL(path, scope.origin).href;
+}
+
+async function focusOrOpen(target: string) {
+  const all = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const c of all) {
+    if (c.url.startsWith(SCOPE)) {
+      await c.focus();
+      if ("navigate" in c) await c.navigate(target).catch(() => {});
+      return;
+    }
+  }
+  await sw.clients.openWindow(target);
+}

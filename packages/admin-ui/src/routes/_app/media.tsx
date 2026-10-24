@@ -13,6 +13,8 @@ import { BlobStatusBadge } from "@/components/badges";
 import { UserChip } from "@/components/user-chip";
 import { CopyButton } from "@/components/copy-button";
 import { EmptyState, ErrorState } from "@/components/empty-state";
+import { useLongPress } from "@/hooks/use-long-press";
+import { tryMutate } from "@/queries/client";
 import { InfiniteSentinel } from "@/components/infinite-sentinel";
 import { SelectionBar } from "@/components/selection-bar";
 import { SwipeRow } from "@/components/swipe-row";
@@ -68,6 +70,15 @@ function MediaPage() {
   const [blocklistOpen, setBlocklistOpen] = React.useState(false);
   const [pkDraft, setPkDraft] = React.useState(search.pubkey ?? "");
   React.useEffect(() => setSelected(new Set()), [search.status, search.type, search.pubkey]);
+  // drop blobs that left the list (deleted one by one, or filtered out after a status change)
+  React.useEffect(() => {
+    setSelected((s) => {
+      if (!s.size) return s;
+      const keep = new Set(items.map((b) => b.sha256));
+      const n = new Set([...s].filter((k) => keep.has(k)));
+      return n.size === s.size ? s : n;
+    });
+  }, [items]);
 
   const doDelete = async (b: MediaItem) => {
     const r = await confirm({
@@ -78,13 +89,13 @@ function MediaPage() {
       options: [{ key: "block", label: "Also block this hash from being re-uploaded", default: true }],
     });
     if (!r) return false;
-    await remove.mutateAsync({ sha256: b.sha256, block: r.options.block });
+    if (!(await tryMutate(remove, { sha256: b.sha256, block: r.options.block }))) return false;
+    toggle(b.sha256, false);
     if (open !== null) setOpen(null);
   };
   const doBulk = async (action: "approve" | "block" | "delete") => {
     if (action !== "approve" && !(await confirm({ title: `${action === "delete" ? "Delete" : "Block"} ${selected.size} blob(s)?`, destructive: true, confirmText: action === "delete" ? "Delete" : "Block" }))) return;
-    await bulk.mutateAsync({ sha256s: [...selected], action });
-    setSelected(new Set());
+    if (await tryMutate(bulk, { sha256s: [...selected], action })) setSelected(new Set());
   };
   const toggle = (sha: string, on: boolean) =>
     setSelected((s) => {
@@ -206,10 +217,10 @@ function MediaPage() {
             })}
           </div>
         )}
-        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} onVisible={() => q.fetchNextPage()} />
+        <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
 
-      <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={bulk.isPending} onClear={() => setSelected(new Set())}>
         <Button size="sm" variant="ghost" className="rounded-full" onClick={() => doBulk("approve")}>
           <Check /> Approve
         </Button>
@@ -228,6 +239,7 @@ function MediaPage() {
         canModerate={mod}
         onStatus={(b, status) => setStatus.mutate({ sha256: b.sha256, status })}
         onDelete={doDelete}
+        busy={setStatus.isPending || remove.isPending}
       />
     </div>
   );
@@ -278,9 +290,11 @@ function StatTile({ label, value, highlight, onClick }: { label: string; value?:
 function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: MediaItem; selected: boolean; selectable: boolean; selecting: boolean; onSelect: (v: boolean) => void; onOpen: () => void }) {
   const k = kindOf(b.type);
   const thumb = b.hasThumbnail ? mediaUrl(b, true) : k === "image" ? mediaUrl(b) : undefined;
+  // touch: long-press starts selecting (the checkbox is hidden until then)
+  const longPress = useLongPress(() => selectable && onSelect(!selected));
   return (
     <div className={cn("group relative aspect-square overflow-hidden rounded-xl border bg-muted", selected && "ring-2 ring-primary")}>
-      <button className="absolute inset-0 size-full" onClick={() => (selecting ? onSelect(!selected) : onOpen())} aria-label={`Open ${b.sha256.slice(0, 8)}`}>
+      <button className="absolute inset-0 size-full select-none [-webkit-touch-callout:none]" {...longPress} onClick={() => (selecting ? onSelect(!selected) : onOpen())} aria-label={`Open ${b.sha256.slice(0, 8)}`}>
         {thumb ? (
           <img src={thumb} alt="" loading="lazy" className={cn("size-full object-cover transition-transform group-hover:scale-105", b.status === "blocked" && "opacity-40 grayscale")} />
         ) : (
@@ -307,7 +321,7 @@ function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: Med
 }
 
 function Lightbox({
-  items, openSha, onOpen, canModerate, onStatus, onDelete,
+  items, openSha, onOpen, canModerate, onStatus, onDelete, busy,
 }: {
   items: MediaItem[];
   openSha: string | null;
@@ -315,6 +329,7 @@ function Lightbox({
   canModerate: boolean;
   onStatus: (b: MediaItem, s: BlobStatus) => void;
   onDelete: (b: MediaItem) => void;
+  busy?: boolean;
 }) {
   const found = openSha !== null ? items.findIndex((x) => x.sha256 === openSha) : -1;
   const index = found >= 0 ? found : null;
@@ -398,7 +413,8 @@ function Lightbox({
                 </a>
               </Button>
               {canModerate && (
-                <>
+                // fieldset: one moderation request at a time (Approve has no confirm step)
+                <fieldset disabled={busy} className="contents">
                   {b.status !== "approved" && (
                     <Button size="sm" variant="outline" onClick={() => onStatus(b, "approved")}>
                       <Check /> Approve
@@ -412,7 +428,7 @@ function Lightbox({
                   <Button size="sm" variant="destructive" className="ml-auto" onClick={() => onDelete(b)}>
                     <Trash2 /> Delete
                   </Button>
-                </>
+                </fieldset>
               )}
             </div>
           </>

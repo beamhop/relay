@@ -1,15 +1,16 @@
 import { toast } from "sonner";
 import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useConfirm } from "@/components/confirm";
+import { tryMutate } from "@/queries/client";
 import { useUserActions } from "@/queries/users";
 import { usePluginRegistry } from "@/plugins/registry";
 import { displayName } from "@/lib/nostr";
 import type { Profile } from "@beamhop/sdk/admin-contract";
 
 /** Ban/unban/delete flows with confirmation dialogs shared by the users list and detail pages. */
-export function useBanFlow(scope?: string) {
+export function useBanFlow() {
   const confirm = useConfirm();
-  const actions = useUserActions(scope);
+  const actions = useUserActions();
   const ban = async (pubkey: string, profile?: Profile) => {
     const r = await confirm({
       title: `Ban ${displayName(pubkey, profile)}?`,
@@ -24,14 +25,14 @@ export function useBanFlow(scope?: string) {
       ],
     });
     if (!r) return false;
-    await actions.ban.mutateAsync({
+    const ok = await tryMutate(actions.ban, {
       pubkey,
       reason: r.input || undefined,
       disconnect: r.options.disconnect,
       deleteEvents: r.options.deleteEvents,
       deleteMedia: r.options.deleteMedia,
     });
-    return true;
+    return !!ok;
   };
   const remove = async (pubkey: string, profile?: Profile) => {
     const r = await confirm({
@@ -41,8 +42,7 @@ export function useBanFlow(scope?: string) {
       confirmText: "Delete user",
     });
     if (!r) return false;
-    await actions.remove.mutateAsync(pubkey);
-    return true;
+    return !!(await tryMutate(actions.remove, pubkey));
   };
   return { ...actions, banWithConfirm: ban, deleteWithConfirm: remove, confirm };
 }

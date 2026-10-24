@@ -1,4 +1,5 @@
 import * as React from "react";
+import { tryMutate } from "@/queries/client";
 import { createFileRoute } from "@tanstack/react-router";
 import { Plus, Ticket, Trash2 } from "lucide-react";
 import type { InviteView } from "@beamhop/sdk/admin-contract";
@@ -37,7 +38,7 @@ function InvitesPage() {
   const [creating, setCreating] = React.useState(false);
   const doRevoke = async (code: string) => {
     if (!(await confirm({ title: "Revoke invite?", description: "The link will stop working immediately.", destructive: true, confirmText: "Revoke" }))) return false;
-    await revoke.mutateAsync(code);
+    return !!(await tryMutate(revoke, code));
   };
   const items = [...(data ?? [])].sort((a, b) => b.createdAt - a.createdAt);
   return (
@@ -156,13 +157,13 @@ function CreateInvites({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (invalid) return;
-    const r = await create.mutateAsync({
+    const r = await tryMutate(create, {
       count: Number(count),
       maxUses: Number(maxUses) || 0,
       expiresAt: days ? nowSec() + Number(days) * 86400 : null,
       note: note || undefined,
     });
-    setCreated(r.items ?? []);
+    if (r) setCreated(r.data.items ?? []);
   };
   const close = (o: boolean) => {
     onOpenChange(o);

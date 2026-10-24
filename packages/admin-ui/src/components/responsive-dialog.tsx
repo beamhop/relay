@@ -1,4 +1,4 @@
-import type * as React from "react";
+import * as React from "react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -16,7 +16,12 @@ export function ResponsiveDialog({
   footer?: React.ReactNode;
   className?: string;
 }) {
-  const mobile = useIsMobile();
+  const isMobile = useIsMobile();
+  // keep the variant picked at open: swapping Drawer/Dialog mid-way (iPad rotation, split view) would remount
+  // the children and wipe whatever was typed
+  const [latched, setLatched] = React.useState(isMobile);
+  if (!open && latched !== isMobile) setLatched(isMobile);
+  const mobile = open ? latched : isMobile;
   if (mobile)
     return (
       <Drawer open={open} onOpenChange={onOpenChange}>
@@ -26,7 +31,7 @@ export function ResponsiveDialog({
             {description && <DrawerDescription>{description}</DrawerDescription>}
           </DrawerHeader>
           <div className={cn("min-h-0 flex-1 overflow-y-auto px-4", className)}>{children}</div>
-          {footer && <DrawerFooter className="pb-safe">{footer}</DrawerFooter>}
+          {footer && <DrawerFooter className="pb-[max(1rem,env(safe-area-inset-bottom))]">{footer}</DrawerFooter>}
         </DrawerContent>
       </Drawer>
     );

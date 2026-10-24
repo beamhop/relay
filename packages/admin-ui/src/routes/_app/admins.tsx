@@ -1,4 +1,5 @@
 import * as React from "react";
+import { tryMutate } from "@/queries/client";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Shield, UserPlus } from "lucide-react";
 import { ROLE_PERMISSIONS, type AdminRole } from "@beamhop/sdk/admin-contract";
@@ -117,7 +118,7 @@ function AddAdmin({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boo
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pubkey) return;
-    await setRole.mutateAsync({ pubkey, role });
+    if (!(await tryMutate(setRole, { pubkey, role }))) return;
     setInput("");
     onOpenChange(false);
   };

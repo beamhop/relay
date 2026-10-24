@@ -48,3 +48,15 @@ export function useApiMutation<TVars = void, TData = unknown>(o: ApiMutationOpti
     },
   });
 }
+
+/**
+ * `mutateAsync` for event handlers: useApiMutation already toasts failures, so swallow the rejection (no unhandled
+ * promise) and return undefined instead.
+ */
+export async function tryMutate<TVars, TData>(m: { mutateAsync: (v: TVars) => Promise<TData> }, vars: TVars): Promise<{ data: TData } | undefined> {
+  try {
+    return { data: await m.mutateAsync(vars) };
+  } catch {
+    return undefined;
+  }
+}

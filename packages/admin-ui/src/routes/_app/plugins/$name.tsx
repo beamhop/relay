@@ -96,7 +96,7 @@ function PluginPage() {
                   }}
                   className="space-y-4"
                 >
-                  <JsonSchemaForm schema={schema} value={values} onChange={setDraft} disabled={!can("plugins.manage")} />
+                  <JsonSchemaForm key={name} schema={schema} value={values} onChange={setDraft} disabled={!can("plugins.manage")} />
                   {can("plugins.manage") && (
                     <div className="flex justify-end gap-2">
                       {draft && (

@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_app")({
       return { me };
     } catch (e) {
       if (e instanceof HttpError && (e.status === 401 || e.status === 403)) {
-        throw redirect({ to: "/login", search: { redirect: location.pathname === "/" ? undefined : location.pathname } });
+        throw redirect({ to: "/login", search: { redirect: location.href === "/" ? undefined : location.href } });
       }
       throw e;
     }

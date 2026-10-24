@@ -148,15 +148,19 @@ function EventCardInner({ event, author, reports, selected, onSelect, onDelete, 
   );
 }
 
-const URL_RE = /(https?:\/\/[^\s<>"]+)/g;
+// a trailing ".,;:!?)]}'" is sentence punctuation, not part of the URL
+const URL_RE = /(https?:\/\/[^\s<>"]*[^\s<>".,;:!?)\]}'])/g;
 const IMG_RE = /\.(png|jpe?g|gif|webp|avif|svg)(\?.*)?$/i;
 const VID_RE = /\.(mp4|webm|mov|m4v)(\?.*)?$/i;
 
 function RichText({ text, compact, media = true, sensitive }: { text: string; compact?: boolean; media?: boolean; sensitive?: boolean }) {
   const [expanded, setExpanded] = React.useState(false);
   const limit = compact ? 280 : 900;
-  const long = text.length > limit;
-  const shown = long && !expanded ? `${text.slice(0, limit)}…` : text;
+  // never cut inside a URL: that would link to a partial address
+  let cut = limit;
+  for (const m of text.matchAll(URL_RE)) if (m.index < cut && m.index + m[0].length > cut) cut = m.index + m[0].length;
+  const long = text.length > cut;
+  const shown = long && !expanded ? `${text.slice(0, cut)}…` : text;
   const parts = shown.split(URL_RE);
   const urls = media ? (text.match(URL_RE) ?? []).filter((u) => IMG_RE.test(u) || VID_RE.test(u)).slice(0, 4) : [];
   return (

@@ -30,9 +30,13 @@ function LoginPage() {
     try {
       if ((await fn()) === false) return; // more input needed (e.g. TOTP code)
       toast.success("Signed in");
-      navigate({ to: (redirect && redirect.startsWith("/") && redirect !== "/login" ? redirect : "/") as "/" });
+      // `redirect` is a same-origin path (with its query); never "//host" or the login page itself
+      const safe = redirect && redirect.startsWith("/") && !redirect.startsWith("//") && !redirect.startsWith("/login");
+      if (safe) navigate({ href: redirect });
+      else navigate({ to: "/" });
     } catch (e) {
-      if ((e as Error)?.name !== "NotAllowedError") toast.error("Sign-in failed", { description: errorMessage(e) });
+      const name = (e as Error)?.name;
+      if (name !== "NotAllowedError" && name !== "AbortError") toast.error("Sign-in failed", { description: errorMessage(e) });
     } finally {
       setBusy(null);
     }

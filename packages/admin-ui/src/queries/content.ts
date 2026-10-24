@@ -90,12 +90,12 @@ export const useOpenReportCount = (enabled: boolean) =>
 export function useResolveReports() {
   const one = useApiMutation({
     fn: ({ id, ...body }: ResolveReportRequest & { id: string }) => api.post(`/reports/${enc(id)}/resolve`, body),
-    invalidate: [["reports"], ["events"], ["users"]],
+    invalidate: [["reports"], ["events"], ["users"], ["user"], ["user-events"], ["media"]],
     success: (_d, v) => (v.action === "dismiss" ? "Report dismissed" : "Report resolved"),
   });
   const bulk = useApiMutation({
     fn: (body: ResolveReportRequest & { ids: string[] }) => api.post<ReportBulkResult>("/reports/bulk-resolve", body),
-    invalidate: [["reports"], ["events"], ["users"]],
+    invalidate: [["reports"], ["events"], ["users"], ["user"], ["user-events"], ["media"]],
     success: (r, v) => `${r?.ok ?? v.ids.length} report(s) resolved${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
   });
   return { one, bulk };

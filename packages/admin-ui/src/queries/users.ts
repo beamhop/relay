@@ -33,38 +33,41 @@ export const useUserEvents = (pubkey: string, limit = 30) =>
 export const useAdmins = () =>
   useQuery({ queryKey: ["admins"], queryFn: () => api.get<{ items: UserView[] }>("/admins").then((r) => r.items ?? []) });
 
-const userKeys = (pubkey?: string) => [["users"], ["admins"], ...(pubkey ? [["user", pubkey]] : [])];
+// every user detail, not just `pubkey`'s: list/admin-page actions run without one and would leave it stale
+const userKeys = () => [["users"], ["admins"], ["user"]];
+// actions that can delete a user's events/media
+const contentKeys = () => [...userKeys(), ["user-events"], ["events"], ["media"], ["reports"]];
 
-export function useUserActions(pubkey?: string) {
+export function useUserActions() {
   const ban = useApiMutation({
     fn: ({ pubkey: pk, ...body }: BanRequest & { pubkey: string }) => api.post(`/users/${enc(pk)}/ban`, body),
-    invalidate: userKeys(pubkey),
+    invalidate: contentKeys(),
     success: "User banned",
   });
   const remove = useApiMutation({
     fn: (pk: string) => api.del<DeleteUserResult>(`/users/${enc(pk)}`),
-    invalidate: userKeys(),
+    invalidate: contentKeys(),
     success: "User deleted",
   });
   const simple = (action: "unban" | "mute" | "unmute", label: string) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    useApiMutation({ fn: (pk: string) => api.post(`/users/${enc(pk)}/${action}`), invalidate: userKeys(pubkey), success: label });
+    useApiMutation({ fn: (pk: string) => api.post(`/users/${enc(pk)}/${action}`), invalidate: userKeys(), success: label });
   const unban = simple("unban", "User unbanned");
   const mute = simple("mute", "User muted");
   const unmute = simple("unmute", "User unmuted");
   const patch = useApiMutation({
     fn: ({ pubkey: pk, ...body }: UserPatch & { pubkey: string }) => api.patch<UserView>(`/users/${enc(pk)}`, body),
-    invalidate: userKeys(pubkey),
+    invalidate: userKeys(),
     success: "User updated",
   });
   const setRole = useApiMutation({
     fn: ({ pubkey: pk, role }: { pubkey: string; role: AdminRole | null }) => api.put(`/users/${enc(pk)}/role`, { role }),
-    invalidate: userKeys(pubkey),
+    invalidate: userKeys(),
     success: (_d, v) => (v.role ? `Role set to ${v.role}` : "Admin role removed"),
   });
   const bulk = useApiMutation({
     fn: (body: BulkUserRequest) => api.post<BulkResult>("/users/bulk", body),
-    invalidate: userKeys(pubkey),
+    invalidate: contentKeys(),
     success: (r) => `${r?.ok ?? 0} updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
   });
   const add = useApiMutation({
