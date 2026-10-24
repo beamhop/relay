@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useInFlight } from "@/hooks/use-in-flight";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Ban, CheckCircle2, Filter, MoreHorizontal, Plus, Search, ShieldCheck, Tag, Trash2, UserX, Users, VolumeX, X } from "lucide-react";
 import type { AdminRole, BulkUserRequest, UserStatus, UserView } from "@beamhop/sdk/admin-contract";
@@ -99,7 +100,9 @@ function UsersPage() {
   const anyMuted = selectedStatuses.has("muted");
   const anyActive = selectedStatuses.has("active");
 
-  const runBulk = async (action: BulkUserRequest["action"], destructive = false) => {
+  const once = useInFlight();
+  const runBulk = (action: BulkUserRequest["action"], destructive = false) => once(() => runBulkNow(action, destructive));
+  const runBulkNow = async (action: BulkUserRequest["action"], destructive = false) => {
     const pubkeys = [...selected];
     let reason: string | undefined;
     let tag: string | undefined;
@@ -175,7 +178,7 @@ function UsersPage() {
       <PullToRefresh onRefresh={() => q.refetch()}>
         {q.isLoading ? (
           <ListSkeleton />
-        ) : q.isError ? (
+        ) : q.isError && !q.data ? (
           <ErrorState error={q.error} retry={() => q.refetch()} />
         ) : !items.length ? (
           <EmptyState icon={Users} title="No users found" description="Try a different search or clear the filters." />

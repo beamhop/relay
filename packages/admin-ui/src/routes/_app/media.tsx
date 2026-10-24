@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useInFlight } from "@/hooks/use-in-flight";
 import { createFileRoute } from "@tanstack/react-router";
 import { Check, ChevronLeft, ChevronRight, Download, File, FileAudio, FileVideo, Image as ImageIcon, ShieldOff, Trash2, X } from "lucide-react";
 import type { BlobStatus, MediaItem } from "@beamhop/sdk/admin-contract";
@@ -93,7 +94,9 @@ function MediaPage() {
     toggle(b.sha256, false);
     if (open !== null) setOpen(null);
   };
-  const doBulk = async (action: "approve" | "block" | "delete") => {
+  const once = useInFlight();
+  const doBulk = (action: "approve" | "block" | "delete") => once(() => doBulkNow(action));
+  const doBulkNow = async (action: "approve" | "block" | "delete") => {
     if (action !== "approve" && !(await confirm({ title: `${action === "delete" ? "Delete" : "Block"} ${selected.size} blob(s)?`, destructive: true, confirmText: action === "delete" ? "Delete" : "Block" }))) return;
     if (await tryMutate(bulk, { sha256s: [...selected], action })) setSelected(new Set());
   };
@@ -192,7 +195,7 @@ function MediaPage() {
               <Skeleton key={i} className="aspect-square rounded-xl" />
             ))}
           </div>
-        ) : q.isError ? (
+        ) : q.isError && !q.data ? (
           <ErrorState error={q.error} retry={() => q.refetch()} />
         ) : !items.length ? (
           <EmptyState icon={ImageIcon} title="No media" description="Nothing matches the current filters." />
@@ -237,7 +240,7 @@ function MediaPage() {
         openSha={open}
         onOpen={setOpen}
         canModerate={mod}
-        onStatus={(b, status) => setStatus.mutate({ sha256: b.sha256, status })}
+        onStatus={(b, status) => once(() => tryMutate(setStatus, { sha256: b.sha256, status }))}
         onDelete={doDelete}
         busy={setStatus.isPending || remove.isPending}
       />

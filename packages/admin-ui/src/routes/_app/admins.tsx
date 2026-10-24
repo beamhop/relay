@@ -16,7 +16,7 @@ import { ListSkeleton } from "@/components/page-skeleton";
 import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { useConfirm } from "@/components/confirm";
 import { useAdmins, useUserActions } from "@/queries/users";
-import { useMe } from "@/queries/auth";
+import { useCan, useMe } from "@/queries/auth";
 import { parsePubkey } from "@/lib/nostr";
 import { timeAgo } from "@/lib/format";
 
@@ -37,10 +37,12 @@ function AdminsPage() {
   const confirm = useConfirm();
   const [adding, setAdding] = React.useState(false);
 
+  // the server refuses role changes without admins.manage; don't offer them (the page is reachable by URL)
+  const manage = useCan()("admins.manage");
   const change = async (pubkey: string, v: string) => {
     const role = v === "none" ? null : (v as AdminRole);
     if (!role && !(await confirm({ title: "Remove admin access?", destructive: true, confirmText: "Remove" }))) return;
-    setRole.mutate({ pubkey, role });
+    await tryMutate(setRole, { pubkey, role });
   };
 
   return (
@@ -49,9 +51,11 @@ function AdminsPage() {
         title="Admins"
         description="People with access to this panel and their roles"
         actions={
-          <Button onClick={() => setAdding(true)}>
-            <UserPlus /> Add admin
-          </Button>
+          manage && (
+            <Button onClick={() => setAdding(true)}>
+              <UserPlus /> Add admin
+            </Button>
+          )
         }
       />
       {isLoading ? (
@@ -65,7 +69,7 @@ function AdminsPage() {
           {data.map((u) => (
             <div key={u.pubkey} className="flex flex-col gap-3 border-b p-4 last:border-0 sm:flex-row sm:items-center">
               <UserChip pubkey={u.pubkey} profile={u.profile} className="flex-1" sub={`last seen ${timeAgo(u.lastSeenAt)}`} />
-              <Select value={u.role ?? "none"} onValueChange={(v) => change(u.pubkey, v)} disabled={u.pubkey === me?.pubkey}>
+              <Select value={u.role ?? "none"} onValueChange={(v) => change(u.pubkey, v)} disabled={!manage || u.pubkey === me?.pubkey || setRole.isPending}>
                 <SelectTrigger className="w-full sm:w-44">
                   <SelectValue />
                 </SelectTrigger>

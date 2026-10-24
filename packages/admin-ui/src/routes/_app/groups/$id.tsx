@@ -53,7 +53,7 @@ function GroupPage() {
               <GroupAvatar picture={g.picture} name={g.name || g.id} size={72} />
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-xl font-semibold">{g.name || g.id}</h1>
+                  <h1 className="min-w-0 text-xl font-semibold [overflow-wrap:anywhere]">{g.name || g.id}</h1>
                   {g.private && (
                     <ToneBadge t="violet">
                       <Lock className="size-3" /> private
@@ -62,10 +62,10 @@ function GroupPage() {
                   {g.closed && <ToneBadge t="amber">closed</ToneBadge>}
                 </div>
                 <div className="flex items-center gap-1">
-                  <code className="text-xs text-muted-foreground">{g.id}</code>
+                  <code className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">{g.id}</code>
                   <CopyButton value={g.id} size="icon-xs" />
                 </div>
-                {g.about && <p className="pt-1 text-sm whitespace-pre-wrap">{g.about}</p>}
+                {g.about && <p className="pt-1 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{g.about}</p>}
                 <p className="pt-1 text-xs text-muted-foreground">
                   {formatNumber(g.members)} members · created {formatDate(g.createdAt)}
                 </p>

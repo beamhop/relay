@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronsUpDown, Menu, Puzzle, Search } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu,
@@ -29,7 +30,10 @@ export function AppShell() {
   const navigate = useNavigate();
   const can = useCan();
   const plugins = usePlugins(can("plugins.view"));
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // keyed on the resolved location: s.location changes when a navigation starts, while the old page is still
+  // rendered, so a crashed page would crash the fresh boundary again and keep showing the error after navigating
+  const pathname = useRouterState({ select: (s) => (s.resolvedLocation ?? s.location).pathname });
+  const queryClient = useQueryClient();
 
   React.useEffect(() => {
     live.onNavigate = (url) => navigate({ to: url as "/" });
@@ -48,8 +52,9 @@ export function AppShell() {
         <SidebarInset className="min-w-0">
           <TopBar />
           <div className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 px-3 pt-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))] sm:pt-6 md:pb-8">
-            {/* keyed so a crashed page doesn't keep showing the error after navigating away */}
-            <ErrorBoundary key={pathname} label="Page">
+            {/* keyed so a crashed page doesn't keep showing the error after navigating away; Retry refetches the
+                cache first (the shell may share the query the page crashed on), so it doesn't re-render the bad response */}
+            <ErrorBoundary key={pathname} label="Page" onRetry={() => queryClient.refetchQueries().catch(() => {})}>
               <Outlet />
             </ErrorBoundary>
           </div>
@@ -257,10 +262,12 @@ function TabLink({ item, active, badge }: { item: NavItem; active: boolean; badg
       <span className={cn("relative flex h-7 w-12 items-center justify-center rounded-full transition-colors", active && "bg-primary/12")}>
         <item.icon className="size-5" />
         {!!badge && (
-          <span className="absolute -top-1 right-0.5 min-w-4 rounded-full bg-destructive px-1 text-center text-[10px] leading-4 text-white">{badge > 99 ? "99+" : badge}</span>
+          <span aria-hidden className="absolute -top-1 right-0.5 min-w-4 rounded-full bg-destructive px-1 text-center text-[10px] leading-4 text-white">{badge > 99 ? "99+" : badge}</span>
         )}
       </span>
       {item.label}
+      {/* read after the label ("Reports 10"), like the sidebar badge, not before it */}
+      {!!badge && <span className="sr-only"> {badge > 99 ? "99+" : badge}</span>}
     </Link>
   );
 }

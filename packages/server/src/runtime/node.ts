@@ -4,7 +4,7 @@ import { getRequestListener } from "@hono/node-server";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Beamhop } from "../app";
 import { makeEnv } from "../app";
-import { clientIp, proxyMatcher, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
 
 const PING_INTERVAL_MS = 30_000;
 const header = (req: IncomingMessage) => (n: string) => {
@@ -13,6 +13,9 @@ const header = (req: IncomingMessage) => (n: string) => {
 };
 
 /** node:http + `ws` adapter. Also works under Bun (used in tests), but Bun prefers serveBun. */
+/** How long stop() waits for websocket close handshakes before terminating sockets. */
+const STOP_GRACE_MS = 1_000;
+
 export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Promise<RunningServer> {
   const { config, relay, settings, logger } = beamhop;
   const log = logger.child("http");
@@ -41,11 +44,11 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
 
   const wss = new WebSocketServer({
     noServer: true,
-    maxPayload: Math.max(4096, settings.get().limits.maxMessageBytes),
+    maxPayload: wsMaxPayload(settings.get().limits.maxMessageBytes),
     perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 }, concurrencyLimit: 10 },
   });
   const unsub = settings.onChange((s) => {
-    (wss.options as { maxPayload?: number }).maxPayload = Math.max(4096, s.limits.maxMessageBytes);
+    (wss.options as { maxPayload?: number }).maxPayload = wsMaxPayload(s.limits.maxMessageBytes);
   });
   const alive = new WeakMap<WebSocket, boolean>();
 
@@ -130,6 +133,13 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
     },
     async stop() {
       running.stopAccepting();
+      // relay.stop() has started a 1001 close (after its shutdown NOTICE) on every socket: give those handshakes a
+      // moment to finish, so clients see a clean close instead of 1006, then cut whatever is left
+      const pending = [...wss.clients].filter((ws) => ws.readyState !== ws.CLOSED);
+      await Promise.race([
+        Promise.all(pending.map((ws) => new Promise<void>((resolve) => (ws.readyState === ws.CLOSED ? resolve() : ws.once("close", () => resolve()))))),
+        new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS).unref?.()),
+      ]);
       for (const ws of wss.clients) ws.terminate();
       wss.close();
       server.closeAllConnections?.();

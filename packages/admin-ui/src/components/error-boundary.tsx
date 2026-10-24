@@ -1,7 +1,11 @@
 import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 
-export class ErrorBoundary extends React.Component<{ children: React.ReactNode; label?: string; fallback?: React.ReactNode }, { error: Error | null }> {
+/** `onRetry` runs before the subtree re-renders (e.g. drop the cached responses it crashed on, so Retry refetches). */
+export class ErrorBoundary extends React.Component<
+  { children: React.ReactNode; label?: string; fallback?: React.ReactNode; onRetry?: () => unknown },
+  { error: Error | null }
+> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -18,7 +22,13 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode; 
             <div className="min-w-0 space-y-1">
               <p className="font-medium">{this.props.label ?? "This section"} failed to render</p>
               <p className="break-words text-muted-foreground">{this.state.error.message}</p>
-              <button className="text-primary underline-offset-4 hover:underline" onClick={() => this.setState({ error: null })}>
+              <button
+                className="text-primary underline-offset-4 hover:underline"
+                onClick={async () => {
+                  await this.props.onRetry?.();
+                  this.setState({ error: null });
+                }}
+              >
                 Retry
               </button>
             </div>

@@ -9,6 +9,10 @@ import { TokenBucket } from "../util/ratelimit";
 
 const MAX_EVENTS_PER_SEC = 50;
 
+/** Buffered-but-unread bytes per SSE stream: live events are dropped above SOFT, the stream is closed above HARD. */
+const SSE_SOFT_LIMIT = 1024 * 1024;
+const SSE_HARD_LIMIT = 8 * 1024 * 1024;
+
 export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
   const { metrics, bus } = ctx.deps;
   const snapshotMs = ctx.opts.snapshotIntervalMs ?? 2000;
@@ -63,9 +67,25 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
         };
         stream.onAbort(close);
 
+        // backpressure, like the websocket path: writes settle as the client reads, so `queued` is what a slow or
+        // paused reader has left buffered in memory. Above the soft limit live events are shed; above the hard
+        // limit the stream is closed (the client reconnects and resyncs from a snapshot).
+        let queued = 0;
         const send = <K extends keyof StreamEvents>(event: K, data: StreamEvents[K]) => {
           if (closed) return;
-          stream.writeSSE({ event, data: JSON.stringify(data) }).catch(close);
+          const json = JSON.stringify(data);
+          if (queued > SSE_SOFT_LIMIT && event === "event") return;
+          if (queued > SSE_HARD_LIMIT) {
+            // abort, not just finish: a graceful close would wait for the stalled reader to drain the buffer
+            close();
+            stream.abort();
+            return;
+          }
+          const bytes = json.length + 32;
+          queued += bytes;
+          stream
+            .writeSSE({ event, data: json })
+            .then(() => (queued -= bytes), close);
         };
 
         let lastSnapshot = 0;
@@ -86,7 +106,8 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
         cleanups.push(() => clearInterval(snapTimer));
 
         const hb = setInterval(() => {
-          if (!closed) stream.write(": ping\n\n").catch(close);
+          // skipped while the reader is behind: the backlog already keeps the connection busy
+          if (!closed && queued <= SSE_SOFT_LIMIT) stream.write(": ping\n\n").catch(close);
         }, heartbeatMs);
         cleanups.push(() => clearInterval(hb));
 

@@ -290,6 +290,6 @@ describe("downloads", () => {
     const x = (await up.json()).sha256;
     const res = await h.request(`/${x}`);
     const cd = res.headers.get("content-disposition");
-    if (cd) expect(cd).toBe(`attachment; filename="${x}.pdf"`);
+    if (cd && cd !== "inline") expect(cd).toBe(`attachment; filename="${x}.pdf"`);
   });
 });

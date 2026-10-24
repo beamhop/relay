@@ -102,6 +102,8 @@ export function createRoutes(core: BlossomCore): Hono {
       "Cross-Origin-Resource-Policy": "cross-origin",
     });
     if (!isInlineSafe(type)) headers.set("Content-Disposition", `attachment; filename="${filename}.${extFromMime(type)}"`);
+    // explicit, or Bun adds a type-less `filename="<sha256>"` for file-backed bodies
+    else headers.set("Content-Disposition", "inline");
     return headers;
   };
 

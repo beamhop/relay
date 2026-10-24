@@ -3,7 +3,10 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /** Calls `onVisible` when scrolled into view; shows a load-more button as fallback. */
-/** `paused` (e.g. the last page failed) stops auto-loading so a failing request isn't retried in a loop; the button stays. */
+/**
+ * `paused` (e.g. the last page failed) stops auto-loading so a failing request isn't retried in a loop; the button
+ * stays. Pages show their error state only without loaded data (`q.isError && !q.data`), so the list stays too.
+ */
 export function InfiniteSentinel({ hasMore, loading, paused, onVisible }: { hasMore: boolean; loading: boolean; paused?: boolean; onVisible: () => void }) {
   const ref = React.useRef<HTMLDivElement>(null);
   const cb = React.useRef(onVisible);

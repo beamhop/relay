@@ -70,7 +70,7 @@ function EventCardInner({ event, author, reports, selected, onSelect, onDelete, 
         </Link>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Link to="/users/$pubkey" params={{ pubkey: event.pubkey }} className="truncate text-sm font-medium hover:underline">
+            <Link to="/users/$pubkey" params={{ pubkey: event.pubkey }} className="min-w-0 max-w-full truncate text-sm font-medium hover:underline">
               {displayName(event.pubkey, author)}
             </Link>
             <span className="text-xs text-muted-foreground" title={formatDate(event.created_at)}>
@@ -160,7 +160,9 @@ function RichText({ text, compact, media = true, sensitive }: { text: string; co
   let cut = limit;
   for (const m of text.matchAll(URL_RE)) if (m.index < cut && m.index + m[0].length > cut) cut = m.index + m[0].length;
   const long = text.length > cut;
-  const shown = long && !expanded ? `${text.slice(0, cut)}…` : text;
+  const truncated = long && !expanded;
+  // the ellipsis is rendered after the parts, never appended to the text: URL_RE would pull it into a link's href
+  const shown = truncated ? text.slice(0, cut) : text;
   const parts = shown.split(URL_RE);
   const urls = media ? (text.match(URL_RE) ?? []).filter((u) => IMG_RE.test(u) || VID_RE.test(u)).slice(0, 4) : [];
   return (
@@ -175,6 +177,7 @@ function RichText({ text, compact, media = true, sensitive }: { text: string; co
             <React.Fragment key={i}>{p.replace(/nostr:(npub|nprofile|note|nevent|naddr)1[02-9ac-hj-np-z]+/g, (m) => `${m.slice(0, 18)}…`)}</React.Fragment>
           ),
         )}
+        {truncated && "…"}
       </p>
       {long && (
         <button className="text-xs font-medium text-primary" onClick={() => setExpanded((v) => !v)}>
@@ -212,12 +215,12 @@ function EventContentInner({ event, compact, sensitive }: { event: NostrEvent; c
       // a reported profile's picture is reported media too: identicon only
       const shown = sensitive ? { ...p, picture: undefined } : p;
       return (
-        <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-2.5">
+        <div className="flex min-w-0 items-center gap-3 rounded-lg border bg-muted/30 p-2.5">
           <UserAvatar pubkey={event.pubkey} profile={shown} size={40} />
-          <div className="min-w-0 text-sm">
+          <div className="min-w-0 flex-1 text-sm">
             <p className="truncate font-medium">{p.display_name || p.name || "Unnamed"}</p>
             {p.nip05 && <p className="truncate text-xs text-muted-foreground">{p.nip05}</p>}
-            {p.about && <p className="line-clamp-2 text-xs text-muted-foreground">{p.about}</p>}
+            {p.about && <p className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">{p.about}</p>}
           </div>
         </div>
       );
@@ -262,7 +265,7 @@ function EventContentInner({ event, compact, sensitive }: { event: NostrEvent; c
           <p>
             <ToneBadge t="red">{type}</ToneBadge> report against {e ? `event ${shortHex(e[1] ?? "", 6)}` : `user ${shortHex(p?.[1] ?? "", 6)}`}
           </p>
-          {content && <p className="text-muted-foreground">{content}</p>}
+          {content && <p className="text-muted-foreground [overflow-wrap:anywhere]">{content}</p>}
         </div>
       );
     }
@@ -292,13 +295,13 @@ function EventContentInner({ event, compact, sensitive }: { event: NostrEvent; c
       if (kind === 1 || kind === 11 || kind === 1111 || kind === 9 || kind === 10 || kind === 42 || kind === 1311 || kind === 20 || kind === 21 || kind === 22 || content)
         return (
           <div className="space-y-1">
-            {t && kind >= 30000 && <p className="text-sm font-medium">{t}</p>}
+            {t && kind >= 30000 && <p className="text-sm font-medium [overflow-wrap:anywhere]">{t}</p>}
             {content ? <RichText text={content} compact={compact} sensitive={sensitive} /> : <TagsSummary tags={tags} />}
           </div>
         );
       return (
         <div className="space-y-1">
-          {t && <p className="text-sm font-medium">{t}</p>}
+          {t && <p className="text-sm font-medium [overflow-wrap:anywhere]">{t}</p>}
           <TagsSummary tags={tags} />
         </div>
       );

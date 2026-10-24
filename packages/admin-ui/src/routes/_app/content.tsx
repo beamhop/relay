@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useInFlight } from "@/hooks/use-in-flight";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Braces, Download, FileText, Filter as FilterIcon, Plus, RotateCcw, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import type { Filter, ImportResult } from "@beamhop/sdk/admin-contract";
@@ -107,7 +108,9 @@ function ContentPage() {
   const [importOpen, setImportOpen] = React.useState(false);
   React.useEffect(() => setSelected(new Set()), [raw]);
 
-  const deleteIds = async (ids: string[]) => {
+  const once = useInFlight();
+  const deleteIds = (ids: string[]) => once(() => deleteIdsNow(ids));
+  const deleteIdsNow = async (ids: string[]) => {
     const r = await confirm({
       title: `Delete ${ids.length} event${ids.length > 1 ? "s" : ""}?`,
       description: "Deleted events are removed from the relay database. This cannot be undone.",
@@ -210,7 +213,7 @@ function ContentPage() {
           <PullToRefresh onRefresh={() => q.refetch()}>
             {q.isLoading ? (
               <ListSkeleton />
-            ) : q.isError ? (
+            ) : q.isError && !q.data ? (
               <ErrorState error={q.error} retry={() => q.refetch()} />
             ) : !items.length ? (
               <EmptyState icon={FileText} title="No events match" description="Adjust the filter to see more results." />
@@ -311,6 +314,8 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
   return (
     <form onSubmit={submit} className="space-y-4">
       <Tabs
+        // manual: Radix otherwise also fires onValueChange on focus, so one click ran the switch (and its toast) twice
+        activationMode="manual"
         value={mode}
         onValueChange={(v) => {
           if (v === "json") setJson(JSON.stringify(builderToFilter(b), null, 2));

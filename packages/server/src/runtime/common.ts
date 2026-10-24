@@ -93,3 +93,11 @@ export function lastForwardedHop(xff: string | null | undefined): string | undef
   const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
   return hops[hops.length - 1];
 }
+
+/**
+ * Websocket transport cap for a relay message limit. Above the relay's own `maxMessageBytes` (with headroom), so
+ * a moderately oversized frame reaches the relay and gets the NIP-01 answer (OK/CLOSED "invalid: message too
+ * large") instead of the transport dropping the connection with 1006. Still bounded: far larger frames are cut off
+ * by the transport before they are buffered.
+ */
+export const wsMaxPayload = (maxMessageBytes: number) => Math.max(64 * 1024, maxMessageBytes * 2);

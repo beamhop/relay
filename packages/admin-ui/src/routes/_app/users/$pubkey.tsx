@@ -1,4 +1,6 @@
 import * as React from "react";
+import { useInFlight } from "@/hooks/use-in-flight";
+import { tryMutate } from "@/queries/client";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Ban, CheckCircle2, ExternalLink, FileText, Image as ImageIcon, MoreHorizontal, Save, Trash2, VolumeX, Volume2 } from "lucide-react";
 import type { AdminRole, MediaItem, UserDetail, UserPatch } from "@beamhop/sdk/admin-contract";
@@ -53,6 +55,7 @@ function UserPage() {
 function UserView({ u }: { u: UserDetail }) {
   const can = useCan();
   const flow = useBanFlow();
+  const once = useInFlight();
   const navigate = useNavigate();
   const npub = toNpub(u.pubkey);
   const name = displayName(u.pubkey, u.profile);
@@ -79,21 +82,21 @@ function UserView({ u }: { u: UserDetail }) {
                 // fieldset: one moderation action at a time (no double submit)
                 <fieldset disabled={flow.ban.isPending || flow.unban.isPending || flow.mute.isPending || flow.unmute.isPending} className="contents">
                   {u.status === "banned" ? (
-                    <Button variant="outline" onClick={() => flow.unban.mutate(u.pubkey)}>
+                    <Button variant="outline" onClick={() => once(() => tryMutate(flow.unban, u.pubkey))}>
                       <CheckCircle2 /> Unban
                     </Button>
                   ) : (
-                    <Button variant="destructive" onClick={() => flow.banWithConfirm(u.pubkey, u.profile)}>
+                    <Button variant="destructive" onClick={() => once(() => flow.banWithConfirm(u.pubkey, u.profile))}>
                       <Ban /> Ban
                     </Button>
                   )}
                   {u.status === "muted" ? (
-                    <Button variant="outline" onClick={() => flow.unmute.mutate(u.pubkey)}>
+                    <Button variant="outline" onClick={() => once(() => tryMutate(flow.unmute, u.pubkey))}>
                       <Volume2 /> Unmute
                     </Button>
                   ) : (
                     u.status !== "banned" && (
-                      <Button variant="outline" onClick={() => flow.mute.mutate(u.pubkey)}>
+                      <Button variant="outline" onClick={() => once(() => tryMutate(flow.mute, u.pubkey))}>
                         <VolumeX /> Mute
                       </Button>
                     )

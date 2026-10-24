@@ -34,11 +34,15 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const updateCurrent = (patch: Partial<Pick<Pending, "values" | "text">>) =>
     setQueue((q) => (q.length ? [{ ...q[0], ...patch }, ...q.slice(1)] : q));
 
+  // the dialogs open programmatically (no Radix trigger), so focus is handed back to whatever had it when
+  // confirm() was called; otherwise closing (Escape/Cancel) drops focus on <body>
+  const opener = React.useRef<HTMLElement | null>(null);
   const confirm = React.useCallback(
     (o: ConfirmOptions) =>
-      new Promise<ConfirmResult | null>((resolve) =>
-        setQueue((q) => [...q, { ...o, resolve, values: Object.fromEntries((o.options ?? []).map((x) => [x.key, !!x.default])), text: "" }]),
-      ),
+      new Promise<ConfirmResult | null>((resolve) => {
+        if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) opener.current = document.activeElement;
+        setQueue((q) => [...q, { ...o, resolve, values: Object.fromEntries((o.options ?? []).map((x) => [x.key, !!x.default])), text: "" }]);
+      }),
     [],
   );
 
@@ -55,7 +59,16 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
     <Ctx.Provider value={confirm}>
       {children}
       <AlertDialog open={!!pending} onOpenChange={(o) => !o && close(false)}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          onCloseAutoFocus={(e) => {
+            const el = opener.current;
+            // a menu item that opened the dialog is gone by now: then Radix's default applies
+            if (el?.isConnected) {
+              e.preventDefault();
+              el.focus();
+            }
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>{pending?.title}</AlertDialogTitle>
             {pending?.description && <AlertDialogDescription asChild><div>{pending.description}</div></AlertDialogDescription>}

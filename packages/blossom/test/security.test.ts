@@ -111,7 +111,7 @@ describe("serving user content safely", () => {
   test("passive media renders inline (but still nosniff + CSP)", async () => {
     const { sha256: hash } = await (await upload(PNG_1x1)).json();
     const get = await h.request(`/${hash}`);
-    expect(get.headers.get("content-disposition")).toBeNull();
+    expect(get.headers.get("content-disposition")).toBe("inline");
     expect(get.headers.get("x-content-type-options")).toBe("nosniff");
     expect(get.headers.get("content-security-policy")).toContain("sandbox");
   });

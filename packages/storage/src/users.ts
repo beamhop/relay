@@ -140,6 +140,9 @@ export class SqlUserStore implements UserStore {
 
   /** `sort: "pubkey"` orders by pubkey alone (ascending): stable across pages, for callers that page through everything. */
   async list(q: UserQuery): Promise<{ items: UserRecord[]; total: number }> {
+    // buffered activity changes counts/timestamps the ORDER BY uses: the overlay alone would fix the numbers but not
+    // the order, so write it out first (admin listing only; touch() stays buffered on the hot path)
+    if (this.pending.size && q.sort !== "pubkey") await this.flush();
     const conds: string[] = [];
     const params: unknown[] = [];
     const inList = (pks: string[]) => {

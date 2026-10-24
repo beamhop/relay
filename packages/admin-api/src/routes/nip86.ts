@@ -1,5 +1,6 @@
 import type { AdminRole, Permission, UserQuery, UserRecord } from "@beamhop/sdk";
 import type { ApiContext } from "../context";
+import { isZodError, zodMessage } from "../errors";
 import { isValidCidr } from "./ip";
 import { BannedEventCache } from "../services/banned-events";
 import { permissionsFor, ROLE_RANK } from "../services/roles";
@@ -301,9 +302,13 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
       async run(params, caller) {
         const kind = kindParam(params);
         const m = settings.get().moderation;
-        const patch = m.kindAllowlist.length
-          ? { kindAllowlist: m.kindAllowlist.filter((k) => k !== kind) }
-          : { kindBlocklist: m.kindBlocklist.includes(kind) ? m.kindBlocklist : [...m.kindBlocklist, kind] };
+        // always blocklisted: the blocklist wins over the allowlist. The allowlist only shrinks while other kinds stay
+        // on it, since an empty allowlist means "all kinds" and disallowing a kind must never open the relay up
+        const rest = m.kindAllowlist.filter((k) => k !== kind);
+        const patch = {
+          kindBlocklist: m.kindBlocklist.includes(kind) ? m.kindBlocklist : [...m.kindBlocklist, kind],
+          ...(rest.length ? { kindAllowlist: rest } : {}),
+        };
         await settings.update({ moderation: patch }, caller.pubkey);
         await audit(caller, "settings.update", null, { patch: { moderation: patch }, kind });
         return true;
@@ -397,6 +402,8 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
       return reply({ result: await method.run(params, { pubkey: ev.pubkey, role, ip }) });
     } catch (err) {
       if (err instanceof RpcError) return reply({ result: null, error: err.message });
+      // invalid settings values (e.g. a bad icon URL): the caller's mistake, answered like the settings API does
+      if (isZodError(err)) return reply({ result: null, error: `invalid: ${zodMessage(err)}` });
       ctx.logger.error("nip86 method failed", { method: rpc.method, error: String(err) });
       return reply({ result: null, error: (err as Error).message || "internal error" });
     }

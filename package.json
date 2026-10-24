@@ -4,7 +4,8 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "plugins/*"
+    "plugins/*",
+    "e2e"
   ],
   "scripts": {
     "dev": "bun --watch packages/server/src/cli.ts start",
@@ -13,12 +14,15 @@
     "build:node": "bun run --filter @beamhop/server build:node",
     "build:binary": "bun run --filter @beamhop/server build:binary",
     "test": "bun test",
-    "typecheck": "(tsc -b --noEmit || tsc --noEmit -p tsconfig.json) && tsc --noEmit -p packages/admin-ui/tsconfig.json && tsc --noEmit -p plugins/hello/ui/tsconfig.json",
+    "typecheck": "(tsc -b --noEmit || tsc --noEmit -p tsconfig.json) && tsc --noEmit -p packages/admin-ui/tsconfig.json && tsc --noEmit -p plugins/hello/ui/tsconfig.json && tsc --noEmit -p e2e/tsconfig.json",
     "start": "bun packages/server/src/cli.ts start",
     "beamhop": "bun packages/server/src/cli.ts",
     "build:plugins": "bun run --filter 'beamhop-plugin-*' build:ui",
     "test:server": "bun test packages/server",
-    "docker:build": "docker build -t beamhop ."
+    "docker:build": "docker build -t beamhop .",
+    "test:e2e": "bun run test:e2e:relay && bun run test:e2e:admin",
+    "test:e2e:relay": "bun test ./e2e/relay",
+    "test:e2e:admin": "bun run build:ui && bun run build:plugins && cd e2e && bunx playwright test -c playwright.config.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

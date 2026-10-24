@@ -15,6 +15,18 @@ interface SqliteDriver {
 const normalizeParams = (params: unknown[] = []) =>
   params.map((p) => (typeof p === "boolean" ? (p ? 1 : 0) : p === undefined ? null : p));
 
+/**
+ * bun:sqlite binds non-Latin-1 strings as UTF-16, and SQLite reads a leading U+FEFF / U+FFFE there as a byte-order
+ * mark: it is dropped (or flips the byte order), so content starting with one came back changed and no longer
+ * matched its event id. SQLite consumes only one leading mark, so binding an extra U+FEFF stores the text as is.
+ */
+const keepLeadingBom = (p: unknown) => {
+  if (typeof p !== "string") return p;
+  const c = p.charCodeAt(0);
+  return c === 0xfeff || c === 0xfffe ? `\ufeff${p}` : p;
+};
+const bunParams = (params: unknown[] = []) => params.map(keepLeadingBom);
+
 async function openSqlite(path: string): Promise<SqliteDriver> {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   if (isBun) {
@@ -32,11 +44,11 @@ async function openSqlite(path: string): Promise<SqliteDriver> {
       return s;
     };
     return {
-      all: (sql, p) => stmt(sql).all(...(p as never[])),
-      get: (sql, p) => stmt(sql).get(...(p as never[])) ?? undefined,
+      all: (sql, p) => stmt(sql).all(...(bunParams(p) as never[])),
+      get: (sql, p) => stmt(sql).get(...(bunParams(p) as never[])) ?? undefined,
       // bun's `changes` is a total_changes() delta (includes trigger side effects); use changes() instead
       run: (sql, p) => {
-        stmt(sql).run(...(p as never[]));
+        stmt(sql).run(...(bunParams(p) as never[]));
         return { changes: Number((stmt("SELECT changes() AS c").get() as { c: number }).c) };
       },
       exec: (sql) => db.exec(sql),

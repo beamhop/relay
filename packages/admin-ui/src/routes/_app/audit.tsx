@@ -70,7 +70,7 @@ function AuditPage() {
       <PullToRefresh onRefresh={() => q.refetch()}>
         {q.isLoading ? (
           <ListSkeleton />
-        ) : q.isError ? (
+        ) : q.isError && !q.data ? (
           <ErrorState error={q.error} retry={() => q.refetch()} />
         ) : !items.length ? (
           <EmptyState icon={ScrollText} title="No audit entries" />

@@ -5,6 +5,21 @@ import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { assertSha256, thumbnailKey, type BlobData, type BlobDriver, type BlobObject, type ByteRange } from "./types";
 
+const BunRt = (globalThis as unknown as { Bun?: { file(p: string): Blob } }).Bun;
+
+/**
+ * Under Bun a node stream (Readable.toWeb) is sent chunked and the Content-Length the route sets is dropped; a
+ * Bun.file stream keeps it (downloads show their size and progress, range responses stay well-formed).
+ */
+function fileStream(path: string, range?: ByteRange): ReadableStream<Uint8Array> {
+  if (BunRt) {
+    const f = BunRt.file(path);
+    return (range ? f.slice(range.start, range.end + 1) : f).stream() as ReadableStream<Uint8Array>;
+  }
+  const nodeStream = createReadStream(path, range ? { start: range.start, end: range.end } : undefined);
+  return Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+}
+
 /**
  * Filesystem driver. Layout: `<root>/ab/cd/<sha256>` (+ `<sha256>.thumb.webp`).
  * Writes go to a temp file in the same directory and are atomically renamed into place.
@@ -49,9 +64,7 @@ export function createFsDriver(root: string): BlobDriver {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw err;
     }
-    const nodeStream = createReadStream(path, range ? { start: range.start, end: range.end } : undefined);
-    const body = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
-    return { body, size, range };
+    return { body: fileStream(path, range), size, range };
   }
 
   return {

@@ -16,6 +16,7 @@ import { Verifier } from "./pipeline/verify";
 import { EPHEMERAL_DEDUP_SIZE, processEvent } from "./pipeline/write";
 import { Connection } from "./protocol/connection";
 import {
+  authReadDenied,
   cancelSub,
   deliverLive,
   dropAllNegSessions,
@@ -85,6 +86,13 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       let n = 0;
       for (const sub of subs.match(event)) {
         if (sub.conn.closed) continue;
+        // read auth can be switched on at runtime: subscriptions opened anonymously before that end here
+        const denied = authReadDenied(ctx, sub.conn);
+        if (denied) {
+          cancelSub(ctx, sub);
+          sub.conn.closedSub(sub.id, denied);
+          continue;
+        }
         if (!isVisibleTo(ctx, event, sub.conn, { conn: sub.conn, subId: sub.id, source: "ws" })) continue;
         if (deliverLive(sub, event)) n++;
       }

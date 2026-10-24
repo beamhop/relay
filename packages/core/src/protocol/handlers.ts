@@ -245,7 +245,7 @@ async function withQuerySlot<T>(ctx: RelayContext, signal: AbortSignal | undefin
   }
 }
 
-function authReadDenied(ctx: RelayContext, conn: Connection): string | undefined {
+export function authReadDenied(ctx: RelayContext, conn: Connection): string | undefined {
   const { access } = ctx.s();
   if ((access.authForRead || access.mode === "auth-required") && conn.authedPubkeys.size === 0) return "auth-required: authentication is required to read from this relay";
   return undefined;

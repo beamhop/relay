@@ -59,6 +59,8 @@ export function peekMessage(data: string): { type?: string; subId?: string; even
   return { type, subId: head[2] };
 }
 
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
 /** Validates the event shape and returns a clean copy (extra keys are dropped). */
 export function validateEventShape(e: unknown): { event: NostrEvent } | { reason: string; id?: string } {
   if (!e || typeof e !== "object" || Array.isArray(e)) return { reason: "invalid: event must be an object" };
@@ -72,12 +74,15 @@ export function validateEventShape(e: unknown): { event: NostrEvent } | { reason
   if (typeof o.content !== "string") return { reason: "invalid: content must be a string", id };
   // U+0000 can't be stored by postgres (text columns); reject on every backend for parity
   if (o.content.includes("\u0000")) return { reason: "invalid: content must not contain NUL characters", id };
+  // a lone surrogate can't be encoded as UTF-8: storage would replace it and the served event wouldn't match its id
+  if (LONE_SURROGATE.test(o.content)) return { reason: "invalid: content must be valid unicode (lone surrogate)", id };
   if (!Array.isArray(o.tags)) return { reason: "invalid: tags must be an array", id };
   for (const t of o.tags) {
     if (!Array.isArray(t) || t.length === 0) return { reason: "invalid: each tag must be a non-empty array", id };
     for (const v of t) {
       if (typeof v !== "string") return { reason: "invalid: tag values must be strings", id };
       if (v.includes("\u0000")) return { reason: "invalid: tag values must not contain NUL characters", id };
+      if (LONE_SURROGATE.test(v)) return { reason: "invalid: tag values must be valid unicode (lone surrogate)", id };
     }
   }
   if (isAddressable(o.kind) && Buffer.byteLength(getDTag({ tags: o.tags as string[][] }), "utf8") > MAX_D_TAG_BYTES) {

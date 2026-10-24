@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useInFlight } from "@/hooks/use-in-flight";
 import { createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, Ban, CheckCheck, Flag, MoreHorizontal, ShieldX, Trash2, X } from "lucide-react";
 import type { ReportStatus, ReportView, ResolveReportRequest } from "@beamhop/sdk/admin-contract";
@@ -74,7 +75,9 @@ function ReportsPage() {
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   React.useEffect(() => setSelected(new Set()), [status, search.type]);
 
-  const resolve = async (ids: string[], action: Action, target?: Report) => {
+  const once = useInFlight();
+  const resolve = (ids: string[], action: Action, target?: Report) => once(() => resolveNow(ids, action, target));
+  const resolveNow = async (ids: string[], action: Action, target?: Report) => {
     let note: string | undefined;
     if (DESTRUCTIVE.includes(action)) {
       const who = target ? displayName(target.targetPubkey, target.targetProfile) : `${ids.length} report target(s)`;
@@ -162,7 +165,7 @@ function ReportsPage() {
       <PullToRefresh onRefresh={() => q.refetch()}>
         {q.isLoading ? (
           <ListSkeleton />
-        ) : q.isError ? (
+        ) : q.isError && !q.data ? (
           <ErrorState error={q.error} retry={() => q.refetch()} />
         ) : !items.length ? (
           <EmptyState icon={status === "open" ? CheckCheck : Flag} title={status === "open" ? "Inbox zero" : `No ${status} reports`} description={status === "open" ? "No reports waiting for review." : undefined} />
@@ -276,7 +279,7 @@ function ReportCardInner({ r, canResolve, busy, selected, onSelect, onAction }: 
           </span>
         </div>
       )}
-      {r.report.content && <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm italic">“{r.report.content}”</p>}
+      {r.report.content && <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm italic [overflow-wrap:anywhere]">“{r.report.content}”</p>}
       {r.targetEvent ? (
         <div className="rounded-lg border p-3">
           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">

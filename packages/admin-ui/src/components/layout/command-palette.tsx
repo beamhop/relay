@@ -118,9 +118,9 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
           </CommandGroup>
         )}
         <CommandGroup heading="Preferences">
-          <CommandItem value="theme light" onSelect={() => run(() => setTheme("light"))}><Sun /> Light theme</CommandItem>
-          <CommandItem value="theme dark" onSelect={() => run(() => setTheme("dark"))}><Moon /> Dark theme</CommandItem>
-          <CommandItem value="theme system" onSelect={() => run(() => setTheme("system"))}><Monitor /> System theme</CommandItem>
+          <CommandItem value="light theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("light"))}><Sun /> Light theme</CommandItem>
+          <CommandItem value="dark theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("dark"))}><Moon /> Dark theme</CommandItem>
+          <CommandItem value="system theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("system"))}><Monitor /> System theme</CommandItem>
           <CommandItem value="sign out logout" onSelect={() => run(doLogout)}><LogOut /> Sign out</CommandItem>
         </CommandGroup>
       </CommandList>

@@ -10,7 +10,7 @@ import type { RuntimeSettings } from "@beamhop/sdk/admin-contract";
 import { compileRegexFilter, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Form, FormControl, FormField, FormItem } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -163,7 +163,7 @@ function InfoFields({ control }: { control: Control<any> }) {
           const hex = field.value ? parsePubkey(field.value) : undefined;
           return (
             <FormItem>
-              <Label>Operator pubkey</Label>
+              <FormLabel>Operator pubkey</FormLabel>
               <FormControl>
                 <Input {...field} value={field.value ?? ""} placeholder="npub or hex" onBlur={() => hex && hex !== field.value && field.onChange(hex)} aria-invalid={!!field.value && !hex} />
               </FormControl>

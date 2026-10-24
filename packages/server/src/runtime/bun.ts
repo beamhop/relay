@@ -1,7 +1,7 @@
 import type { ConnectionHandle } from "@beamhop/sdk";
 import type { Beamhop } from "../app";
 import { isRelayUpgrade, makeEnv } from "../app";
-import { clientIp, proxyMatcher, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
 
 interface WsData {
   ip: string;
@@ -24,7 +24,7 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
   const limits = () => {
     const s = settings.get();
     return {
-      maxPayloadLength: Math.max(4096, s.limits.maxMessageBytes),
+      maxPayloadLength: wsMaxPayload(s.limits.maxMessageBytes),
       maxRequestBodySize: Math.max(128 * MB, s.blossom.maxUploadBytes + MB),
     };
   };
