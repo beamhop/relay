@@ -101,14 +101,22 @@ export class FakeEventStore implements EventStore {
           this.events.delete(t[1]);
           n++;
         }
-        if (!e || e.pubkey === del.pubkey) this.deletedIds.add(t[1]);
+        else if (e && e.kind === 1059 && e.tags.some((x) => x[0] === "p" && x[1] === del.pubkey)) {
+          this.events.delete(t[1]);
+          n++;
+        }
+        if (!e || e.pubkey === del.pubkey || e.kind === 1059) this.deletedIds.add(t[1]);
       }
     }
     return n;
   }
-  async deleteByIds(ids: string[]) {
+  async deleteByIds(ids: string[], opts: { tombstone?: string } = {}) {
     let n = 0;
-    for (const id of ids) if (this.events.delete(id)) n++;
+    for (const id of ids) {
+      if (!this.events.delete(id)) continue;
+      n++;
+      if (opts.tombstone !== undefined) this.deletedIds.add(id);
+    }
     return n;
   }
   async deleteByFilter(filters: Filter[]) {
@@ -116,8 +124,8 @@ export class FakeEventStore implements EventStore {
     for (const e of [...this.events.values()]) if (filters.some((f) => matchFilter(f, e)) && this.events.delete(e.id)) n++;
     return n;
   }
-  async deleteByPubkey(pk: string) {
-    return this.deleteByFilter([{ authors: [pk] }]);
+  async deleteByPubkey(pk: string, until?: number) {
+    return this.deleteByFilter([until === undefined ? { authors: [pk] } : { authors: [pk], until }]);
   }
   async purgeExpired(now: number) {
     let n = 0;

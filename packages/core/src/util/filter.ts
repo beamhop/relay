@@ -1,11 +1,20 @@
 import type { Filter, NostrEvent } from "@beamhop/sdk";
 
-/** Very small NIP-50 matcher used for live delivery: all plain terms must occur (case-insensitive). */
+/** NIP-50 extensions (`key:value`) — ignored for matching, as the spec allows. */
+const SEARCH_EXTENSION = /^(include|domain|language|sentiment|nsfw):/;
+/** Tag values longer than this aren't indexed by the store, so live matching ignores them too. */
+export const MAX_MATCHED_TAG_VALUE = 1024;
+
+/**
+ * Small NIP-50 matcher used for live delivery: every term (or "quoted phrase") must occur in the
+ * content, case-insensitively. Mirrors the stored full-text search closely enough for live events.
+ */
 export function matchSearch(search: string, event: NostrEvent): boolean {
-  const terms = search
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((t) => t && !/^[a-z_]+:/.test(t)); // drop extensions like "language:en"
+  const terms: string[] = [];
+  for (const m of search.toLowerCase().matchAll(/"([^"]*)"|(\S+)/g)) {
+    const t = (m[1] ?? m[2]).trim();
+    if (t && (m[1] !== undefined || !SEARCH_EXTENSION.test(t))) terms.push(t);
+  }
   if (!terms.length) return true;
   const content = event.content.toLowerCase();
   return terms.every((t) => content.includes(t));
@@ -25,7 +34,7 @@ export function matchFilter(filter: Filter, event: NostrEvent): boolean {
     const name = key.slice(1);
     let ok = false;
     for (const t of event.tags) {
-      if (t[0] === name && t[1] !== undefined && values.includes(t[1])) {
+      if (t[0] === name && t[1] !== undefined && t[1].length <= MAX_MATCHED_TAG_VALUE && values.includes(t[1])) {
         ok = true;
         break;
       }

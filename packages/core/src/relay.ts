@@ -27,7 +27,7 @@ import {
   handleNegOpen,
   handleReq,
 } from "./protocol/handlers";
-import { parseClientMessage, validateEventShape } from "./protocol/messages";
+import { parseClientMessage, peekMessage, validateEventShape } from "./protocol/messages";
 import { loadRelayKey } from "./relay-key";
 import { SubscriptionIndex } from "./subscriptions/index";
 import { isVisibleTo } from "./subscriptions/visibility";
@@ -100,6 +100,19 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   }
   const closers = new Map<string, () => void>();
 
+  /** NIP-01: refusals answer with OK (EVENT/AUTH) or CLOSED (REQ/COUNT) when the id is known; NOTICE otherwise. */
+  function refuse(conn: Connection, r: { type?: string; subId?: string; eventId?: string; reason: string }) {
+    const { type, subId, eventId, reason } = r;
+    if ((type === "EVENT" || type === "AUTH") && eventId) conn.ok(eventId, false, reason);
+    else if ((type === "REQ" || type === "COUNT") && subId) {
+      handleClose(ctx, conn, subId);
+      conn.closedSub(subId, reason);
+    } else if (type?.startsWith("NEG-") && subId) {
+      conn.negSessions.delete(subId);
+      conn.send(["NEG-ERR", subId, reason]);
+    } else conn.notice(reason);
+  }
+
   function onMessage(conn: Connection, data: string) {
     if (conn.closed) return;
     conn.messagesIn++;
@@ -107,19 +120,11 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     const bytes = Buffer.byteLength(data);
     if (bytes > L.maxMessageBytes) {
       deps.bus.emit("message.in", { connId: conn.id, type: "OVERSIZE", bytes });
-      conn.notice(`invalid: message too large (max ${L.maxMessageBytes} bytes)`);
-      return;
+      return refuse(conn, { ...peekMessage(data), reason: `invalid: message too large (max ${L.maxMessageBytes} bytes)` });
     }
     const parsed = parseClientMessage(data, { maxFilters: L.maxFilters });
     deps.bus.emit("message.in", { connId: conn.id, type: parsed.ok ? parsed.msg.type : (parsed.type ?? "INVALID"), bytes });
-    if (!parsed.ok) {
-      const { type, subId, eventId, reason } = parsed;
-      if ((type === "EVENT" || type === "AUTH") && eventId) conn.ok(eventId, false, reason);
-      else if ((type === "REQ" || type === "COUNT") && subId) conn.closedSub(subId, reason);
-      else if (type?.startsWith("NEG-") && subId) conn.send(["NEG-ERR", subId, reason]);
-      else conn.notice(reason);
-      return;
-    }
+    if (!parsed.ok) return refuse(conn, parsed);
     const msg = parsed.msg;
     const fail = (err: unknown) => logger.error(`${msg.type} handler failed`, { err: String(err) });
     switch (msg.type) {

@@ -20,7 +20,7 @@ export interface Subscription {
 
 export interface NegSession {
   neg: Negentropy;
-  openedAt: number;
+  lastActiveAt: number;
 }
 
 export class Connection implements ConnectionInfo {

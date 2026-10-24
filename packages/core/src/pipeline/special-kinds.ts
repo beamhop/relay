@@ -66,7 +66,16 @@ export function vanishTargetsUs(ctx: RelayContext, event: NostrEvent): boolean {
 
 async function applyVanish(ctx: RelayContext, event: NostrEvent) {
   const pk = event.pubkey;
-  const n = (await ctx.stores.events.deleteByPubkey(pk)) + (await ctx.stores.events.deleteByFilter([{ kinds: [1059], "#p": [pk] }]));
+  // NIP-62: everything from the pubkey up to the request, plus gift wraps addressed to it. The wraps are
+  // tombstoned (they're signed by throwaway keys, so the author-based vanish check can't stop a re-broadcast).
+  let n = await ctx.stores.events.deleteByPubkey(pk, event.created_at);
+  for (;;) {
+    const wraps = await ctx.stores.events.query([{ kinds: [1059], "#p": [pk], limit: 1000 }], { maxLimit: 1000 });
+    if (!wraps.length) break;
+    const removed = await ctx.stores.events.deleteByIds(wraps.map((w) => w.id), { tombstone: event.id });
+    n += removed;
+    if (removed === 0) break;
+  }
   const prev = ctx.vanished.get(pk) ?? 0;
   if (event.created_at > prev) {
     ctx.vanished.set(pk, event.created_at);

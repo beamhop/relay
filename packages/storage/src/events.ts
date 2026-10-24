@@ -218,6 +218,8 @@ export class SqlEventStore implements EventStore {
         out.push(rowToEvent(r));
       }
     }
+    // NIP-50: search results keep their relevance order instead of the usual created_at order
+    if (filters.length === 1 && filters[0].search) return out;
     return out.sort(compareEvents);
   }
 
@@ -282,6 +284,20 @@ export class SqlEventStore implements EventStore {
         const r = await tx.run(`DELETE FROM events WHERE pubkey = ? AND kind <> 5 AND ${inl.sql}`, [deletion.pubkey, ...inl.params]);
         deleted += r.changes;
       }
+      // NIP-59: recipients may delete gift wraps addressed to them (signed by throwaway keys)
+      const wrapTombstones: unknown[][] = [];
+      for (let i = 0; i < idList.length; i += 500) {
+        const inl = inList(tx.dialect, "e.id", idList.slice(i, i + 500));
+        const wraps = await tx.all<{ seq: number; id: string; pubkey: string }>(
+          `SELECT e.seq, e.id, e.pubkey FROM events e JOIN event_tags t ON t.event_seq = e.seq WHERE e.kind = 1059 AND t.name = 'p' AND t.value = ? AND ${inl.sql}`,
+          [deletion.pubkey, ...inl.params],
+        );
+        for (const w of wraps) {
+          deleted += (await tx.run("DELETE FROM events WHERE seq = ?", [w.seq])).changes;
+          wrapTombstones.push([w.pubkey, w.id, deletion.created_at, deletion.id]);
+        }
+      }
+      if (wrapTombstones.length) await insertRows(tx, "INSERT INTO deleted_events (pubkey, ref, deleted_at, deletion_id)", 4, wrapTombstones, "ON CONFLICT (pubkey, ref) DO NOTHING");
       for (const { kind, d } of coords.values()) {
         const r = await tx.run("DELETE FROM events WHERE pubkey = ? AND kind = ? AND d_tag = ? AND created_at <= ?", [
           deletion.pubkey,
@@ -303,13 +319,19 @@ export class SqlEventStore implements EventStore {
     });
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  async deleteByIds(ids: string[], opts: { tombstone?: string } = {}): Promise<number> {
     const unique = [...new Set(ids)];
     if (!unique.length) return 0;
+    const now = nowSec();
     return this.db.tx(async (tx) => {
       let deleted = 0;
       for (let i = 0; i < unique.length; i += 500) {
         const inl = inList(tx.dialect, "id", unique.slice(i, i + 500));
+        if (opts.tombstone !== undefined) {
+          const rows = await tx.all<{ id: string; pubkey: string }>(`SELECT id, pubkey FROM events WHERE ${inl.sql}`, inl.params);
+          const stones = rows.map((r) => [r.pubkey, r.id, now, opts.tombstone]);
+          if (stones.length) await insertRows(tx, "INSERT INTO deleted_events (pubkey, ref, deleted_at, deletion_id)", 4, stones, "ON CONFLICT (pubkey, ref) DO NOTHING");
+        }
         deleted += (await tx.run(`DELETE FROM events WHERE ${inl.sql}`, inl.params)).changes;
       }
       return deleted;
@@ -341,8 +363,12 @@ export class SqlEventStore implements EventStore {
     });
   }
 
-  async deleteByPubkey(pubkey: string): Promise<number> {
-    return this.db.tx(async (tx) => (await tx.run("DELETE FROM events WHERE pubkey = ?", [pubkey])).changes);
+  async deleteByPubkey(pubkey: string, until?: number): Promise<number> {
+    return this.db.tx(async (tx) =>
+      until === undefined
+        ? (await tx.run("DELETE FROM events WHERE pubkey = ?", [pubkey])).changes
+        : (await tx.run("DELETE FROM events WHERE pubkey = ? AND created_at <= ?", [pubkey, until])).changes,
+    );
   }
 
   async purgeExpired(now: number): Promise<number> {

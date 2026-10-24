@@ -197,6 +197,31 @@ describe("deletion", () => {
     expect((await stores.events.save(a.sign({ kind: 30023, created_at: T + 15, tags: [["d", "post"]] }))).status).toBe("deleted");
   });
 
+  test("NIP-59: recipients delete gift wraps addressed to them; tombstoned", async () => {
+    const bob = signer();
+    const wrap = signer().sign({ kind: 1059, created_at: T, tags: [["p", bob.pubkey]] });
+    const other = signer().sign({ kind: 1059, created_at: T, tags: [["p", signer().pubkey]] });
+    await stores.events.save(wrap);
+    await stores.events.save(other);
+    const del = bob.sign({ kind: 5, created_at: T + 1, tags: [["e", wrap.id], ["e", other.id]] });
+    expect(await stores.events.applyDeletion(del)).toBe(1);
+    expect(await stores.events.getById(wrap.id)).toBeUndefined();
+    expect(await stores.events.getById(other.id)).toBeDefined();
+    expect((await stores.events.save(wrap)).status).toBe("deleted");
+  });
+
+  test("deleteByIds with tombstone; deleteByPubkey until", async () => {
+    const a = signer();
+    const e1 = a.sign({ kind: 1, created_at: T });
+    const e2 = a.sign({ kind: 1, created_at: T + 5 });
+    const e3 = a.sign({ kind: 1, created_at: T + 10 });
+    for (const e of [e1, e2, e3]) await stores.events.save(e);
+    expect(await stores.events.deleteByIds([e1.id], { tombstone: "vanish" })).toBe(1);
+    expect((await stores.events.save(e1)).status).toBe("deleted");
+    expect(await stores.events.deleteByPubkey(a.pubkey, T + 5)).toBe(1);
+    expect(await stores.events.getById(e3.id)).toBeDefined();
+  });
+
   test("admin deletes: by filter, by pubkey; empty filter rejected", async () => {
     const a = signer();
     const b = signer();

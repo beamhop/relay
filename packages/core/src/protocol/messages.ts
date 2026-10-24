@@ -28,6 +28,26 @@ export function validateSubId(s: unknown): string | undefined {
   return undefined;
 }
 
+/** An invalid (e.g. too long) subscription id is still echoed in CLOSED/NEG-ERR so the client can match the refusal. */
+function echoSubId(s: unknown): string | undefined {
+  return typeof s === "string" && s.length > 0 && s.length <= 1024 ? s : undefined;
+}
+
+const PEEK_HEAD = /^\s*\[\s*"([A-Z-]{1,16})"\s*,\s*(?:"((?:[^"\\]|\\.){1,1024}?)")?/;
+const PEEK_EVENT_ID = /(?<!\\)"id"\s*:\s*"([0-9a-f]{64})"/;
+
+/**
+ * Best-effort extraction of the message type and its subscription/event id from a message that is
+ * too large to parse, so the relay can still answer with OK / CLOSED / NEG-ERR as NIP-01 requires.
+ */
+export function peekMessage(data: string): { type?: string; subId?: string; eventId?: string } {
+  const head = PEEK_HEAD.exec(data.slice(0, 4096));
+  if (!head) return {};
+  const type = head[1];
+  if (type === "EVENT" || type === "AUTH") return { type, eventId: PEEK_EVENT_ID.exec(data)?.[1] };
+  return { type, subId: head[2] };
+}
+
 /** Validates the event shape and returns a clean copy (extra keys are dropped). */
 export function validateEventShape(e: unknown): { event: NostrEvent } | { reason: string; id?: string } {
   if (!e || typeof e !== "object" || Array.isArray(e)) return { reason: "invalid: event must be an object" };
@@ -124,7 +144,7 @@ export function parseClientMessage(data: string, opts: { maxFilters: number }): 
     case "REQ":
     case "COUNT": {
       const subErr = validateSubId(arr[1]);
-      if (subErr) return { ok: false, type, reason: subErr };
+      if (subErr) return { ok: false, type, subId: echoSubId(arr[1]), reason: subErr };
       return parseFilters(arr.slice(2), arr[1] as string, type, opts.maxFilters);
     }
     case "CLOSE":
@@ -135,7 +155,7 @@ export function parseClientMessage(data: string, opts: { maxFilters: number }): 
     }
     case "NEG-OPEN": {
       const subErr = validateSubId(arr[1]);
-      if (subErr) return { ok: false, type, reason: subErr };
+      if (subErr) return { ok: false, type, subId: echoSubId(arr[1]), reason: subErr };
       const subId = arr[1] as string;
       // NIP-77: ["NEG-OPEN", subId, filter, initialMessage]
       if (arr.length !== 4) return { ok: false, type, subId, reason: "invalid: malformed NEG-OPEN" };

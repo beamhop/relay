@@ -16,7 +16,8 @@ http://host/metrics   → Prometheus metrics
 ## Features
 
 - **Relay**:
-  - NIPs 1, 2, 4, 5, 9, 10, 11, 13, 17, 22, 28, 29, 40, 42, 44, 45, 50, 51, 56, 59, 62, 65, 70, 77 and 86.
+  - NIPs 1, 4, 5, 9, 11, 13, 17, 29, 40, 42, 45, 50, 56, 59, 62, 70, 77 and 86 (advertised in NIP-11).
+  - Client-side NIPs such as 2, 10, 22, 28, 44, 51 and 65 work through generic NIP-01 storage; per NIP-11 they are not advertised.
   - Full-text search, NIP-42 auth, proof-of-work, NIP-29 groups, negentropy sync and expiration.
   - Rate limits, IP rules and allow/ban lists.
 - **Blossom**:

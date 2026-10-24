@@ -30,7 +30,8 @@ export function verifyNip98(req: Request, opts: { publicUrl: string; verifier: V
   if (Math.abs(nowSec() - ev.created_at) > HTTP_AUTH_WINDOW_SEC) return { ok: false, status: 401, error: "authorization event expired" };
   const reqUrl = new URL(req.url);
   const base = opts.publicUrl.replace(/\/+$/, "");
-  const accepted = new Set([base + reqUrl.pathname, base + reqUrl.pathname + reqUrl.search, req.url]);
+  // NIP-98: the u tag MUST be the absolute request URL, including query parameters
+  const accepted = new Set([base + reqUrl.pathname + reqUrl.search, req.url]);
   const u = getTag(ev, "u");
   if (!u || !accepted.has(u)) return { ok: false, status: 401, error: "authorization u tag does not match request url" };
   if ((getTag(ev, "method") ?? "").toUpperCase() !== req.method.toUpperCase()) return { ok: false, status: 401, error: "authorization method tag does not match" };
