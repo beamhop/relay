@@ -1,7 +1,7 @@
 import type { EventStore, NostrEvent, Profile } from "@beamhop/sdk";
 import { LruCache } from "../util/lru";
 
-const FIELDS = ["name", "display_name", "picture", "about", "nip05", "banner", "lud16", "website"] as const;
+const FIELDS = ["name", "display_name", "picture", "about", "nip05", "banner", "website"] as const;
 
 function parseProfile(ev: NostrEvent | undefined): Profile | undefined {
   if (!ev) return undefined;

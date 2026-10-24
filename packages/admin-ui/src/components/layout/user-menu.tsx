@@ -10,7 +10,7 @@ import { logout } from "@/lib/auth";
 import { live } from "@/lib/live";
 import { unsubscribePush } from "@/lib/push";
 import { resetPluginUis } from "@/plugins/loader";
-import { displayName, shortNpub } from "@/lib/nostr";
+import { displayName, profileName, shortNpub } from "@/lib/nostr";
 import { RoleBadge } from "@/components/badges";
 
 export function ThemeRadio() {
@@ -47,7 +47,7 @@ export function UserMenu({ children, side = "bottom", align = "end" }: { childre
         <DropdownMenuLabel className="flex items-center justify-between gap-2 font-normal">
           <span className="min-w-0">
             <span className="block truncate text-sm font-medium">{displayName(me.pubkey, me.profile)}</span>
-            <span className="block truncate text-xs text-muted-foreground">{shortNpub(me.pubkey, 6)}</span>
+            {profileName(me.profile) && <span className="block truncate text-xs text-muted-foreground">{shortNpub(me.pubkey, 6)}</span>}
           </span>
           <RoleBadge role={me.role} />
         </DropdownMenuLabel>

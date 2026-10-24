@@ -28,6 +28,8 @@ export interface MetricsOptions {
   flushIntervalMs?: number;
   /** refresh interval for expensive store stats (event count / db size / media) */
   statsIntervalMs?: number;
+  /** after stored events or blobs change, store stats refresh this soon instead of waiting out statsIntervalMs */
+  statsDirtyMs?: number;
   /** max distinct pubkeys tracked per flush interval (memory bound) */
   maxPubkeysPerBucket?: number;
   /** pubkeys kept per closed hour in metrics_pubkeys */
@@ -57,6 +59,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
   const tickMs = opts.tickIntervalMs ?? 1000;
   const flushMs = opts.flushIntervalMs ?? 60_000;
   const statsMs = opts.statsIntervalMs ?? 60_000;
+  const statsDirtyMs = Math.min(opts.statsDirtyMs ?? 5_000, statsMs);
   const retentionDays = config.metrics.retentionDays;
 
   await stores.db.migrate("metrics", migrations);
@@ -82,7 +85,20 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     },
   );
 
-  const stats = { totalEvents: 0, dbBytes: 0, mediaBytes: 0, mediaCount: 0, at: -Infinity, inflight: false };
+  const stats = { totalEvents: 0, dbBytes: 0, mediaBytes: 0, mediaCount: 0, at: -Infinity, inflight: false, dirty: false };
+  // stored events / blobs changed: the totals are stale, so refresh sooner than statsMs
+  let statsUnsubs: (() => void)[] = [];
+  const watchStores = () => {
+    if (statsUnsubs.length) return;
+    const markDirty = () => void (stats.dirty = true);
+    statsUnsubs = [
+      bus.on("event.accepted", (p) => p.status !== "ephemeral" && markDirty()),
+      bus.on("event.deleted", markDirty),
+      bus.on("blob.uploaded", markDirty),
+      bus.on("blob.deleted", markDirty),
+    ];
+  };
+  watchStores();
   let lastCpu = proc.cpuUsage();
   let lastCpuAt = startedAt;
   const listeners = new Set<(s: LiveSnapshot) => void>();
@@ -97,6 +113,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
   async function refreshStats() {
     if (stats.inflight) return;
     stats.inflight = true;
+    stats.dirty = false;
     stats.at = now();
     try {
       const [ev, media] = await Promise.all([
@@ -148,7 +165,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     const lag = loopLag();
     const [p50, p95, p99] = collector.latency.percentiles(t, 60_000, [50, 95, 99]);
 
-    if (t - stats.at >= statsMs) void refreshStats().catch(() => {});
+    if (t - stats.at >= (stats.dirty ? statsDirtyMs : statsMs)) void refreshStats().catch(() => {});
 
     snap = {
       at: Math.floor(t / 1000),
@@ -224,6 +241,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       if (running) return;
       running = true;
       collector.attach(bus);
+      watchStores();
       if (config.metrics.otel.enabled) {
         otel = await setupOtel(config.metrics.otel, () => snap, () => collector.totals, logger, opts.version);
         if (otel) {
@@ -245,6 +263,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       for (const t of timers.splice(0)) clearInterval(t);
       lagMonitor?.stop();
       collector.detach();
+      for (const u of statsUnsubs.splice(0)) u();
       collector.roll(now());
       rollup.closeCurrent(Math.floor(now() / 1000));
       await flush();

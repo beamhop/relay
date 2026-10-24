@@ -1,18 +1,20 @@
 import { Link } from "@tanstack/react-router";
 import type { Profile } from "@beamhop/sdk/admin-contract";
-import { displayName, shortNpub } from "@/lib/nostr";
+import { displayName, profileName, shortNpub } from "@/lib/nostr";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "./user-avatar";
 
 export function UserChip({
   pubkey, profile, link = true, size = 32, sub, className,
 }: { pubkey: string; profile?: Profile; link?: boolean; size?: number; sub?: React.ReactNode; className?: string }) {
+  // unnamed users already show their npub as the name: don't repeat it underneath
+  const subline = sub ?? (profile?.nip05 || (profileName(profile) ? shortNpub(pubkey, 6) : null));
   const inner = (
     <>
       <UserAvatar pubkey={pubkey} profile={profile} size={size} />
       <span className="min-w-0 leading-tight">
         <span className="block truncate text-sm font-medium">{displayName(pubkey, profile)}</span>
-        <span className="block truncate text-xs text-muted-foreground">{sub ?? (profile?.nip05 || shortNpub(pubkey, 6))}</span>
+        {subline && <span className="block truncate text-xs text-muted-foreground">{subline}</span>}
       </span>
     </>
   );

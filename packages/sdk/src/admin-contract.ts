@@ -67,7 +67,7 @@ export interface Me {
 export interface LoginResponse { me: Me }
 
 // ------------------------------------------------------------- shared views
-export interface Profile { name?: string; display_name?: string; picture?: string; about?: string; nip05?: string; banner?: string; lud16?: string; website?: string }
+export interface Profile { name?: string; display_name?: string; picture?: string; about?: string; nip05?: string; banner?: string; website?: string }
 export interface UserView extends UserRecord { profile?: Profile }
 export interface UserDetail extends UserView {
   stats: { eventCount: number; kinds: { kind: number; count: number }[]; blobCount: number; blobBytes: number; reportsAgainst: number; reportsFiled: number };

@@ -17,7 +17,7 @@ import { usePlugins } from "@/queries/misc";
 import { live, useLiveStatus } from "@/lib/live";
 import { loadPluginUis } from "@/plugins/loader";
 import { usePluginRegistry } from "@/plugins/registry";
-import { displayName, shortNpub } from "@/lib/nostr";
+import { displayName, profileName, shortNpub } from "@/lib/nostr";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "@/components/user-avatar";
 import { Logo } from "./logo";
@@ -156,7 +156,7 @@ function AppSidebar() {
                   <UserAvatar pubkey={me.pubkey} profile={me.profile} size={32} />
                   <span className="grid min-w-0 flex-1 text-left leading-tight">
                     <span className="truncate text-sm font-medium">{displayName(me.pubkey, me.profile)}</span>
-                    <span className="truncate text-xs text-muted-foreground">{me.role} · {shortNpub(me.pubkey, 4)}</span>
+                    <span className="truncate text-xs text-muted-foreground">{me.role}{profileName(me.profile) && ` · ${shortNpub(me.pubkey, 4)}`}</span>
                   </span>
                   <ChevronsUpDown className="ml-auto size-4" />
                 </SidebarMenuButton>

@@ -45,8 +45,12 @@ export function shortNpub(hex: string, n = 8): string {
 }
 export const shortHex = (hex: string, n = 8) => (hex.length > 2 * n ? `${hex.slice(0, n)}…${hex.slice(-n)}` : hex);
 
+/** the profile's own name, or "" when it has none (displayName then falls back to the npub) */
+export function profileName(profile?: { name?: string; display_name?: string }): string {
+  return profile?.display_name?.trim() || profile?.name?.trim() || "";
+}
 export function displayName(pubkey: string, profile?: { name?: string; display_name?: string }): string {
-  return profile?.display_name?.trim() || profile?.name?.trim() || shortNpub(pubkey, 6);
+  return profileName(profile) || shortNpub(pubkey, 6);
 }
 
 /** deterministic hue from pubkey */

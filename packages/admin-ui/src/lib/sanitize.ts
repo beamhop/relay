@@ -6,7 +6,7 @@
  */
 import type { Filter, Profile } from "@beamhop/sdk/admin-contract";
 
-const PROFILE_FIELDS = ["name", "display_name", "picture", "about", "nip05", "banner", "lud16", "website"] as const;
+const PROFILE_FIELDS = ["name", "display_name", "picture", "about", "nip05", "banner", "website"] as const;
 const MAX_FIELD = 2000;
 
 /** Kind-0 content → profile with non-empty string fields only (the rule admin-api's parseProfile applies). */

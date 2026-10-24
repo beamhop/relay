@@ -61,6 +61,23 @@ describe("live snapshot", () => {
     run(31);
     expect(events.calls).toBe(calls + 1);
   });
+
+  test("store stats refresh within statsDirtyMs after events or blobs change", async () => {
+    const { bus, events, run } = await setup({ options: { statsIntervalMs: 60_000, statsDirtyMs: 5_000 } });
+    run(1);
+    await new Promise((r) => setTimeout(r, 0));
+    const calls = events.calls;
+    bus.emit("event.accepted", { event: ev(20001), status: "ephemeral", source: "ws" });
+    run(6);
+    expect(events.calls).toBe(calls);
+    bus.emit("event.accepted", { event: ev(1), status: "saved", source: "ws" });
+    run(1);
+    expect(events.calls).toBe(calls + 1);
+    await new Promise((r) => setTimeout(r, 0));
+    bus.emit("blob.deleted", { sha256: "x", actor: "a" });
+    run(5);
+    expect(events.calls).toBe(calls + 2);
+  });
 });
 
 describe("rollups", () => {

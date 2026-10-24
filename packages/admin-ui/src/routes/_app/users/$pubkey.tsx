@@ -155,7 +155,7 @@ function UserView({ u }: { u: UserDetail }) {
             {u.banReason && u.status === "banned" && <p className="text-sm text-destructive">Ban reason: {u.banReason}</p>}
             {u.profile?.about && <p className="line-clamp-4 max-w-2xl pt-1 text-sm whitespace-pre-wrap">{u.profile.about}</p>}
           </div>
-          <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-3 xl:grid-cols-6">
             <Stat label="Events" value={formatNumber(u.stats.eventCount)} />
             <Stat label="Media" value={`${formatNumber(u.stats.blobCount)} · ${formatBytes(u.stats.blobBytes)}`} />
             <Stat label="Reports against" value={formatNumber(u.stats.reportsAgainst)} tone={u.stats.reportsAgainst ? "text-destructive" : undefined} />
@@ -405,7 +405,6 @@ function InfoCard({ u }: { u: UserDetail }) {
   const rows: [string, React.ReactNode][] = [
     ["Invited by", u.invitedBy ? <Link to="/users/$pubkey" params={{ pubkey: u.invitedBy }} className="font-mono text-primary hover:underline">{toNpub(u.invitedBy).slice(0, 16)}…</Link> : "—"],
     ["Website", u.profile?.website ? (safeUrl(u.profile.website) ? <a href={safeUrl(u.profile.website)} target="_blank" rel="noreferrer noopener" className="text-primary hover:underline">{u.profile.website}</a> : u.profile.website) : "—"],
-    ["Lightning", u.profile?.lud16 ?? "—"],
     ["First seen", formatDate(u.firstSeenAt)],
     ["Last seen", formatDate(u.lastSeenAt)],
   ];

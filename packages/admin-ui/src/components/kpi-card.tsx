@@ -41,7 +41,7 @@ export function KpiCard({
       ) : (
         <div className={cn("text-2xl font-semibold tracking-tight tabular-nums", tone === "warn" && "text-warning", tone === "bad" && "text-destructive")}>{value}</div>
       )}
-      {sub && <div className="truncate text-xs text-muted-foreground">{sub}</div>}
+      {sub && <div className="line-clamp-2 text-xs text-muted-foreground">{sub}</div>}
       {spark && <Sparkline values={spark} className="mt-1" />}
     </Card>
   );
