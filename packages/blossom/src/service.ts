@@ -36,8 +36,10 @@ export interface IngestInput {
   sha256: string;
   pubkey: string;
   declaredType?: string | null;
+  /** trust `declaredType` over sniffing when it is a specific, valid mime (BUD-04 mirror origin Content-Type) */
+  preferDeclaredType?: boolean;
   ip?: string;
-  /** apply EXIF stripping (when enabled in settings) */
+  /** apply EXIF stripping (when enabled in settings; off by default since it deviates from BUD-02) */
   strip: boolean;
 }
 
@@ -70,7 +72,7 @@ export class BlossomCore {
     return `${this.baseUrl}/${sha256}.${extFromMime(type)}`;
   }
   thumbnailUrl(sha256: string) {
-    return `${this.baseUrl}/${sha256}.thumb.webp`;
+    return `${this.baseUrl}/thumb/${sha256}.webp`;
   }
 
   descriptor(row: BlobRow, uploaded = row.createdAt, extra: string[][] = []): BlobDescriptor {
@@ -149,14 +151,16 @@ export class BlossomCore {
 
   // ------------------------------------------------------------ ingest pipeline
 
-  async detectType(data: Uint8Array, declared?: string | null): Promise<string> {
+  async sniffType(data: Uint8Array): Promise<string | undefined> {
     try {
-      const ft = await fileTypeFromBuffer(data);
-      if (ft?.mime) return ft.mime;
+      return (await fileTypeFromBuffer(data))?.mime;
     } catch {
-      /* fall back to header */
+      return undefined;
     }
-    return normalizeMime(declared) ?? DEFAULT_MIME;
+  }
+
+  async detectType(data: Uint8Array, declared?: string | null): Promise<string> {
+    return (await this.sniffType(data)) ?? normalizeMime(declared) ?? DEFAULT_MIME;
   }
 
   /**
@@ -167,7 +171,16 @@ export class BlossomCore {
     const settings = this.settings;
     const originalSha = input.sha256;
     await this.assertNotBlocked(originalSha);
-    const type = await this.detectType(input.data, input.declaredType);
+    let type: string;
+    const declared = input.preferDeclaredType ? normalizeMime(input.declaredType) : undefined;
+    if (declared && declared !== DEFAULT_MIME) {
+      type = declared;
+      // the declared type must not be a way around the allowlist: the sniffed type has to be allowed too
+      const sniffed = await this.sniffType(input.data);
+      if (sniffed && sniffed !== type) this.assertAllowedType(sniffed);
+    } else {
+      type = await this.detectType(input.data, input.declaredType);
+    }
     this.assertAllowedType(type);
 
     let data = input.data;

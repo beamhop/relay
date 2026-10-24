@@ -7,7 +7,7 @@ A single process serves everything on one port. It runs on **Bun** or **Node ≥
 ```
 ws://host/            → Nostr relay (NIP-01 + many NIPs)
 http://host/          → landing page, NIP-11 (Accept: application/nostr+json), NIP-86 management RPC
-http://host/<sha256>  → Blossom (BUD-01/02/04/06/08)
+http://host/<sha256>  → Blossom (BUD-01/02/04/06/08/11/12)
 http://host/admin/    → admin panel (PWA)
 http://host/plugins/… → plugin public routes
 http://host/metrics   → Prometheus metrics
@@ -23,7 +23,7 @@ http://host/metrics   → Prometheus metrics
 - **Blossom**:
   - Filesystem or S3-compatible storage.
   - Upload/mirror/media endpoints and range requests.
-  - EXIF stripping, plus thumbnails when `sharp` is installed.
+  - Optional EXIF stripping (off by default, since it changes the blob hash), plus thumbnails when `sharp` is installed.
 - **Admin panel** (`/admin/`):
   - An installable PWA with live dashboard, connections, users and roles, content moderation, reports, media, settings, plugins, audit log, push notifications and a metrics map.
   - Sign in with NIP-07, a password, TOTP or passkeys.

@@ -16,8 +16,11 @@ export class AuthError extends Error {
   }
 }
 
-/** Allowed clock skew for `created_at` (seconds). */
-const CREATED_AT_SKEW = 60;
+/**
+ * BUD-11 requires `created_at` to be in the past. A small tolerance (seconds) absorbs client clock drift so tokens
+ * signed "now" by a slightly-fast clock aren't rejected.
+ */
+const CREATED_AT_SKEW = 30;
 
 function decodeBase64(token: string): string {
   let b64 = token.trim().replace(/-/g, "+").replace(/_/g, "/");
