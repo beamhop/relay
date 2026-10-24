@@ -10,3 +10,5 @@ export * from "./services";
 export * from "./plugin";
 export * from "./ui-contract";
 export * from "./admin-contract";
+export * from "./secrets";
+export * from "./regex-safety";

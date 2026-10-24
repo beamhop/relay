@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { FlaskConical, Plus, Save, Trash2, Undo2 } from "lucide-react";
 import { RuntimeSettingsSchema } from "@beamhop/sdk-config";
 import type { RuntimeSettings } from "@beamhop/sdk/admin-contract";
+import { regexFilterInputLimit, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem } from "@/components/ui/form";
@@ -76,7 +77,7 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
       const filters = values.wordFilters as RuntimeSettings["moderation"]["wordFilters"];
       if (filters.some((w) => !w.pattern.trim())) return void form.setError("root", { message: "Word filters need a pattern" });
       const bad = filters.find((w) => w.isRegex && regexError(w.pattern));
-      if (bad) return void form.setError("root", { message: `Invalid regex: ${bad.pattern}` });
+      if (bad) return void form.setError("root", { message: `Regex refused (invalid or unsafe): ${bad.pattern}` });
     }
     await save.mutateAsync({ [sectionKey]: values } as any);
     form.reset(values);
@@ -228,20 +229,14 @@ function LimitsFields({ control }: { control: Control<any> }) {
   );
 }
 
-function regexError(pattern: string): string | undefined {
-  try {
-    new RegExp(pattern, "iu");
-    return undefined;
-  } catch (e) {
-    return (e as Error).message;
-  }
-}
+/** Same check the server applies on save: invalid patterns and ones that could backtrack catastrophically. */
+const regexError = (pattern: string): string | undefined => unsafeRegexReason(pattern);
 type WordFilter = RuntimeSettings["moderation"]["wordFilters"][number];
 const matches = (w: WordFilter, text: string) => {
   if (!w.pattern) return false;
   if (w.isRegex) {
-    if (regexError(w.pattern)) return false;
-    return new RegExp(w.pattern, "iu").test(text);
+    const max = regexFilterInputLimit(w.pattern);
+    return max > 0 && new RegExp(w.pattern, "iu").test(text.slice(0, max));
   }
   return text.toLowerCase().includes(w.pattern.toLowerCase());
 };

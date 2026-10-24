@@ -1,8 +1,9 @@
-import type { Permission } from "@beamhop/sdk";
+import type { Permission, UserRecord } from "@beamhop/sdk";
 import type { ApiContext } from "../context";
 import { isValidCidr } from "./ip";
 import { permissionsFor } from "../services/roles";
-import { parseNostrAuthorization, verifyNip98 } from "../util/nip98";
+import { AUTH_REPLAY_TTL_MS } from "../middleware/auth";
+import { parseNostrAuthorization, readBodyCapped, verifyNip98 } from "../util/nip98";
 import { tryParsePubkey } from "../util/pubkey";
 
 const CONTENT_TYPE = "application/nostr+json+rpc";
@@ -59,6 +60,15 @@ export function createNip86Handler(ctx: ApiContext) {
   const audit = (caller: Caller, action: string, target: string | null, details: Record<string, unknown> = {}) =>
     ctx.auditAs(caller.pubkey, null, action, target, { via: "nip86", ...details });
 
+  const assertCan = async (what: "edit" | "moderate", caller: Caller, pk: string, patch?: Partial<UserRecord>) => {
+    try {
+      if (what === "edit") await ctx.users.assertCanEdit(caller, pk, patch);
+      else await ctx.users.assertCanModerate(caller, pk);
+    } catch (e) {
+      throw new RpcError((e as Error).message);
+    }
+  };
+
   const updateInfo = async (field: "name" | "description" | "icon", value: string, caller: Caller) => {
     if (value.length > 2000) throw new RpcError(`${field} too long`);
     await settings.update({ info: { [field]: value } }, caller.pubkey);
@@ -74,9 +84,7 @@ export function createNip86Handler(ctx: ApiContext) {
       async run(params, caller) {
         const pk = pubkeyParam(params);
         const reason = str(params, 1, "reason", true);
-        await ctx.users.assertCanModerate(caller, pk).catch((e: Error) => {
-          throw new RpcError(e.message);
-        });
+        await assertCan("moderate", caller, pk);
         const r = await ctx.users.ban(pk, { reason: reason || undefined, disconnect: true }, caller.pubkey);
         await audit(caller, "user.ban", pk, { reason, disconnected: r.disconnected });
         return true;
@@ -86,6 +94,7 @@ export function createNip86Handler(ctx: ApiContext) {
       permission: "users.ban",
       async run(params, caller) {
         const pk = pubkeyParam(params);
+        await assertCan("moderate", caller, pk);
         await ctx.users.setStatus(pk, "active", caller.pubkey);
         await audit(caller, "user.unban", pk, { reason: str(params, 1, "reason", true) });
         return true;
@@ -103,7 +112,9 @@ export function createNip86Handler(ctx: ApiContext) {
       async run(params, caller) {
         const pk = pubkeyParam(params);
         const reason = str(params, 1, "reason", true);
-        await ctx.users.update(pk, { allowed: true, ...(reason ? { notes: reason } : {}) }, caller.pubkey);
+        await assertCan("edit", caller, pk, { allowed: true });
+        // the reason goes to the audit log; it must not overwrite the operator's notes on the user
+        await ctx.users.update(pk, { allowed: true }, caller.pubkey);
         await audit(caller, "user.allow", pk, { reason });
         return true;
       },
@@ -112,6 +123,7 @@ export function createNip86Handler(ctx: ApiContext) {
       permission: "users.edit",
       async run(params, caller) {
         const pk = pubkeyParam(params);
+        await assertCan("edit", caller, pk, { allowed: false });
         await ctx.users.update(pk, { allowed: false }, caller.pubkey);
         await audit(caller, "user.disallow", pk, { reason: str(params, 1, "reason", true) });
         return true;
@@ -121,7 +133,7 @@ export function createNip86Handler(ctx: ApiContext) {
       permission: "users.view",
       async run() {
         const { items } = await stores.users.list({ allowed: true, limit: 10_000 });
-        return items.map((u) => ({ pubkey: u.pubkey, reason: u.notes ?? "" }));
+        return items.map((u) => ({ pubkey: u.pubkey, reason: "" }));
       },
     },
     listeventsneedingmoderation: {
@@ -161,6 +173,10 @@ export function createNip86Handler(ctx: ApiContext) {
       async run(params, caller) {
         const id = eventIdParam(params);
         const reason = str(params, 1, "reason", true);
+        const target = await stores.events.getById(id);
+        if (target) await ctx.users.assertCanDeleteEventsOf(caller, [target.pubkey]).catch((e: Error) => {
+          throw new RpcError(e.message);
+        });
         const deleted = await stores.events.deleteByIds([id]);
         await stores.db.run(
           `INSERT INTO admin_banned_events (id, reason, by, at) VALUES (?, ?, ?, ?)
@@ -257,24 +273,24 @@ export function createNip86Handler(ctx: ApiContext) {
   })();
 
   const reply = (body: { result: unknown; error?: string }, status = 200) =>
-    new Response(JSON.stringify(body), { status, headers: { "Content-Type": CONTENT_TYPE } });
+    // NIP-86 clients are browser apps on other origins; auth is a header (NIP-98), never a cookie
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": CONTENT_TYPE, "Access-Control-Allow-Origin": "*" } });
 
   return async function nip86(req: Request): Promise<Response> {
     if (req.method !== "POST") return reply({ result: null, error: "method not allowed" }, 405);
-    const lenHeader = Number(req.headers.get("content-length") ?? 0);
-    if (lenHeader > MAX_BODY) return reply({ result: null, error: "request too large" }, 413);
-    const buf = new Uint8Array(await req.arrayBuffer());
-    if (buf.byteLength > MAX_BODY) return reply({ result: null, error: "request too large" }, 413);
+    // stops reading as soon as the cap is exceeded (Content-Length may be absent with chunked bodies)
+    const buf = await readBodyCapped(req, MAX_BODY);
+    if (!buf) return reply({ result: null, error: "request too large" }, 413);
 
     const ev = parseNostrAuthorization(req.headers.get("authorization"));
     if (!ev) return reply({ result: null, error: "unauthorized: missing NIP-98 authorization" }, 401);
     const v = verifyNip98(ev, { urls: relayUrls, method: "POST", body: buf, requirePayload: true, nowSec: ctx.nowSec() });
     if (!v.ok) return reply({ result: null, error: `unauthorized: ${v.reason}` }, 401);
-    if (ctx.usedAuthEvents.has(ev.id)) return reply({ result: null, error: "unauthorized: authorization already used" }, 401);
-    ctx.usedAuthEvents.set(ev.id, true, 125_000);
 
     const role = await ctx.roles.resolve(ev.pubkey);
     if (!role) return reply({ result: null, error: "forbidden: not an admin" }, 403);
+    // recorded only for admins so strangers can't flood the replay table (shared with the other instances)
+    if (!(await ctx.replay.consume(ev.id, AUTH_REPLAY_TTL_MS))) return reply({ result: null, error: "unauthorized: authorization already used" }, 401);
 
     let rpc: { method?: unknown; params?: unknown };
     try {

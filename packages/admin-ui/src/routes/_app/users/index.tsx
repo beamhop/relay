@@ -67,6 +67,8 @@ function UsersPage() {
   const items = React.useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const total = q.data?.pages[0]?.total;
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  // a bulk action must never hit users that are no longer visible under the current filters
+  React.useEffect(() => setSelected(new Set()), [search.search, search.status, search.role, search.tag, search.allowed, search.sort]);
   const [adding, setAdding] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const mobile = useIsMobile();

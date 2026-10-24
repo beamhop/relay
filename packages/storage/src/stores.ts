@@ -5,6 +5,9 @@ import { FTS_MIGRATION_ID, NAMESPACE, sqliteFtsReady, sqliteHasFts5, storageMigr
 import { SqlAuditLog, SqlInviteStore, SqlIpRuleStore, SqlKvStore } from "./misc";
 import { SqlUserStore, type UserStoreOptions } from "./users";
 
+/** sqlite: how often planner statistics are refreshed (`PRAGMA optimize`). */
+export const SQLITE_OPTIMIZE_INTERVAL_MS = 60 * 60_000;
+
 export interface CreateStoresOptions {
   /** reuse an existing Db (otherwise created from config.database) */
   db?: Db;
@@ -75,7 +78,15 @@ export async function createStores(config: BeamhopConfig, logger: Logger, opts: 
   }
 
   const users = new SqlUserStore(raw, log.child("users"), opts.users);
+  // A fresh database has no planner stats until something runs ANALYZE; refresh them periodically
+  // (cheap when nothing changed) instead of only at startup/shutdown.
+  const optimizer =
+    raw.dialect === "sqlite"
+      ? setInterval(() => void raw.exec("PRAGMA optimize=0x10002").catch((err) => log.debug("PRAGMA optimize failed", { err: String(err) })), SQLITE_OPTIMIZE_INTERVAL_MS)
+      : undefined;
+  (optimizer as { unref?: () => void } | undefined)?.unref?.();
   const db = new ManagedDb(raw, async () => {
+    clearInterval(optimizer);
     await users.close();
     if (raw.dialect === "sqlite") await raw.exec("PRAGMA optimize").catch(() => {});
   });

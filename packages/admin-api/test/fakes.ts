@@ -1,4 +1,5 @@
 import type { PushSender } from "../src/services/push";
+import type { ScryptParams } from "../src/util/password";
 import { Hono } from "hono";
 import { matchFilter } from "nostr-tools/filter";
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure";
@@ -17,6 +18,7 @@ import {
   type BlobStatus,
   type BlossomService,
   type ConnectionSummary,
+  type Db,
   type DeepPartial,
   type EventStore,
   type Filter,
@@ -99,7 +101,8 @@ export class FakeEventStore implements EventStore {
     return n;
   }
   async deleteByFilter(filters: Filter[]) {
-    const evs = await this.query(filters.map((f) => ({ ...f, limit: 1e9 })), { maxLimit: 1e9 });
+    // like the real store: each filter's `limit` caps its deletion (newest first)
+    const evs = await this.query(filters.map((f) => ({ ...f, limit: f.limit ?? 1e9 })), { maxLimit: 1e9 });
     return this.deleteByIds(evs.map((e) => e.id));
   }
   async deleteByPubkey(pubkey: string) {
@@ -281,7 +284,9 @@ export function fakeRelay(stores: Stores, bus: EventBus) {
   return relay;
 }
 
-export function fakeBlossom(): BlossomService & { blobs: Map<string, BlobRecord>; blocked: Set<string> } {
+type FakeBlossom = BlossomService & { blobs: Map<string, BlobRecord>; blocked: Set<string> };
+
+export function fakeBlossom(): FakeBlossom {
   const blobs = new Map<string, BlobRecord>();
   const blocked = new Set<string>();
   return {
@@ -325,6 +330,12 @@ export function fakeBlossom(): BlossomService & { blobs: Map<string, BlobRecord>
     async stats() {
       const all = [...blobs.values()];
       return { count: all.length, bytes: all.reduce((a, b) => a + b.size, 0), byType: [] };
+    },
+    async blocklist() {
+      return [...blocked].map((sha256) => ({ sha256, reason: "deleted by admin", createdAt: 1 }));
+    },
+    async unblock(s) {
+      return blocked.delete(s);
     },
   };
 }
@@ -402,10 +413,15 @@ export function nip98Header(k: Key, url: string, method: string, body?: string, 
   return `Nostr ${Buffer.from(JSON.stringify(ev)).toString("base64")}`;
 }
 
-export async function createHarness(opts: { blossom?: boolean; pushSender?: PushSender } = {}) {
-  const owner = newKey();
+/** cheap scrypt parameters for tests (the defaults take ~128 MiB and ~150 ms per hash) */
+export const TEST_SCRYPT: ScryptParams = { N: 1024, r: 8, p: 1 };
+
+export async function createHarness(
+  opts: { blossom?: boolean; pushSender?: PushSender; trustProxy?: boolean; scryptParams?: ScryptParams; db?: Db; owner?: Key } = {},
+) {
+  const owner = opts.owner ?? newKey();
   const bus = new EventBus();
-  const db = await createMemoryDb();
+  const db = opts.db ?? (await createMemoryDb());
   const stores: Stores = {
     db,
     events: new FakeEventStore(),
@@ -415,7 +431,7 @@ export async function createHarness(opts: { blossom?: boolean; pushSender?: Push
     kv: new FakeKv(),
     audit: new FakeAudit(),
   };
-  const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, admin: { owners: [owner.pk] } });
+  const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL, trustProxy: opts.trustProxy ?? false }, admin: { owners: [owner.pk] } });
   const settings = fakeSettings(bus);
   const relay = fakeRelay(stores, bus);
   const metrics = fakeMetrics();
@@ -434,7 +450,13 @@ export async function createHarness(opts: { blossom?: boolean; pushSender?: Push
     plugins: fakePlugins(),
     version: "0.1.0-test",
   };
-  const api = await createAdminApi(deps, { now: () => clock.now, snapshotIntervalMs: 50, heartbeatMs: 1000, pushSender: opts.pushSender });
+  const api = await createAdminApi(deps, {
+    now: () => clock.now,
+    snapshotIntervalMs: 50,
+    heartbeatMs: 1000,
+    pushSender: opts.pushSender,
+    scryptParams: opts.scryptParams ?? TEST_SCRYPT,
+  });
 
   /** absolute public URL of an admin path (what NIP-98 `u` tags must contain) */
   const url = (path: string) => `${PUBLIC_URL}/admin/api${path}`;

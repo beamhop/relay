@@ -1,7 +1,7 @@
 import type { ConnectionHandle } from "@beamhop/sdk";
 import type { Beamhop } from "../app";
 import { isRelayUpgrade, makeEnv } from "../app";
-import { clientIp, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, proxyMatcher, type RunningServer, type ServeOptions } from "./common";
 
 interface WsData {
   ip: string;
@@ -19,6 +19,8 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
   const { config, relay, settings, logger } = beamhop;
   const log = logger.child("http");
   const trustProxy = config.server.trustProxy;
+  const proxyIpHeader = config.server.proxyIpHeader;
+  const trustedProxies = proxyMatcher(config.server.trustedProxies);
   const limits = () => {
     const s = settings.get();
     return {
@@ -66,7 +68,7 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
     maxRequestBodySize: limits().maxRequestBodySize,
     development: false,
     fetch(req: Request, server: import("bun").Server<WsData>) {
-      const ip = clientIp(server.requestIP(req)?.address, (n) => req.headers.get(n), trustProxy);
+      const ip = clientIp(server.requestIP(req)?.address, (n) => req.headers.get(n), trustProxy, proxyIpHeader, trustedProxies);
       if (isRelayUpgrade(req)) {
         const ok = server.upgrade(req, { data: { ip, userAgent: req.headers.get("user-agent") ?? undefined, origin: req.headers.get("origin") ?? undefined } });
         if (ok) return undefined as unknown as Response;

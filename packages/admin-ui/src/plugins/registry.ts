@@ -44,8 +44,3 @@ export function usePluginRegistry() {
 }
 
 export const normalizePath = (p: string) => p.replace(/^\/+|\/+$/g, "");
-
-export function findPluginPage(plugin: string, path: string) {
-  const want = normalizePath(path);
-  return state.pages.find((p) => p.plugin === plugin && normalizePath(p.path) === want);
-}

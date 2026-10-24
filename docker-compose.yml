@@ -1,13 +1,27 @@
-# docker compose up -d                          → beamhop with SQLite + filesystem blobs in ./data volume
+# docker compose up -d                          → beamhop with SQLite + filesystem blobs in the beamhop-data volume (/data)
 # docker compose --profile postgres up -d       → + PostgreSQL (set BEAMHOP_DB_DRIVER=postgres)
 # docker compose --profile s3 up -d             → + MinIO (set BEAMHOP_BLOSSOM_DRIVER=s3)
 # docker compose --profile observability up -d  → + OTel collector, Prometheus, Grafana
+#
+# The optional services ship with DEV-ONLY default credentials and publish their ports on 127.0.0.1 only
+# (Docker-published ports bypass host firewalls like ufw). Override POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD /
+# BEAMHOP_S3_SECRET_ACCESS_KEY and GRAFANA_ADMIN_PASSWORD before exposing anything.
 services:
   beamhop:
     build: .
     image: beamhop:latest
     restart: unless-stopped
+    # wait for optional backing services when their profile is active (`required: false` needs Compose ≥ 2.20)
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      minio-init:
+        condition: service_completed_successfully
+        required: false
     ports:
+      # behind a reverse proxy on this host, publish on loopback only ("127.0.0.1:3334:3334") so clients can't
+      # bypass it and talk to beamhop directly
       - "${BEAMHOP_PORT:-3334}:3334"
     volumes:
       - beamhop-data:/data
@@ -15,15 +29,22 @@ services:
       BEAMHOP_PUBLIC_URL: ${BEAMHOP_PUBLIC_URL:-http://localhost:3334}
       BEAMHOP_OWNERS: ${BEAMHOP_OWNERS:-}
       BEAMHOP_LOG_LEVEL: ${BEAMHOP_LOG_LEVEL:-info}
+      # set true when a reverse proxy (nginx, Caddy, Traefik, …) sits in front: otherwise all clients share the
+      # proxy's IP and one set of per-IP limits (connections, rate limits, concurrent uploads)
       BEAMHOP_TRUST_PROXY: ${BEAMHOP_TRUST_PROXY:-false}
+      # peers whose forwarded client IP is believed (default: loopback + private networks, which covers a proxy
+      # container or one on the host). Set your proxy's address(es) to narrow it, or a CDN's ranges when it
+      # connects directly. Note: published ports reached over IPv6 without ip6tables arrive via docker-proxy
+      # from the bridge gateway (a private address) — bind to 127.0.0.1 as above when trusting a proxy.
+      BEAMHOP_TRUSTED_PROXIES: ${BEAMHOP_TRUSTED_PROXIES:-}
       BEAMHOP_DB_DRIVER: ${BEAMHOP_DB_DRIVER:-sqlite}
-      BEAMHOP_DATABASE_URL: ${BEAMHOP_DATABASE_URL:-postgres://beamhop:beamhop@postgres:5432/beamhop}
+      BEAMHOP_DATABASE_URL: ${BEAMHOP_DATABASE_URL:-postgres://beamhop:${POSTGRES_PASSWORD:-beamhop}@postgres:5432/beamhop}
       BEAMHOP_BLOSSOM_DRIVER: ${BEAMHOP_BLOSSOM_DRIVER:-fs}
       BEAMHOP_S3_ENDPOINT: ${BEAMHOP_S3_ENDPOINT:-http://minio:9000}
       BEAMHOP_S3_BUCKET: ${BEAMHOP_S3_BUCKET:-beamhop}
       BEAMHOP_S3_REGION: ${BEAMHOP_S3_REGION:-us-east-1}
       BEAMHOP_S3_ACCESS_KEY_ID: ${BEAMHOP_S3_ACCESS_KEY_ID:-beamhop}
-      BEAMHOP_S3_SECRET_ACCESS_KEY: ${BEAMHOP_S3_SECRET_ACCESS_KEY:-beamhop-secret}
+      BEAMHOP_S3_SECRET_ACCESS_KEY: ${BEAMHOP_S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-beamhop-secret}}
       BEAMHOP_OTEL_ENABLED: ${BEAMHOP_OTEL_ENABLED:-false}
       BEAMHOP_OTEL_ENDPOINT: ${BEAMHOP_OTEL_ENDPOINT:-http://otel-collector:4318/v1/metrics}
       BEAMHOP_METRICS_TOKEN: ${BEAMHOP_METRICS_TOKEN:-}
@@ -34,7 +55,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: beamhop
-      POSTGRES_PASSWORD: beamhop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-beamhop} # dev-only default
       POSTGRES_DB: beamhop
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -50,9 +71,9 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: beamhop
-      MINIO_ROOT_PASSWORD: beamhop-secret
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-beamhop-secret} # dev-only default
     ports:
-      - "9001:9001"
+      - "127.0.0.1:9001:9001" # console: full access to every blob
     volumes:
       - minio-data:/data
 
@@ -60,8 +81,10 @@ services:
     profiles: [s3]
     image: minio/mc:latest
     depends_on: [minio]
+    environment:
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-beamhop-secret}
     entrypoint: >
-      /bin/sh -c "until mc alias set local http://minio:9000 beamhop beamhop-secret; do sleep 1; done;
+      /bin/sh -c "until mc alias set local http://minio:9000 beamhop $${MINIO_ROOT_PASSWORD}; do sleep 1; done;
       mc mb --ignore-existing local/beamhop"
 
   otel-collector:
@@ -71,7 +94,7 @@ services:
     volumes:
       - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
     ports:
-      - "4318:4318"
+      - "127.0.0.1:4318:4318"
 
   prometheus:
     profiles: [observability]
@@ -79,16 +102,19 @@ services:
     volumes:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
   grafana:
     profiles: [observability]
     image: grafana/grafana:latest
     environment:
+      # anonymous users may only look at dashboards; an anonymous Admin could add a Postgres data source and
+      # run SQL against the relay database
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin} # dev-only default
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
 
 volumes:
   beamhop-data:

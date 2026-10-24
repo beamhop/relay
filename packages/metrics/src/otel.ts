@@ -67,6 +67,10 @@ export async function setupOtel(
     counter("beamhop.events.out", "{event}", (t) => t.eventsOut);
     counter("beamhop.req", "{req}", (t) => t.req);
     counter("beamhop.connections.opened", "{connection}", (t) => t.connectionsOpened);
+    counter("beamhop.connections.closed", "{connection}", (t) => t.connectionsClosed);
+    counter("beamhop.bytes.in", "By", (t) => t.bytesIn);
+    counter("beamhop.bytes.out", "By", (t) => t.bytesOut);
+    counter("beamhop.blobs.served", "{blob}", (t) => t.blobsServed);
     counter("beamhop.blob.bytes.served", "By", (t) => t.blobBytesServed);
     counter("beamhop.blob.bytes.uploaded", "By", (t) => t.blobBytesUploaded);
     counter("beamhop.blobs.uploaded", "{blob}", (t) => t.blobsUploaded);

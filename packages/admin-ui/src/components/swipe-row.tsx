@@ -7,7 +7,7 @@ export interface SwipeAction {
   icon?: React.ComponentType<{ className?: string }>;
   /** tailwind bg/text classes for the revealed background */
   className?: string;
-  /** return false (or resolve false) to cancel and snap back */
+  /** the row always snaps back once this settles (successful actions usually remove it via refetch) */
   onTrigger: () => unknown | Promise<unknown>;
 }
 

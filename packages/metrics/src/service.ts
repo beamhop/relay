@@ -64,6 +64,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
   const rollup = new Rollup(stores.db, Math.floor(startedAt / 1000), {
     maxPubkeysPerBucket: opts.maxPubkeysPerBucket ?? 10_000,
     topPubkeysPerHour: opts.topPubkeysPerHour ?? 1000,
+    onDropped: (message) => logger.error(message),
   });
   const collector = new Collector(startedAt, rollup, geo);
   collector.attach(bus);

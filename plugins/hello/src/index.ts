@@ -35,12 +35,19 @@ const plugin: BeamhopPlugin<typeof Settings> = {
       id: "001_init",
       up: "CREATE TABLE IF NOT EXISTS plugin_hello_rejections (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, at INTEGER NOT NULL, reason TEXT NOT NULL)",
     },
+    {
+      // postgres INTEGER is 32-bit (overflows in 2038); sqlite INTEGER is already 64-bit
+      id: "002_bigint_at",
+      up: { sqlite: "SELECT 1", postgres: "ALTER TABLE plugin_hello_rejections ALTER COLUMN at TYPE BIGINT" },
+    },
   ],
   // relative to the plugin package root; built by `bun run build:ui`
   ui: "./dist/ui.js",
 
   async setup(ctx) {
     const { logger, db, settings } = ctx;
+    /** rejected-event log is fed by anonymous writers, so it is capped */
+    const MAX_REJECTION_ROWS = 1000;
     let seen = 0;
     let rejected = 0;
     const rejectedCounter = ctx.metrics.counter("hello_rejected_total", "events rejected by the hello plugin");
@@ -55,6 +62,12 @@ const plugin: BeamhopPlugin<typeof Settings> = {
       await db.run("INSERT INTO plugin_hello_rejections (id, pubkey, at, reason) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING", [
         event.id, event.pubkey, Math.floor(Date.now() / 1000), `contains "${word}"`,
       ]);
+      if (rejected % 50 === 1) {
+        await db.run(
+          "DELETE FROM plugin_hello_rejections WHERE id NOT IN (SELECT id FROM plugin_hello_rejections ORDER BY at DESC, id DESC LIMIT ?)",
+          [MAX_REJECTION_ROWS],
+        );
+      }
       return { action: "reject", reason: `blocked: contains a forbidden word` };
     });
 

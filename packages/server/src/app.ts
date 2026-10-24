@@ -1,7 +1,8 @@
-import { randomBytes } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { generateSecretKey } from "nostr-tools/pure";
 import {
+  DEFAULT_TRUSTED_PROXIES,
   EventBus,
   HookRegistry,
   createLogger,
@@ -9,6 +10,7 @@ import {
   type BeamhopConfig,
   type BeamhopPlugin,
   type BlossomService,
+  type BusEvents,
   type CreateAdminApi,
   type CreateBlossom,
   type CreateMetrics,
@@ -22,7 +24,8 @@ import {
 import type { ServerExtras } from "./config";
 import { createPluginManager, PluginError, type ServerPluginManager } from "./plugins/manager";
 import { createAssetSource, serveAdminAsset, type AssetSource } from "./static";
-import { renderLanding } from "./landing";
+import { proxyMatcher } from "./runtime/common";
+import { LANDING_CSP, renderLanding } from "./landing";
 import { VERSION } from "./version";
 
 export interface BeamhopFactories {
@@ -80,12 +83,13 @@ export interface Beamhop {
   stop(): Promise<void>;
 }
 
-export const CLIENT_IP_HEADER = "x-beamhop-client-ip";
-
 export const isWebSocketUpgrade = (req: Request) => (req.headers.get("upgrade") ?? "").toLowerCase() === "websocket";
 export const isRelayUpgrade = (req: Request) => req.method === "GET" && isWebSocketUpgrade(req) && new URL(req.url).pathname === "/";
 export const isNip86 = (req: Request) => (req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/nostr+json+rpc");
 const acceptsNostrJson = (req: Request) => (req.headers.get("accept") ?? "").includes("application/nostr+json");
+
+/** Headers a reverse proxy / CDN adds to requests it relays. */
+const FORWARDING_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip", "cf-connecting-ip", "true-client-ip", "fly-client-ip"];
 
 export function makeEnv(ip: string, extra?: Record<string, unknown>): ServerEnv {
   return { ...extra, ip, requestIP: () => ({ address: ip, family: ip.includes(":") ? "IPv6" : "IPv4", port: 0 }) };
@@ -138,14 +142,13 @@ async function ensureSecrets(config: BeamhopConfig, stores: Stores, logger: Logg
     }
     config.relaySecretKey = k;
   }
-  if (!config.admin.sessionSecret) {
-    let s = await stores.kv.get<string>("server", "sessionSecret");
-    if (!s) {
-      s = randomBytes(32).toString("base64url");
-      await stores.kv.set("server", "sessionSecret", s);
-    }
-    config.admin.sessionSecret = s;
-  }
+}
+
+/** Constant-time string comparison (length is not secret). */
+function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 export async function createBeamhop(inputConfig: BeamhopConfig, overrides: BeamhopOverrides = {}): Promise<Beamhop> {
@@ -174,7 +177,7 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
       metrics,
       defaultEnabled: extras.pluginsEnabled,
       plugins: overrides.plugins,
-      autoDiscoverNpm: overrides.autoDiscoverNpm,
+      autoDiscoverNpm: overrides.autoDiscoverNpm ?? config.plugins.autoDiscoverNpm,
       cwd: overrides.cwd,
     });
     const adminApi = config.admin.enabled && f.createAdminApi
@@ -182,6 +185,9 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
       : undefined;
     const assets = overrides.assets ?? createAssetSource(config.admin.uiDir);
     if (config.admin.enabled) log.info(assets.kind === "none" ? "admin UI not built — serving placeholder at /admin" : `admin UI served from ${assets.location}`);
+    if (extras.prometheus && !extras.metricsToken) {
+      log.warn("/metrics has no BEAMHOP_METRICS_TOKEN: it is only served to loopback / private-network clients reaching beamhop directly; set a token to scrape it from elsewhere");
+    }
 
     const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, checkHealth: () => stores.db.get("SELECT 1 AS ok") });
 
@@ -191,13 +197,6 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
       config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION,
       fetch(req, env) {
         const ip = env?.ip ?? "127.0.0.1";
-        try {
-          req.headers.set(CLIENT_IP_HEADER, ip);
-        } catch {
-          const h = new Headers(req.headers);
-          h.set(CLIENT_IP_HEADER, ip);
-          req = new Request(req, { headers: h });
-        }
         return app.fetch(req, { ...makeEnv(ip), ...env } as ServerEnv);
       },
       async start() {
@@ -206,6 +205,9 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
         await relay.start();
         await metrics.start();
         await plugins.start();
+        // raised while settings loaded, before admin/metrics/plugin listeners existed: emit it again now
+        const startupAlert = (settings as Partial<{ takeStartupAlert(): BusEvents["alert"] | undefined }>).takeStartupAlert?.();
+        if (startupAlert) bus.emit("alert", startupAlert);
       },
       stop() {
         stopping ??= (async () => {
@@ -315,16 +317,29 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
       await d.checkHealth?.();
       return c.json({ ok: true, version: d.version }, 200, { "cache-control": "no-store" });
     } catch (err) {
-      return c.json({ ok: false, error: String(err) }, 503, { "cache-control": "no-store" });
+      // the probe is public: log the cause, don't leak driver errors (hosts, paths, credentials in DSNs)
+      d.logger.warn("health check failed", { error: (err as Error)?.message ?? String(err) });
+      return c.json({ ok: false, error: "unavailable" }, 503, { "cache-control": "no-store" });
     }
   });
 
   // Prometheus scrape endpoint
   if (d.extras.prometheus && d.renderPrometheus) {
     const render = d.renderPrometheus;
+    const localNetwork = proxyMatcher(DEFAULT_TRUSTED_PROXIES);
     app.get("/metrics", async (c) => {
-      if (d.extras.metricsToken && c.req.header("authorization") !== `Bearer ${d.extras.metricsToken}`) {
-        return c.text("unauthorized", 401, { "www-authenticate": 'Bearer realm="metrics"' });
+      if (d.extras.metricsToken) {
+        if (!safeEqual(c.req.header("authorization") ?? "", `Bearer ${d.extras.metricsToken}`)) {
+          return c.text("unauthorized", 401, { "www-authenticate": 'Bearer realm="metrics"' });
+        }
+      } else {
+        // No token: a scraper on this host or its private network (e.g. Prometheus in the compose network), talking to
+        // beamhop directly. Anything relayed by a proxy carries a forwarding header — the proxy's own address is
+        // private too, and without trustProxy it would stand in for every internet client.
+        const ip = (c.env as ServerEnv | undefined)?.ip ?? "unknown";
+        if (!localNetwork(ip) || FORWARDING_HEADERS.some((h) => c.req.header(h) !== undefined)) {
+          return c.text("forbidden: without BEAMHOP_METRICS_TOKEN, /metrics is only served to the local network", 403);
+        }
       }
       return c.body(await render(d.metrics), 200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" });
     });
@@ -346,7 +361,7 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
       nip11 = d.relay.nip11();
     } catch {}
     const html = renderLanding({ settings: d.settings.get(), publicUrl: d.config.server.publicUrl, nip11, version: VERSION, blossom: !!d.blossom, admin: d.config.admin.enabled });
-    return c.html(html, 200, { "cache-control": "no-cache", vary: "Accept" });
+    return c.html(html, 200, { "cache-control": "no-cache", vary: "Accept", "content-security-policy": LANDING_CSP, "x-content-type-options": "nosniff" });
   });
 
   app.notFound((c) => c.text("not found", 404));

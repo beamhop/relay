@@ -7,7 +7,7 @@ import { validate } from "./request";
 const TAG_KEY = /^#[a-zA-Z]$/;
 const KNOWN = new Set(["ids", "authors", "kinds", "since", "until", "limit", "search"]);
 
-export const FilterSchema = z
+const FilterSchema = z
   .object({
     ids: z.array(z.string().regex(/^[0-9a-fA-F]{1,64}$/)).max(5000).optional(),
     authors: z

@@ -1,5 +1,6 @@
-import type { NostrEvent, UserRecord } from "@beamhop/sdk";
+import type { EventSource, NostrEvent, UserRecord } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
+import { isHex64 } from "../util/hex";
 import { sameRelayUrl } from "../util/url";
 
 export const KIND_DELETION = 5;
@@ -8,18 +9,36 @@ export const KIND_REPORT = 1984;
 export const KIND_AUTH = 22242;
 export const VANISH_KV_NAMESPACE = "core-vanish";
 
-export type SpecialDecision = { reject: string } | { before?: () => Promise<void>; after?: () => Promise<void> };
+/**
+ * - `before` runs before the event is stored (deletion, vanish: idempotent effects that must happen
+ *   first); the pipeline skips it when the event is already stored.
+ * - `commit` runs only after the event was stored as new (NIP-29 state changes), so replaying a stored
+ *   or deleted event changes nothing.
+ * - `after` runs after commit (derived relay-signed events, notifications).
+ */
+export type SpecialDecision =
+  | { reject: string }
+  | { duplicate: string }
+  | { before?: () => Promise<void>; commit?: () => Promise<void>; after?: () => Promise<void> };
+
+export interface SpecialOptions {
+  source: EventSource;
+  /** rate-limit key of the client address (events from a connection) */
+  ipKey?: string;
+}
 
 /** Special-kind handling between content policies and storage. */
-export async function prepareSpecial(ctx: RelayContext, event: NostrEvent, user: UserRecord | undefined): Promise<SpecialDecision> {
+export async function prepareSpecial(ctx: RelayContext, event: NostrEvent, user: UserRecord | undefined, opts: SpecialOptions): Promise<SpecialDecision> {
   const group = await ctx.groups.handleWrite(event, {
     pubkey: event.pubkey,
     isRelayMember: ctx.users.isMember(event.pubkey, user),
     isStaff: ctx.users.isStaff(event.pubkey, user),
+    source: opts.source,
+    ipKey: opts.ipKey,
   });
-  if (group && "reject" in group) return group;
+  if (group && ("reject" in group || "duplicate" in group)) return group;
 
-  let own: SpecialDecision = {};
+  let own: { before?: () => Promise<void>; after?: () => Promise<void> } = {};
   switch (event.kind) {
     case KIND_DELETION:
       own = { before: () => applyDeletion(ctx, event) };
@@ -33,21 +52,17 @@ export async function prepareSpecial(ctx: RelayContext, event: NostrEvent, user:
       own = {
         after: async () => {
           ctx.bus.emit("report.created", { event });
-          await maybeAutoBan(ctx, event).catch((err) => ctx.logger.error("auto-ban check failed", { err: String(err) }));
+          scheduleAutoBan(ctx, event); // off the OK path
         },
       };
       break;
   }
-  if ("reject" in own) return own;
+  const afters = [group?.after, own.after].filter((f): f is () => Promise<void> => !!f);
   return {
-    before: async () => {
-      await group?.before?.();
-      await own.before?.();
-    },
-    after: async () => {
-      await group?.after?.();
-      await own.after?.();
-    },
+    // `before` is only set when there are side effects, so the pipeline can skip its replay check otherwise
+    before: own.before,
+    commit: group?.commit,
+    after: afters.length ? async () => { for (const f of afters) await f(); } : undefined,
   };
 }
 
@@ -64,33 +79,100 @@ export function vanishTargetsUs(ctx: RelayContext, event: NostrEvent): boolean {
   return event.tags.some((t) => t[0] === "relay" && t[1] !== undefined && (t[1] === "ALL_RELAYS" || sameRelayUrl(t[1], ctx.relayUrl)));
 }
 
+/** NIP-62: deletes the pubkey's events (and gift wraps addressed to it) up to the request's created_at. */
 async function applyVanish(ctx: RelayContext, event: NostrEvent) {
   const pk = event.pubkey;
-  const n = (await ctx.stores.events.deleteByPubkey(pk)) + (await ctx.stores.events.deleteByFilter([{ kinds: [1059], "#p": [pk] }]));
-  const prev = ctx.vanished.get(pk) ?? 0;
-  if (event.created_at > prev) {
-    ctx.vanished.set(pk, event.created_at);
-    await ctx.stores.kv.set(VANISH_KV_NAMESPACE, pk, event.created_at);
+  const until = event.created_at;
+  // Throwaway keys could otherwise grow the vanish list without bound: only pubkeys the relay knows
+  // (a user record or stored events) get a lasting marker.
+  const known = !!(await ctx.users.get(pk)) || (await ctx.stores.events.query([{ authors: [pk], limit: 2 }])).some((e) => e.id !== event.id);
+  if (known) {
+    // marker first: a copy of an old event re-sent while the deletion runs is refused, or removed
+    // again right after it is stored (see the post-save check in the write pipeline)
+    const prev = ctx.vanished.get(pk) ?? 0;
+    if (until > prev) {
+      ctx.vanished.set(pk, until);
+      await ctx.stores.kv.set(VANISH_KV_NAMESPACE, pk, until);
+    }
   }
+  const n = await ctx.stores.events.deleteByFilter([
+    { authors: [pk], until },
+    { kinds: [1059], "#p": [pk], until },
+  ]);
   ctx.bus.emit("event.deleted", { ids: [], actor: pk, reason: `NIP-62 request to vanish (${n} events)` });
   ctx.logger.info("request to vanish processed", { pubkey: pk, deleted: n });
 }
 
-/** NIP-56: auto-ban a reported pubkey after N reports from distinct relay members. */
-async function maybeAutoBan(ctx: RelayContext, report: NostrEvent) {
-  const threshold = ctx.s().moderation.autoBanReportThreshold;
-  if (!(threshold > 0)) return;
+/** kv namespace: reported pubkey → relay members whose reports against it were seen */
+export const REPORTERS_KV_NAMESPACE = "core-reporters";
+/** Recent reports against a pubkey scanned once, the first time a member reports it (older reports predate tracking). */
+const SEED_SCAN = 2_000;
+/** Member reporters remembered per reported pubkey. */
+const MAX_TRACKED_REPORTERS = 1_000;
+
+/** Auto-ban checks per relay, chained per reported pubkey so concurrent reports don't race. */
+const autoBanChains = new WeakMap<RelayContext, Map<string, Promise<void>>>();
+
+function scheduleAutoBan(ctx: RelayContext, report: NostrEvent): void {
   const target = report.tags.find((t) => t[0] === "p" && t[1])?.[1];
-  if (!target || target === ctx.key.pubkey) return;
+  if (!target || !isHex64(target) || !(ctx.s().moderation.autoBanReportThreshold > 0)) return;
+  let chains = autoBanChains.get(ctx);
+  if (!chains) autoBanChains.set(ctx, (chains = new Map()));
+  const run = (chains.get(target) ?? Promise.resolve())
+    .then(() => maybeAutoBan(ctx, report, target))
+    .catch((err) => ctx.logger.error("auto-ban check failed", { err: String(err) }));
+  chains.set(target, run);
+  void run.then(() => {
+    if (chains.get(target) === run) chains.delete(target);
+  });
+}
+
+/**
+ * NIP-56: auto-ban a reported pubkey after N reports from distinct relay members. Non-member reports
+ * return right away. The members who reported a pubkey are tracked in kv (seeded once from its recent
+ * reports), so each check costs one limit-1 query per tracked reporter (stopping at the threshold) instead of a scan of all
+ * members or of all reports (which throwaway keys could flood).
+ */
+async function maybeAutoBan(ctx: RelayContext, report: NostrEvent, target: string) {
+  const threshold = ctx.s().moderation.autoBanReportThreshold;
+  if (!(threshold > 0) || target === ctx.key.pubkey) return;
+  const isMember = async (pk: string) => ctx.users.isMember(pk, await ctx.users.get(pk));
+  if (!(await isMember(report.pubkey))) return; // non-member reports never count
   const rec = await ctx.users.get(target);
-  if (rec?.status === "banned" || ctx.users.isStaff(target, rec)) return;
-  const reports = await ctx.stores.events.query([{ kinds: [KIND_REPORT], "#p": [target], limit: 5000 }]);
-  const reporters = new Set<string>();
-  for (const r of reports) {
-    if (reporters.has(r.pubkey)) continue;
-    if (ctx.users.isMember(r.pubkey, await ctx.users.get(r.pubkey))) reporters.add(r.pubkey);
+  if (rec?.status === "banned" || ctx.users.isStaff(target, rec)) {
+    await ctx.stores.kv.delete(REPORTERS_KV_NAMESPACE, target);
+    return;
   }
-  if (reporters.size < threshold) return;
+
+  const stored = await ctx.stores.kv.get<string[]>(REPORTERS_KV_NAMESPACE, target);
+  const candidates = new Set<string>(Array.isArray(stored) ? stored : []);
+  if (!Array.isArray(stored)) {
+    for (const r of await ctx.stores.events.query([{ kinds: [KIND_REPORT], "#p": [target], limit: SEED_SCAN }], { maxLimit: SEED_SCAN })) {
+      candidates.add(r.pubkey);
+    }
+  }
+  candidates.delete(report.pubkey);
+
+  // Each candidate is checked on its own (limit 1), so one member filing many reports can't push the
+  // others out of a shared result window. Candidates left unchecked once the threshold is met stay tracked.
+  const reporters = new Set<string>();
+  const kept: string[] = [];
+  for (const pk of [report.pubkey, ...candidates]) {
+    if (reporters.size >= threshold) {
+      kept.push(pk);
+      continue;
+    }
+    if (!(await isMember(pk))) continue;
+    const hit = await ctx.stores.events.query([{ kinds: [KIND_REPORT], "#p": [target], authors: [pk], limit: 1 }]);
+    if (hit.length === 0) continue; // their reports were deleted
+    reporters.add(pk);
+    kept.push(pk);
+  }
+  if (reporters.size < threshold) {
+    await ctx.stores.kv.set(REPORTERS_KV_NAMESPACE, target, kept.slice(0, MAX_TRACKED_REPORTERS));
+    return;
+  }
+  await ctx.stores.kv.delete(REPORTERS_KV_NAMESPACE, target);
   const user = await ctx.stores.users.upsert(target, { status: "banned", banReason: `auto-banned after ${reporters.size} reports` });
   ctx.users.invalidate(target);
   ctx.bus.emit("user.updated", { pubkey: target, user, actor: "system:auto-ban" });

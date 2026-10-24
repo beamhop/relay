@@ -49,6 +49,30 @@ const MIME_TO_EXT: Record<string, string> = {
 
 export const DEFAULT_MIME = "application/octet-stream";
 
+const SVG_START = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>/]/i;
+/** How much of an unrecognised blob is looked at to tell text (and SVG) from binary. */
+const SNIFF_BYTES = 64 * 1024;
+
+/**
+ * Type of a blob whose bytes file-type couldn't recognise. The declared Content-Type is only believed for text
+ * types, and only when the bytes are text: real images, audio and video carry magic bytes file-type knows, so a
+ * declared media type on unrecognised bytes (e.g. a script or archive behind a junk prefix labelled image/png)
+ * becomes application/octet-stream and has to pass the allowlist as that.
+ */
+export function typeOfUnrecognized(data: Uint8Array, declared: string | undefined): string {
+  let text: string;
+  try {
+    // stream: a multi-byte character cut off at the sniff boundary isn't an error
+    text = new TextDecoder("utf-8", { fatal: true }).decode(data.subarray(0, SNIFF_BYTES), { stream: true });
+  } catch {
+    return DEFAULT_MIME;
+  }
+  if (text.includes("\0")) return DEFAULT_MIME;
+  if (SVG_START.test(text)) return "image/svg+xml";
+  if (declared && (declared.startsWith("text/") || declared === "application/json")) return declared;
+  return DEFAULT_MIME;
+}
+
 /** Normalises a Content-Type header value to a bare lowercase mime (`image/png; x=y` → `image/png`). */
 export function normalizeMime(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
@@ -72,4 +96,25 @@ export function isMimeAllowed(mime: string, allowlist: string[]): boolean {
   });
 }
 
+/**
+ * Types that are safe to render inline from our origin: passive media and plain text. Everything else
+ * (SVG, HTML, XML, JS, unknown …) is served as a download. `<img src>` embedding of SVG still works.
+ */
+export function isInlineSafe(mime: string): boolean {
+  if (mime === "image/svg+xml" || mime.includes("xml")) return false;
+  const top = mime.split("/")[0];
+  return top === "image" || top === "video" || top === "audio" || mime === "text/plain" || mime === "application/pdf";
+}
+
 export const topLevelType = (mime: string) => mime.split("/")[0] || "application";
+
+/**
+ * CSP for a served blob. Everything is sandboxed (no scripts, no same-origin) except inline-safe audio/video:
+ * Chromium refuses to play a directly-opened media document under `sandbox`, so those get `media-src 'self'`
+ * instead (`default-src 'none'` still blocks scripts). XML-based "media" types (`video/x+xml`) render as documents,
+ * so they stay sandboxed.
+ */
+export function blobCsp(mime: string): string {
+  const top = mime.split("/")[0];
+  return (top === "audio" || top === "video") && isInlineSafe(mime) ? "default-src 'none'; media-src 'self'" : "default-src 'none'; sandbox";
+}

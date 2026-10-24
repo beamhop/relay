@@ -1,6 +1,8 @@
+import * as React from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type {
-  BlobStatus, BulkResult, EventDeleteRequest, EventQueryRequest, EventQueryResponse, EventView, Filter, MediaItem, MediaStats,
+  BlobStatus, BulkResult, EventDeleteRequest, EventQueryRequest, EventQueryResponse, Filter, MediaItem, MediaStats,
   Paged, ReportStatus, ReportView, ResolveReportRequest,
 } from "@beamhop/sdk/admin-contract";
 import { api, enc } from "@/lib/api";
@@ -17,27 +19,47 @@ export function useEventQuery(filters: Filter[], limit = 50, enabled = true) {
       return api.post<EventQueryResponse>("/events/query", body).then((r) => r.items ?? []);
     },
     initialPageParam: 0 as number,
-    getNextPageParam: (last) => {
+    // next page starts AT the oldest second (not oldest-1) so events sharing that second aren't skipped;
+    // overlap is deduped in `select`. Only step past the second when a page brought nothing new.
+    getNextPageParam: (last, pages) => {
       if (last.length < limit) return undefined;
       const oldest = Math.min(...last.map((v) => v.event.created_at));
-      return oldest - 1 > 0 ? oldest - 1 : undefined;
+      const seen = new Set(pages.slice(0, -1).flatMap((p) => p.map((v) => v.event.id)));
+      const fresh = last.some((v) => !seen.has(v.event.id));
+      const next = fresh ? oldest : oldest - 1;
+      return next > 0 ? next : undefined;
+    },
+    select: (data) => {
+      const seen = new Set<string>();
+      return { ...data, pages: data.pages.map((p) => p.filter((v) => !seen.has(v.event.id) && (seen.add(v.event.id), true))) };
     },
     placeholderData: keepPreviousData,
   });
 }
 
-export const useEvent = (id: string | undefined) =>
-  useQuery({ queryKey: ["event", id], queryFn: () => api.get<EventView>(`/events/${enc(id!)}`), enabled: !!id });
+type DeleteResult = { deleted?: number; truncated?: boolean };
 
 export function useDeleteEvents() {
-  return useApiMutation({
-    fn: (body: EventDeleteRequest) =>
+  // a large filter delete below owner runs in bounded batches; `truncated` means more matches remain
+  const again = React.useRef<(v: EventDeleteRequest) => void>(() => {});
+  const m = useApiMutation<EventDeleteRequest, DeleteResult>({
+    fn: (body) =>
       body.ids?.length === 1 && !body.filters
-        ? api.del<{ deleted?: number }>(`/events/${enc(body.ids[0])}`, body.reason ? { reason: body.reason } : undefined)
-        : api.post<{ deleted?: number }>("/events/delete", body),
+        ? api.del<DeleteResult>(`/events/${enc(body.ids[0])}`, body.reason ? { reason: body.reason } : undefined)
+        : api.post<DeleteResult>("/events/delete", body),
     invalidate: [["events"], ["user-events"], ["reports"]],
-    success: (r, v) => `Deleted ${r?.deleted ?? v.ids?.length ?? ""} event(s)`.replace("  ", " "),
+    success: (r, v) => (r?.truncated ? undefined : `Deleted ${r?.deleted ?? v.ids?.length ?? ""} event(s)`.replace("  ", " ")),
+    onSuccess: (r, v) => {
+      if (!r?.truncated) return;
+      toast.warning(`Deleted ${r.deleted ?? 0} event(s) — more events still match`, {
+        description: "Large deletes run in batches. Run it again to continue.",
+        duration: 20_000,
+        action: { label: "Delete more", onClick: () => again.current({ ...v, ids: undefined }) },
+      });
+    },
   });
+  again.current = m.mutate;
+  return m;
 }
 
 // ------------------------------------------------------------- reports
@@ -52,6 +74,10 @@ export function useReports(status: ReportStatus, type?: string) {
     },
   });
 }
+
+/** single report, e.g. opened from a push notification (`/reports?id=…`); keyed under "reports" so resolves invalidate it */
+export const useReport = (id: string | undefined) =>
+  useQuery({ queryKey: ["reports", "one", id], queryFn: () => api.get<ReportView>(`/reports/${enc(id!)}`), enabled: !!id });
 
 export const useOpenReportCount = (enabled: boolean) =>
   useQuery({
@@ -70,7 +96,7 @@ export function useResolveReports() {
   const bulk = useApiMutation({
     fn: (body: ResolveReportRequest & { ids: string[] }) => api.post<BulkResult>("/reports/bulk-resolve", body),
     invalidate: [["reports"], ["events"], ["users"]],
-    success: (r, v) => `${r?.ok ?? v.ids.length} report(s) resolved`,
+    success: (r, v) => `${r?.ok ?? v.ids.length} report(s) resolved${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
   });
   return { one, bulk };
 }
@@ -106,7 +132,18 @@ export function useMediaActions() {
   const bulk = useApiMutation({
     fn: (body: { sha256s: string[]; action: "approve" | "block" | "delete" }) => api.post<BulkResult>("/media/bulk", body),
     invalidate: keys,
-    success: (r, v) => `${r?.ok ?? v.sha256s.length} blob(s) updated`,
+    success: (r, v) => `${r?.ok ?? v.sha256s.length} blob(s) updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
   });
   return { setStatus, remove, bulk };
 }
+
+export interface BlockedBlob { sha256: string; reason: string; createdAt: number }
+export const useMediaBlocklist = (enabled: boolean) =>
+  useQuery({ queryKey: ["media-blocklist"], queryFn: () => api.get<{ items: BlockedBlob[] }>("/media/blocklist").then((r) => r.items ?? []), enabled });
+
+export const useUnblockHash = () =>
+  useApiMutation({
+    fn: (sha256: string) => api.del(`/media/blocklist/${enc(sha256)}`),
+    invalidate: [["media-blocklist"]],
+    success: "Hash unblocked — it can be uploaded again",
+  });

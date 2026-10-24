@@ -1,12 +1,12 @@
 import * as React from "react";
 import type { Profile } from "@beamhop/sdk/admin-contract";
-import { cn } from "@/lib/utils";
+import { cn, safeUrl } from "@/lib/utils";
 import { displayName, pubkeyHue } from "@/lib/nostr";
 
 /** Avatar with profile picture and a deterministic identicon fallback. */
 export function UserAvatar({ pubkey, profile, className, size = 36 }: { pubkey: string; profile?: Profile; className?: string; size?: number }) {
   const [failed, setFailed] = React.useState(false);
-  const pic = profile?.picture && !failed ? profile.picture : undefined;
+  const pic = !failed ? safeUrl(profile?.picture) : undefined;
   const hue = pubkeyHue(pubkey);
   const name = displayName(pubkey, profile);
   return (

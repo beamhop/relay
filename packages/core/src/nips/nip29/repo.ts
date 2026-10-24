@@ -37,7 +37,35 @@ CREATE TABLE IF NOT EXISTS core_group_invites (
   PRIMARY KEY (group_id, code)
 );`,
   },
+  {
+    // ids of group control events whose state change was applied (replay protection, pruned by age)
+    id: "002_group_applied",
+    up: `
+CREATE TABLE IF NOT EXISTS core_group_applied (
+  id TEXT PRIMARY KEY,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS core_group_applied_created_idx ON core_group_applied (created_at);`,
+  },
+  {
+    // postgres INTEGER is 32-bit: unix timestamps overflow it in 2038 (sqlite INTEGER is already 64-bit)
+    id: "003_bigint_timestamps",
+    up: {
+      sqlite: "SELECT 1",
+      postgres: `
+ALTER TABLE core_groups ALTER COLUMN created_at TYPE BIGINT;
+ALTER TABLE core_group_members ALTER COLUMN added_at TYPE BIGINT;
+ALTER TABLE core_group_invites ALTER COLUMN created_at TYPE BIGINT;
+ALTER TABLE core_group_applied ALTER COLUMN created_at TYPE BIGINT;`,
+    },
+  },
 ];
+
+/**
+ * Applied-control records older than this are pruned. Control events from clients, sync and plugins
+ * must be younger than GROUP_CONTROL_MAX_AGE_SEC, so older replays are refused before this check.
+ */
+const APPLIED_RETENTION_SEC = 60 * 60;
 
 export interface GroupState {
   id: string;
@@ -54,9 +82,12 @@ export interface GroupState {
   members: Map<string, string[]>;
   /** role name → description */
   roles: Map<string, string>;
+  /** hashed invite codes ("sha256:<hex>") */
   invites: Set<string>;
   /** created_at of the last relay-signed metadata batch (kept strictly increasing) */
   lastMetaAt: number;
+  /** being deleted: hidden from everyone until its events are purged (in memory only) */
+  deleting?: boolean;
 }
 
 interface GroupRow {
@@ -74,6 +105,8 @@ interface GroupRow {
 
 /** Persistence for NIP-29 group state (write-through from the in-memory GroupsService). */
 export class GroupRepo {
+  private lastPrune = 0;
+
   constructor(private readonly db: Db) {}
 
   migrate() {
@@ -150,6 +183,30 @@ export class GroupRepo {
 
   async removeInvite(groupId: string, code: string): Promise<void> {
     await this.db.run("DELETE FROM core_group_invites WHERE group_id = ? AND code = ?", [groupId, code]);
+  }
+
+  /** Records a control event as applied; false if it already was (atomic). */
+  async claimApplied(id: string, createdAt: number): Promise<boolean> {
+    const now = Math.floor(Date.now() / 1000);
+    if (Date.now() - this.lastPrune > 60_000) {
+      this.lastPrune = Date.now();
+      await this.db.run("DELETE FROM core_group_applied WHERE created_at < ?", [now - APPLIED_RETENTION_SEC]);
+    }
+    const r = await this.db.run("INSERT INTO core_group_applied (id, created_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING", [id, createdAt]);
+    return r.changes > 0;
+  }
+
+  /** Forgets an applied-control record (its state change failed and may be retried). */
+  async unclaimApplied(id: string): Promise<void> {
+    await this.db.run("DELETE FROM core_group_applied WHERE id = ?", [id]);
+  }
+
+  /** Invite codes used to be stored in clear text; replaces them with their hashes. */
+  async hashPlaintextInvites(hash: (code: string) => string): Promise<void> {
+    const rows = await this.db.all<{ group_id: string; code: string }>("SELECT group_id, code FROM core_group_invites WHERE code NOT LIKE 'sha256:%'");
+    for (const r of rows) {
+      await this.db.run("UPDATE core_group_invites SET code = ? WHERE group_id = ? AND code = ?", [hash(r.code), r.group_id, r.code]);
+    }
   }
 
   async deleteGroup(groupId: string): Promise<void> {

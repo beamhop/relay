@@ -18,6 +18,7 @@ import { Connection } from "./protocol/connection";
 import {
   cancelSub,
   deliverLive,
+  dropAllNegSessions,
   handleAuth,
   handleClose,
   handleCount,
@@ -26,19 +27,32 @@ import {
   handleNegMsg,
   handleNegOpen,
   handleReq,
+  MAX_INFLIGHT_EVENTS,
+  MAX_INFLIGHT_EVENTS_TRUSTED,
+  MESSAGE_IP_FACTOR,
+  MESSAGES_PER_MINUTE,
+  NEG_SWEEP_MS,
+  negError,
+  sweepNegSessions,
 } from "./protocol/handlers";
 import { parseClientMessage, validateEventShape } from "./protocol/messages";
+import { ReadLimits } from "./protocol/read-limits";
 import { loadRelayKey } from "./relay-key";
 import { SubscriptionIndex } from "./subscriptions/index";
 import { isVisibleTo } from "./subscriptions/visibility";
 import { UserCache } from "./users";
-import { ipKey } from "./util/cidr";
 import { randomHex } from "./util/hex";
 import { RateLimiter } from "./util/rate-limit";
 import { toWsUrl } from "./util/url";
 
 export const IP_RULES_REFRESH_MS = 30_000;
 export const EXPIRATION_PURGE_MS = 60_000;
+/**
+ * connectionsPerIp applies per address; an IPv6 /64 (one subscriber's prefix, or a whole office LAN)
+ * may hold this many times that in total.
+ */
+export const V6_PREFIX_CONNECTION_FACTOR = 4;
+export { MESSAGES_PER_MINUTE };
 
 const noopHandle = (id: string): ConnectionHandle => ({ id, onMessage() {}, onClose() {} });
 
@@ -62,6 +76,8 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     verifier: new Verifier(),
     policy: new ContentPolicy(deps.settings, logger),
     vanished: new Map(),
+    neg: { items: 0, opening: 0, openingByIp: new Map() },
+    reads: new ReadLimits(),
     s: () => deps.settings.get(),
     broadcast(event: NostrEvent): number {
       let n = 0;
@@ -80,7 +96,9 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   }
   await ctx.ipRules.refresh();
 
+  /** open connections per address and (IPv6) per /64 */
   const ipCounts = new Map<string, number>();
+  const countKeys = (conn: Connection) => (conn.addrKey === conn.ipKey ? [conn.addrKey] : [conn.addrKey, conn.ipKey]);
   const scheduler = new Scheduler(logger);
   let stopped = false;
 
@@ -89,13 +107,14 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     handledClose.done = true;
     conn.closed = true;
     for (const sub of [...conn.subs.values()]) cancelSub(ctx, sub);
-    conn.negSessions.clear();
+    dropAllNegSessions(ctx, conn);
     conns.delete(conn.id);
-    ctx.rate.delete(`req:conn:${conn.id}`);
-    const k = ipKey(conn.ip);
-    const n = (ipCounts.get(k) ?? 1) - 1;
-    if (n <= 0) ipCounts.delete(k);
-    else ipCounts.set(k, n);
+    for (const b of ["req", "search", "msg", "auth", "neg"]) ctx.rate.delete(`${b}:conn:${conn.id}`);
+    for (const k of countKeys(conn)) {
+      const n = (ipCounts.get(k) ?? 1) - 1;
+      if (n <= 0) ipCounts.delete(k);
+      else ipCounts.set(k, n);
+    }
     deps.bus.emit("connection.close", { connId: conn.id, ip: conn.ip, durationMs: Date.now() - conn.connectedAt, at: nowSec() });
   }
   const closers = new Map<string, () => void>();
@@ -104,23 +123,38 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     if (conn.closed) return;
     conn.messagesIn++;
     const L = ctx.s().limits;
+    const overLimit = () =>
+      !conn.trusted &&
+      !(
+        ctx.rate.take(`msg:conn:${conn.id}`, conn.messagesPerMinute) &&
+        (conn.ownMessageLimit || ctx.rate.take(`msg:ip:${conn.ipKey}`, MESSAGES_PER_MINUTE * MESSAGE_IP_FACTOR))
+      );
     const bytes = Buffer.byteLength(data);
     if (bytes > L.maxMessageBytes) {
       deps.bus.emit("message.in", { connId: conn.id, type: "OVERSIZE", bytes });
-      conn.notice(`invalid: message too large (max ${L.maxMessageBytes} bytes)`);
+      if (!overLimit()) conn.notice(`invalid: message too large (max ${L.maxMessageBytes} bytes)`);
       return;
     }
     const parsed = parseClientMessage(data, { maxFilters: L.maxFilters });
     deps.bus.emit("message.in", { connId: conn.id, type: parsed.ok ? parsed.msg.type : (parsed.type ?? "INVALID"), bytes });
     if (!parsed.ok) {
+      if (overLimit()) return;
       const { type, subId, eventId, reason } = parsed;
       if ((type === "EVENT" || type === "AUTH") && eventId) conn.ok(eventId, false, reason);
       else if ((type === "REQ" || type === "COUNT") && subId) conn.closedSub(subId, reason);
-      else if (type?.startsWith("NEG-") && subId) conn.send(["NEG-ERR", subId, reason]);
+      else if (type?.startsWith("NEG-") && subId) negError(ctx, conn, subId, reason);
       else conn.notice(reason);
       return;
     }
     const msg = parsed.msg;
+    // closing things is always allowed (it frees resources)
+    if (msg.type !== "CLOSE" && msg.type !== "NEG-CLOSE" && overLimit()) {
+      const reason = "rate-limited: too many messages, slow down";
+      if (msg.type === "EVENT" || msg.type === "AUTH") conn.ok(msg.event.id, false, reason);
+      else if (msg.type === "REQ" || msg.type === "COUNT") conn.closedSub(msg.subId, reason);
+      else negError(ctx, conn, msg.subId, reason);
+      return;
+    }
     const fail = (err: unknown) => logger.error(`${msg.type} handler failed`, { err: String(err) });
     switch (msg.type) {
       case "EVENT":
@@ -144,20 +178,34 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
 
   function handleConnection(socket: RelaySocket, meta: ConnectionMeta): ConnectionHandle {
     const id = randomUUID();
-    const conn = new Connection(id, socket, meta.ip, randomHex(16), deps.bus, meta.userAgent, meta.origin);
+    const verdict = ctx.ipRules.check(meta.ip);
+    const conn = new Connection(
+      id,
+      socket,
+      meta.ip,
+      randomHex(16),
+      deps.bus,
+      { messagesPerMinute: MESSAGES_PER_MINUTE, maxInflightEvents: verdict.allowed ? MAX_INFLIGHT_EVENTS_TRUSTED : MAX_INFLIGHT_EVENTS },
+      meta.userAgent,
+      meta.origin,
+    );
+    // allow-listed addresses are exempt from the inbound message limit (like staff)
+    if (verdict.allowed) {
+      conn.trusted = true;
+      conn.ownMessageLimit = true;
+    }
     const reject = (notice: string, reason: string) => {
       conn.notice(notice);
       conn.close(1008, reason);
       return noopHandle(id);
     };
     if (stopped) return reject("error: relay is shutting down", "shutting down");
-    const verdict = ctx.ipRules.check(meta.ip);
     if (verdict.blocked) return reject(`blocked: ${verdict.reason ?? "your IP address is blocked"}`, "blocked");
-    const k = ipKey(meta.ip);
-    const count = ipCounts.get(k) ?? 0;
     const max = ctx.s().limits.connectionsPerIp;
-    if (!verdict.allowed && max > 0 && count >= max) return reject("rate-limited: too many connections from your IP address", "too many connections");
-    ipCounts.set(k, count + 1);
+    const keys = countKeys(conn);
+    const over = keys.some((k, i) => (ipCounts.get(k) ?? 0) >= (i === 0 ? max : max * V6_PREFIX_CONNECTION_FACTOR));
+    if (!verdict.allowed && max > 0 && over) return reject("rate-limited: too many connections from your IP address", "too many connections");
+    for (const k of keys) ipCounts.set(k, (ipCounts.get(k) ?? 0) + 1);
     conns.set(id, conn);
     const state = { done: false };
     closers.set(id, () => cleanup(conn, state));
@@ -242,6 +290,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       scheduler.every("expiration", EXPIRATION_PURGE_MS, purgeExpired);
       scheduler.every("retention", 60_000, retentionTick);
       scheduler.every("rate-sweep", 60_000, () => ctx.rate.sweep());
+      scheduler.every("neg-sweep", NEG_SWEEP_MS, () => sweepNegSessions(ctx));
       void scheduler.runNow("expiration", purgeExpired);
     },
     async stop() {

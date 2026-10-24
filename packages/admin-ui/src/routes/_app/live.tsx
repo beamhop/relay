@@ -12,7 +12,7 @@ import { PageHeader } from "@/components/page-header";
 import { ListInput } from "@/components/list-input";
 import { JsonView } from "@/components/json-view";
 import { ResponsiveDialog } from "@/components/responsive-dialog";
-import { EmptyState } from "@/components/empty-state";
+import { EmptyState, ErrorState } from "@/components/empty-state";
 import { KindBadge, ToneBadge } from "@/components/badges";
 import { UserAvatar } from "@/components/user-avatar";
 import { EventContent } from "@/components/event-card";
@@ -36,6 +36,9 @@ const MAX_EVENTS = 300;
 
 function LivePage() {
   const snap = useLiveSnapshot();
+  const can = useCan();
+  // GET /connections requires connections.manage; don't show (or poll) a tab that can only 403
+  const showConnections = can("connections.manage");
   return (
     <div className="space-y-4">
       <PageHeader
@@ -47,14 +50,16 @@ function LivePage() {
       <Tabs defaultValue="events">
         <TabsList>
           <TabsTrigger value="events">Event stream</TabsTrigger>
-          <TabsTrigger value="connections">Connections</TabsTrigger>
+          {showConnections && <TabsTrigger value="connections">Connections</TabsTrigger>}
         </TabsList>
         <TabsContent value="events" className="pt-2">
           <EventStream />
         </TabsContent>
-        <TabsContent value="connections" className="pt-2">
-          <Connections />
-        </TabsContent>
+        {showConnections && (
+          <TabsContent value="connections" className="pt-2">
+            <Connections />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
@@ -72,13 +77,15 @@ function EventStream() {
 
   useLiveEvents((e) => {
     buffer.current.push({ ...e, key: seq.current++ });
+    // only the newest MAX_EVENTS are ever shown, so don't let a paused stream grow without bound
+    if (buffer.current.length > MAX_EVENTS * 2) buffer.current = buffer.current.slice(-MAX_EVENTS);
   });
 
   // flush in batches to keep rendering cheap under load
   React.useEffect(() => {
     const t = setInterval(() => {
       if (paused || !buffer.current.length) return;
-      const batch = buffer.current.reverse();
+      const batch = buffer.current.slice(-MAX_EVENTS).reverse();
       buffer.current = [];
       setEvents((prev) => [...batch, ...prev].slice(0, MAX_EVENTS));
     }, 400);
@@ -157,7 +164,7 @@ function EventStream() {
 }
 
 function Connections() {
-  const { data, isLoading } = useConnections();
+  const { data, isLoading, isError, error, refetch } = useConnections();
   const can = useCan();
   const confirm = useConfirm();
   const mobile = useIsMobile();
@@ -173,6 +180,7 @@ function Connections() {
   };
   const rows = [...(data ?? [])].sort((a, b) => a.connectedAt - b.connectedAt);
   if (isLoading) return <ListSkeleton />;
+  if (isError) return <ErrorState error={error} retry={() => refetch()} />;
   if (!rows.length) return <EmptyState icon={Plug} title="No active connections" />;
   if (mobile)
     return (

@@ -39,7 +39,7 @@ for (const runtime of ["bun", "node"] as const) {
     });
 
     test("websocket on / reaches relay.handleConnection with client ip", async () => {
-      const msgs = await wsRoundtrip(`ws://${base}/`, runtime === "node" ? { "x-forwarded-for": "198.51.100.7, 10.0.0.1" } : undefined);
+      const msgs = await wsRoundtrip(`ws://${base}/`, runtime === "node" ? { "x-forwarded-for": "6.6.6.6, 198.51.100.7" } : undefined);
       expect(JSON.parse(msgs[0])).toEqual(["NOTICE", runtime === "node" ? "hello 198.51.100.7" : "hello 127.0.0.1"]);
       expect(JSON.parse(msgs[1])).toEqual(["ECHO", '["REQ","x",{}]']);
     });

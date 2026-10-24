@@ -1,7 +1,7 @@
 import { createBeamhop, type BeamhopOverrides } from "./app";
 import type { BeamhopConfig } from "@beamhop/sdk";
 
-export { createBeamhop, buildApp, fallthrough, isRelayUpgrade, isNip86, isWebSocketUpgrade, makeEnv, CLIENT_IP_HEADER } from "./app";
+export { createBeamhop, buildApp, fallthrough, isRelayUpgrade, isNip86, isWebSocketUpgrade, makeEnv } from "./app";
 export type { Beamhop, BeamhopFactories, BeamhopOverrides, ServerEnv } from "./app";
 export { loadConfig, envToConfig, toHexPubkey, toHexSecretKey, deepMerge } from "./config";
 export type { LoadedConfig, LoadConfigOptions, ServerExtras } from "./config";

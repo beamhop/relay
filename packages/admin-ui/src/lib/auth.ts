@@ -13,9 +13,11 @@ declare global {
 }
 
 /** NIP-98 login: GET /auth/challenge → sign kind 27235 → POST /auth/nostr */
-export async function loginWithSigner(signer: EventSigner): Promise<LoginResponse> {
-  const { challenge } = await api.get<ChallengeResponse>("/auth/challenge");
-  const url = `${window.location.origin}${API_BASE}/auth/nostr`;
+async function loginWithSigner(signer: EventSigner): Promise<LoginResponse> {
+  // the server names the exact URL to sign (its publicUrl), so logging in via a LAN IP / localhost works too
+  const res0 = await api.get<ChallengeResponse & { url?: string }>("/auth/challenge");
+  const { challenge } = res0;
+  const url = res0.url ?? `${window.location.origin}${API_BASE}/auth/nostr`;
   const event = await signer.signEvent({
     kind: 27235,
     created_at: Math.floor(Date.now() / 1000),
@@ -78,7 +80,7 @@ export async function startNostrConnect(onAuthUrl?: (url: string) => void, relay
   const { BunkerSigner, createNostrConnectURI } = await import("nostr-tools/nip46");
   const { generateSecretKey, getPublicKey } = await import("nostr-tools/pure");
   const sk = generateSecretKey();
-  const secret = Math.random().toString(36).slice(2, 12);
+  const secret = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   const uri = createNostrConnectURI({
     clientPubkey: getPublicKey(sk),
     relays,
@@ -115,10 +117,11 @@ export async function loginWithPasskey(login?: string) {
   return res;
 }
 
-export async function registerPasskey(name: string) {
+/** Throws HttpError code `reauth_required` when the session is not fresh and no password was given. */
+export async function registerPasskey(name: string, currentPassword?: string) {
   const { startRegistration } = await import("@simplewebauthn/browser");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const optionsJSON = await api.post<any>("/auth/passkey/register/options", {});
+  const optionsJSON = await api.post<any>("/auth/passkey/register/options", currentPassword ? { currentPassword } : {});
   const response = await startRegistration({ optionsJSON });
   await api.post("/auth/passkey/register/verify", { response, name });
   await queryClient.invalidateQueries({ queryKey: ["me"] });

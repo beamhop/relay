@@ -4,6 +4,7 @@ import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, forbidden } from "../errors";
 import { requirePermission } from "../middleware/auth";
+import { permissionsFor } from "../services/roles";
 import { TokenBucket } from "../util/ratelimit";
 
 const MAX_EVENTS_PER_SEC = 50;
@@ -22,6 +23,21 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
     const kinds = kindsParam ? new Set(kindsParam.split(",").map(Number)) : null;
     const showIp = p.role === "owner" || p.role === "admin";
     const canSeeReports = p.permissions.has("reports.view");
+    /**
+     * The stream outlives the request that authorized it: re-resolve the principal the way the auth middleware does
+     * (session still alive, role not revoked, banned or lowered) and report whether it still covers what was opened.
+     */
+    const stillAuthorized = async () => {
+      if (p.via === "session" && !(p.session && (await ctx.sessions.get(p.session.token)))) return false;
+      const role = await ctx.roles.resolve(p.pubkey);
+      const perms = permissionsFor(role);
+      return (
+        perms.has("dashboard.view") &&
+        (!wantEvents || perms.has("content.view")) &&
+        (!canSeeReports || perms.has("reports.view")) &&
+        (!showIp || role === "owner" || role === "admin")
+      );
+    };
 
     c.header("Cache-Control", "no-store");
     c.header("X-Accel-Buffering", "no");
@@ -73,6 +89,18 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
           if (!closed) stream.write(": ping\n\n").catch(close);
         }, heartbeatMs);
         cleanups.push(() => clearInterval(hb));
+
+        // logout, password change (kills other sessions), role removal/downgrade or a ban end the stream within one
+        // snapshot interval; a client that still qualifies reconnects and gets a view matching its current role
+        let checking = false;
+        const authTimer = setInterval(() => {
+          if (closed || checking) return;
+          checking = true;
+          stillAuthorized()
+            .then((ok) => ok || close(), close)
+            .finally(() => (checking = false));
+        }, snapshotMs);
+        cleanups.push(() => clearInterval(authTimer));
 
         cleanups.push(bus.on("alert", (a) => send("alert", a)));
         if (canSeeReports) cleanups.push(ctx.onReport((r) => send("report", r)));

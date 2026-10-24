@@ -1,7 +1,33 @@
+import { createHash } from "node:crypto";
 import type { RuntimeSettings } from "@beamhop/sdk";
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/** Only absolute http(s) URLs from settings are rendered as links/images (no `javascript:`, `data:` …). */
+export function safeHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const COPY_SCRIPT = `document.getElementById("copy").addEventListener("click",function(){navigator.clipboard.writeText(document.getElementById("ws").textContent);this.textContent="Copied"})`;
+const COPY_SCRIPT_HASH = `'sha256-${createHash("sha256").update(COPY_SCRIPT).digest("base64")}'`;
+
+/** CSP for the landing page: no inline/third-party script except the hashed copy button, images from anywhere. */
+export const LANDING_CSP = [
+  "default-src 'none'",
+  `script-src ${COPY_SCRIPT_HASH}`,
+  "style-src 'unsafe-inline'",
+  "img-src https: http: data:",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
 
 export function wsUrlFrom(publicUrl: string) {
   return publicUrl.replace(/^http/, "ws").replace(/\/+$/, "") + "/";
@@ -11,8 +37,12 @@ export function renderLanding(opts: { settings: RuntimeSettings; publicUrl: stri
   const { info } = opts.settings;
   const nips = Array.isArray(opts.nip11.supported_nips) ? (opts.nip11.supported_nips as number[]) : [];
   const ws = wsUrlFrom(opts.publicUrl);
-  const icon = info.icon ? `<img class="icon" src="${esc(info.icon)}" alt="" width="72" height="72">` : `<div class="icon ph">⚡</div>`;
-  const banner = info.banner ? `<div class="banner" style="background-image:url('${esc(info.banner)}')"></div>` : "";
+  const iconUrl = safeHttpUrl(info.icon);
+  const bannerUrl = safeHttpUrl(info.banner);
+  const terms = safeHttpUrl(info.termsOfService);
+  const policy = safeHttpUrl(info.postingPolicy);
+  const icon = iconUrl ? `<img class="icon" src="${esc(iconUrl)}" alt="" width="72" height="72">` : `<div class="icon ph">⚡</div>`;
+  const banner = bannerUrl ? `<img class="banner" src="${esc(bannerUrl)}" alt="">` : "";
   const nipLinks = nips
     .map((n) => {
       const id = String(n).padStart(2, "0");
@@ -27,14 +57,14 @@ export function renderLanding(opts: { settings: RuntimeSettings; publicUrl: stri
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(info.name)}</title>
 <meta name="description" content="${esc(info.description)}">
-${info.icon ? `<link rel="icon" href="${esc(info.icon)}">` : ""}
+${iconUrl ? `<link rel="icon" href="${esc(iconUrl)}">` : ""}
 <style>
 :root{color-scheme:light dark;--bg:#f7f7fb;--card:#fff;--fg:#14161c;--muted:#5f6577;--line:#e3e5ee;--accent:#7c3aed}
 @media (prefers-color-scheme:dark){:root{--bg:#0b0d12;--card:#12151d;--fg:#e8eaf1;--muted:#9097aa;--line:#232838;--accent:#a78bfa}}
 *{box-sizing:border-box}body{margin:0;font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
 main{max-width:46rem;margin:0 auto;padding:3rem 1.25rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
-.banner{height:140px;background-size:cover;background-position:center}
+.banner{display:block;width:100%;height:140px;object-fit:cover}
 .body{padding:1.75rem}
 header{display:flex;gap:1rem;align-items:center}
 .icon{width:72px;height:72px;border-radius:16px;object-fit:cover;flex:none}
@@ -58,21 +88,22 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}fo
 ${banner}
 <div class="body">
 <header>${icon}<div><h1>${esc(info.name)}</h1><p class="desc">${esc(info.description)}</p></div></header>
-<div class="row"><code class="url" id="ws">${esc(ws)}</code><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('ws').textContent);this.textContent='Copied'">Copy</button>${opts.admin ? `<a class="btn primary" href="/admin/">Admin</a>` : ""}</div>
+<div class="row"><code class="url" id="ws">${esc(ws)}</code><button type="button" id="copy">Copy</button>${opts.admin ? `<a class="btn primary" href="/admin/">Admin</a>` : ""}</div>
 <h2>Relay</h2>
 <dl>
 <dt>Access</dt><dd>${esc(access)}</dd>
 ${info.contact ? `<dt>Contact</dt><dd>${esc(info.contact)}</dd>` : ""}
 ${info.pubkey ? `<dt>Operator</dt><dd>${esc(info.pubkey)}</dd>` : ""}
 ${opts.blossom ? `<dt>Media</dt><dd>Blossom server at <code>${esc(opts.publicUrl)}</code></dd>` : ""}
-${info.termsOfService ? `<dt>Terms</dt><dd><a href="${esc(info.termsOfService)}">${esc(info.termsOfService)}</a></dd>` : ""}
-${info.postingPolicy ? `<dt>Posting policy</dt><dd><a href="${esc(info.postingPolicy)}">${esc(info.postingPolicy)}</a></dd>` : ""}
+${terms ? `<dt>Terms</dt><dd><a href="${esc(terms)}" rel="noopener noreferrer">${esc(terms)}</a></dd>` : ""}
+${policy ? `<dt>Posting policy</dt><dd><a href="${esc(policy)}" rel="noopener noreferrer">${esc(policy)}</a></dd>` : ""}
 </dl>
 ${nips.length ? `<h2>Supported NIPs</h2><div class="nips">${nipLinks}</div>` : ""}
 </div>
 </div>
 <footer>Powered by <a href="https://github.com/beamhop/beamhop">beamhop</a> v${esc(opts.version)}</footer>
 </main>
+<script>${COPY_SCRIPT}</script>
 </body>
 </html>`;
 }

@@ -41,20 +41,27 @@ export class LruCache<K, V> {
   }
 }
 
-/** Map of short-lived single-use tokens (challenges, NIP-98 replay ids). */
+/**
+ * Map of short-lived single-use tokens (challenges, NIP-98 replay ids).
+ * Never evicts live entries: when full (after dropping expired ones) `set` refuses and returns false,
+ * so a flood can't push out a pending challenge or a replay-protection id.
+ */
 export class ExpiringMap<V> {
   private map = new Map<string, { v: V; exp: number }>();
+  /** earliest time at which pruning can free anything (avoids an O(n) scan on every set while full) */
+  private nextPruneAt = 0;
   constructor(
     private readonly max = 10_000,
     private readonly now: () => number = Date.now,
   ) {}
-  set(key: string, v: V, ttlMs: number): void {
-    if (this.map.size >= this.max) this.prune();
-    if (this.map.size >= this.max) {
-      const first = this.map.keys().next();
-      if (!first.done) this.map.delete(first.value);
+  set(key: string, v: V, ttlMs: number): boolean {
+    const n = this.now();
+    if (!this.map.has(key) && this.map.size >= this.max) {
+      if (n >= this.nextPruneAt) this.prune();
+      if (this.map.size >= this.max) return false;
     }
-    this.map.set(key, { v, exp: this.now() + ttlMs });
+    this.map.set(key, { v, exp: n + ttlMs });
+    return true;
   }
   get(key: string): V | undefined {
     const e = this.map.get(key);
@@ -79,6 +86,14 @@ export class ExpiringMap<V> {
   }
   prune(): void {
     const n = this.now();
-    for (const [k, e] of this.map) if (e.exp < n) this.map.delete(k);
+    let earliest = Infinity;
+    for (const [k, e] of this.map) {
+      if (e.exp < n) this.map.delete(k);
+      else if (e.exp < earliest) earliest = e.exp;
+    }
+    this.nextPruneAt = earliest === Infinity ? 0 : earliest + 1;
+  }
+  get size() {
+    return this.map.size;
   }
 }

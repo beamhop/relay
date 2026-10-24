@@ -11,6 +11,7 @@ http://host/<sha256>  → Blossom (BUD-01/02/04/06/08)
 http://host/admin/    → admin panel (PWA)
 http://host/plugins/… → plugin public routes
 http://host/metrics   → Prometheus metrics
+http://host/health    → liveness probe (JSON; 503 if the database is unreachable)
 ```
 
 ## Features
@@ -25,8 +26,8 @@ http://host/metrics   → Prometheus metrics
   - EXIF stripping, plus thumbnails when `sharp` is installed.
 - **Admin panel** (`/admin/`):
   - An installable PWA with live dashboard, connections, users and roles, content moderation, reports, media, settings, plugins, audit log, push notifications and a metrics map.
-  - Sign in with NIP-07, a password, TOTP or passkeys.
-- **Storage**: SQLite (`bun:sqlite` or `better-sqlite3`) or PostgreSQL.
+  - Sign in with NIP-07, a private key (nsec/hex, kept in the browser), a password, TOTP or passkeys.
+- **Storage**: SQLite (`bun:sqlite` or `better-sqlite3`) or PostgreSQL 12 or newer (generated columns).
 - **Observability**: built-in metrics with rollups, a Prometheus endpoint, OTLP export and GeoIP.
 - **Plugins**:
   - Write, query, visibility and blob hooks; public and admin HTTP routes; jobs; metrics; zod-validated settings; DB migrations; admin UI extensions.
@@ -84,7 +85,7 @@ docker run -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1… beamhop
 
 - The image runs as a non-root user.
 - Data lives in `/data`: `BEAMHOP_SQLITE_PATH=/data/beamhop.db` and `BEAMHOP_BLOSSOM_FS_PATH=/data/blobs`.
-- The health check queries NIP-11.
+- The health check calls `GET /health`, which checks the database and returns 503 if it is unreachable.
 
 To run CLI commands inside the container, use `docker compose exec beamhop bun packages/server/src/cli.ts admin add npub1…`.
 
@@ -106,12 +107,13 @@ beamhop [start]                         start the server (default)
 beamhop init [--force]                  write beamhop.config.json with sensible defaults
 beamhop admin add <npub|hex> [--role owner|admin|moderator|viewer]
 beamhop admin remove <npub|hex>
-beamhop admin password <npub|hex>       set a password login (reads stdin or prompts)
+beamhop admin password <npub|hex>       set a password login (reads stdin or prompts); ends all of that admin's sessions
+                    [--reset-2fa]      …and removes two-factor authentication (recovery for a lost or hijacked authenticator)
 beamhop user ban <npub|hex> [--reason text]
 beamhop user unban <npub|hex>
 beamhop export [--filter '<json>'] > events.jsonl
 beamhop import [--skip-verify] < events.jsonl
-beamhop migrate
+beamhop migrate                         apply core, admin, blossom and enabled-plugin migrations (plugins.dir / plugins.packages only)
 beamhop --version | --help
 ```
 
@@ -127,18 +129,21 @@ Configuration is merged in this order, where later sources win:
 3. `BEAMHOP_*` environment variables
 4. CLI flags
 
-Relative paths in the config file are resolved against the file's directory.
+Relative paths, whether from the config file, `BEAMHOP_*` variables or CLI flags, are resolved against the config file's directory, or the working directory when no config file is used.
 See [`beamhop.config.example.json`](beamhop.config.example.json) for an example.
 
-Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Blossom limits and similar are **runtime settings**: you edit them live in the admin panel (Settings) and they are stored in the database.
+Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Blossom size/quota/MIME settings and similar are **runtime settings**: you edit them live in the admin panel (Settings) and they are stored in the database. Blossom upload abuse limits (`blossom.limits.*`) are boot-time config; see below.
 
 | Env var | JSON path | Default |
 | --- | --- | --- |
 | `BEAMHOP_PORT` / `PORT` | `server.port` | `3334` |
 | `BEAMHOP_HOST` | `server.host` | `0.0.0.0` |
 | `BEAMHOP_PUBLIC_URL` | `server.publicUrl` | `http://localhost:<port>` |
-| `BEAMHOP_TRUST_PROXY` | `server.trustProxy` | `false`. When enabled, the client IP is read from `X-Forwarded-For`/`X-Real-IP` |
-| `BEAMHOP_METRICS_TOKEN` | `server.metricsToken` | unset. When set, `/metrics` requires `Authorization: Bearer <token>` |
+| `BEAMHOP_TRUST_PROXY` | `server.trustProxy` | `false`. Enable only behind exactly one reverse proxy — and do enable it there: otherwise every client shares the proxy's address, so per-IP limits (connections, rate limits, Blossom's 4 concurrent uploads per IP) apply to all users at once. The client IP is then read from `server.proxyIpHeader`; non-IP values are ignored |
+| `BEAMHOP_PROXY_IP_HEADER` | `server.proxyIpHeader` | `x-forwarded-for`: the *rightmost* entry, i.e. the hop your proxy appended (nginx `$proxy_add_x_forwarded_for`, Caddy, Traefik, HAProxy `option forwardfor`) — values the client sends itself are ignored. If your proxy instead *sets* a single-address header and passes the client's own `X-Forwarded-For` through (e.g. nginx with only `proxy_set_header X-Real-IP $remote_addr`), set this to that header (`x-real-ip`, `cf-connecting-ip`, …) or the client IP is spoofable. If a request carries no `X-Forwarded-For` at all, `X-Real-IP` is used instead |
+| `BEAMHOP_TRUSTED_PROXIES` | `server.trustedProxies` | Comma-separated addresses / CIDR ranges of your reverse proxy. Only requests whose socket peer is in this list get their client IP from `server.proxyIpHeader`; anyone else (e.g. a client reaching the port directly) is identified by their own address, whatever headers they send. Default: loopback and private networks (`127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`). Behind a CDN that connects to beamhop directly (e.g. Cloudflare without a local proxy), list the CDN's published ranges |
+| `BEAMHOP_METRICS_TOKEN` | `server.metricsToken` | unset: `/metrics` is then only served to clients on loopback or a private network that reach beamhop directly (no forwarding headers), e.g. Prometheus in the compose network. When set, `/metrics` requires `Authorization: Bearer <token>` from anywhere. A known placeholder such as `change-me` or the example file's `REPLACE-WITH-…` value disables `/metrics` (with an error in the log) |
+| `BEAMHOP_MEMORY_LIMIT` | — | unset. Memory limit in bytes for the dashboard's memory gauge (otherwise the cgroup limit, then total RAM) |
 | `BEAMHOP_PROMETHEUS` | `server.prometheus` | `true`. Set `false` to disable `/metrics` |
 | `BEAMHOP_DB_DRIVER` | `database.driver` | `sqlite` (or `postgres`) |
 | `BEAMHOP_SQLITE_PATH` | `database.sqlitePath` | `./data/beamhop.db` |
@@ -147,6 +152,7 @@ Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Bloss
 | `BEAMHOP_BLOSSOM_ENABLED` | `blossom.enabled` | `true` |
 | `BEAMHOP_BLOSSOM_DRIVER` | `blossom.driver` | `fs` (or `s3`) |
 | `BEAMHOP_BLOSSOM_FS_PATH` | `blossom.fsPath` | `./data/blobs` |
+| `BEAMHOP_BLOSSOM_MAX_UPLOADS_PER_IP`, `BEAMHOP_BLOSSOM_UPLOADS_PER_MINUTE_PER_IP`, `BEAMHOP_BLOSSOM_MAX_BUFFERED_UPLOAD_BYTES`, … | `blossom.limits.*` | Blossom upload/mirror abuse limits (4 concurrent bodies and 60 uploads/min per IP, 256 MiB buffered, …); see [packages/blossom/README.md](packages/blossom/README.md) for the full list |
 | `BEAMHOP_S3_ENDPOINT`, `_REGION`, `_BUCKET`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_PUBLIC_URL` | `blossom.s3.*` | none |
 | `BEAMHOP_OTEL_ENABLED` | `metrics.otel.enabled` | `false` |
 | `BEAMHOP_OTEL_ENDPOINT` | `metrics.otel.endpoint` | `http://localhost:4318/v1/metrics` |
@@ -156,11 +162,11 @@ Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Bloss
 | `BEAMHOP_METRICS_RETENTION_DAYS` | `metrics.retentionDays` | `30` |
 | `BEAMHOP_ADMIN_ENABLED` | `admin.enabled` | `true` |
 | `BEAMHOP_OWNERS` (comma separated npub/hex) | `admin.owners` | none |
-| `BEAMHOP_SESSION_SECRET` | `admin.sessionSecret` | generated and stored in the DB |
 | `BEAMHOP_ADMIN_UI_DIR` | `admin.uiDir` | auto-detected (embedded, next to the bundle, or `packages/admin-ui/dist`) |
 | `BEAMHOP_VAPID_PUBLIC_KEY`, `_PRIVATE_KEY`, `_SUBJECT` | `admin.vapid.*` | generated |
 | `BEAMHOP_PLUGINS_DIR` | `plugins.dir` | `./plugins` |
 | `BEAMHOP_PLUGINS` (comma separated) | `plugins.packages` | none. Extra npm packages to load |
+| `BEAMHOP_PLUGINS_AUTO_DISCOVER` | `plugins.autoDiscoverNpm` | `false`. Also load every `beamhop-plugin-*` / `@scope/beamhop-plugin-*` package in `node_modules` |
 | `BEAMHOP_PLUGINS_ENABLED` (comma separated) | `plugins.enabled` | none. Plugins enabled by default; the panel can override |
 | `BEAMHOP_LOG_LEVEL` | `logLevel` | `info` |
 
@@ -179,10 +185,10 @@ For servers without a browser signer, run `beamhop admin password npub1…` to e
 Plugins come from three places:
 
 - local folders in `plugins.dir`
-- npm packages named `beamhop-plugin-*` or `@scope/beamhop-plugin-*`
 - packages listed in `plugins.packages`
+- with `plugins.autoDiscoverNpm` / `BEAMHOP_PLUGINS_AUTO_DISCOVER=true`, also every npm package named `beamhop-plugin-*` or `@scope/beamhop-plugin-*` in `node_modules`. This is off by default because any dependency with such a name would run inside the relay; prefer listing packages in `plugins.packages`
 
-They are disabled by default. Enable them in **Admin → Plugins**, or with `plugins.enabled` / `BEAMHOP_PLUGINS_ENABLED`.
+They are disabled by default: `setup()` only runs once enabled, but every discovered module is imported at boot, so only install plugins you trust. Enable them in **Admin → Plugins**, or with `plugins.enabled` / `BEAMHOP_PLUGINS_ENABLED`.
 Two first-party plugins are included:
 
 - [`plugins/hello`](plugins/hello): an example of every plugin capability, including an admin UI page.

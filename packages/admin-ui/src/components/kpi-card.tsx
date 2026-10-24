@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-export function Sparkline({ values, className }: { values: number[]; className?: string }) {
+function Sparkline({ values, className }: { values: number[]; className?: string }) {
   if (values.length < 2) return null;
   const max = Math.max(...values);
   const min = Math.min(...values);

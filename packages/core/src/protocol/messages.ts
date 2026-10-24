@@ -1,4 +1,5 @@
 import type { Filter, NostrEvent } from "@beamhop/sdk";
+import { getDTag, isAddressable } from "@beamhop/sdk";
 import { isHex128, isHex64 } from "../util/hex";
 
 /** Strictly validated client → relay messages. */
@@ -18,6 +19,16 @@ export type ParseResult =
   | { ok: false; type?: string; subId?: string; eventId?: string; reason: string };
 
 export const MAX_SUB_ID_LENGTH = 64;
+/**
+ * Max values per filter array (ids, authors, kinds, each #tag). Arrays are otherwise only bounded by
+ * the message size, and each value costs index memory and per-event matching time for live delivery.
+ */
+// 5000 leaves room for large follow lists; per-connection memory is bounded separately (MAX_FILTER_WEIGHT_PER_CONN)
+export const MAX_FILTER_VALUES = 5000;
+/** Max values summed over all arrays of one filter. */
+export const MAX_FILTER_VALUES_TOTAL = 5000;
+/** Max UTF-8 bytes of an addressable event's `d` tag (postgres btree index rows are capped at 2704 bytes). */
+export const MAX_D_TAG_BYTES = 1024;
 const TAG_KEY = /^#[a-zA-Z]$/;
 const HEX_EVEN = /^([0-9a-f]{2})*$/;
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n);
@@ -39,10 +50,18 @@ export function validateEventShape(e: unknown): { event: NostrEvent } | { reason
   if (!isInt(o.created_at) || o.created_at < 0) return { reason: "invalid: bad created_at", id };
   if (!isInt(o.kind) || o.kind < 0 || o.kind > 65535) return { reason: "invalid: bad kind", id };
   if (typeof o.content !== "string") return { reason: "invalid: content must be a string", id };
+  // U+0000 can't be stored by postgres (text columns); reject on every backend for parity
+  if (o.content.includes("\u0000")) return { reason: "invalid: content must not contain NUL characters", id };
   if (!Array.isArray(o.tags)) return { reason: "invalid: tags must be an array", id };
   for (const t of o.tags) {
     if (!Array.isArray(t) || t.length === 0) return { reason: "invalid: each tag must be a non-empty array", id };
-    for (const v of t) if (typeof v !== "string") return { reason: "invalid: tag values must be strings", id };
+    for (const v of t) {
+      if (typeof v !== "string") return { reason: "invalid: tag values must be strings", id };
+      if (v.includes("\u0000")) return { reason: "invalid: tag values must not contain NUL characters", id };
+    }
+  }
+  if (isAddressable(o.kind) && Buffer.byteLength(getDTag({ tags: o.tags as string[][] }), "utf8") > MAX_D_TAG_BYTES) {
+    return { reason: `invalid: "d" tag longer than ${MAX_D_TAG_BYTES} bytes`, id };
   }
   return {
     event: {
@@ -61,7 +80,13 @@ export function validateEventShape(e: unknown): { event: NostrEvent } | { reason
 export function validateFilter(f: unknown): { filter: Filter } | { reason: string } {
   if (!f || typeof f !== "object" || Array.isArray(f)) return { reason: "invalid: filter must be an object" };
   const out: Filter = {};
+  let total = 0;
   for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
+    if (Array.isArray(v)) {
+      if (v.length > MAX_FILTER_VALUES) return { reason: `invalid: too many values in "${k}" (max ${MAX_FILTER_VALUES})` };
+      total += v.length;
+      if (total > MAX_FILTER_VALUES_TOTAL) return { reason: `invalid: too many values in one filter (max ${MAX_FILTER_VALUES_TOTAL})` };
+    }
     switch (k) {
       case "ids":
       case "authors":
@@ -76,17 +101,19 @@ export function validateFilter(f: unknown): { filter: Filter } | { reason: strin
       case "until":
       case "limit":
         if (!isInt(v) || v < 0) return { reason: `invalid: "${k}" must be a non-negative integer` };
-        out[k] = v;
+        // values past 2^53 lose precision and overflow postgres bigint / stringify as 1e+21
+        out[k] = Math.min(v, Number.MAX_SAFE_INTEGER);
         break;
       case "search":
         if (typeof v !== "string") return { reason: 'invalid: "search" must be a string' };
         if (v.length > 256) return { reason: "invalid: search query too long" };
-        out.search = v;
+        out.search = v.replace(/\u0000/g, "");
         break;
       default:
         if (!TAG_KEY.test(k)) return { reason: `invalid: unsupported filter key "${k}"` };
         if (!Array.isArray(v) || !v.every((s) => typeof s === "string")) return { reason: `invalid: "${k}" must be an array of strings` };
-        out[k as `#${string}`] = [...new Set(v as string[])];
+        // stored tag values never contain NUL, so such values can't match (and postgres can't bind them)
+        out[k as `#${string}`] = [...new Set((v as string[]).filter((s) => !s.includes("\u0000")))];
     }
   }
   return { filter: out };

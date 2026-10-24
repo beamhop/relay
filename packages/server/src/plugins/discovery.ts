@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export interface DiscoveredPlugin {
@@ -91,25 +92,39 @@ export function resolvePackageEntry(dir: string): string | undefined {
   return undefined;
 }
 
-function nodeModulesDirs(from: string): string[] {
+/**
+ * node_modules dirs from `from` upwards, stopping *before* the user's home directory and the filesystem root:
+ * a stray `~/node_modules/beamhop-plugin-*` must not be imported (and run) by every project on the machine.
+ */
+export function nodeModulesDirs(from: string, home = safeHome()): string[] {
+  const start = resolve(from);
+  const stop = new Set([resolve(sep), ...(home ? [resolve(home)] : [])]);
   const out: string[] = [];
-  let dir = resolve(from);
-  for (;;) {
+  for (let dir = start; ; dir = dirname(dir)) {
+    // the start dir itself always counts (running from ~ or / is explicit); ancestors stop at $HOME and /
+    if (dir !== start && stop.has(dir)) break;
     const nm = join(dir, "node_modules");
     if (isDir(nm)) out.push(nm);
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+    if (stop.has(dir) || dirname(dir) === dir) break;
   }
   return out;
+}
+
+function safeHome(): string | undefined {
+  try {
+    return homedir();
+  } catch {
+    return undefined;
+  }
 }
 
 const PLUGIN_RE = /^beamhop-plugin-/;
 
 /**
  * 1. every sub-folder (or single .ts/.js file) of `dir`
- * 2. node_modules packages named beamhop-plugin-* / @scope/beamhop-plugin-* (walking up from cwd)
- * 3. explicitly configured package names / paths
+ * 2. only with `autoDiscoverNpm`: node_modules packages named beamhop-plugin-* / @scope/beamhop-plugin-* (walking up
+ *    from cwd, not into $HOME or /)
+ * 3. explicitly configured package names / paths (loadConfig makes relative paths absolute against the config dir)
  * Duplicates (e.g. workspace symlinks of local plugins) are collapsed by real path.
  */
 export function discoverPlugins(opts: { dir: string; packages: string[]; cwd?: string; autoDiscoverNpm?: boolean }): DiscoveredPlugin[] {
@@ -144,7 +159,7 @@ export function discoverPlugins(opts: { dir: string; packages: string[]; cwd?: s
     const pkg = readPkg(pkgDir);
     found.push({ id: pkg?.name ?? fallbackName, entry, root: pkgDir, source: "npm", version: pkg?.version, description: pkg?.description });
   };
-  if (opts.autoDiscoverNpm !== false) {
+  if (opts.autoDiscoverNpm) {
     for (const nm of nmDirs) {
       for (const name of safeReaddir(nm)) {
         if (PLUGIN_RE.test(name)) addPackage(join(nm, name), name);

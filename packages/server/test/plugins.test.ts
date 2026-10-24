@@ -95,6 +95,7 @@ describe("plugin manager", () => {
     expect(hooks.counts.write).toBe(0);
     expect(await pm.handlePublic("good", new Request("http://x/plugins/good/hello"))).toBeUndefined();
     expect((await pm.adminRoutes.fetch(new Request("http://x/good/stats"))).status).toBe(404);
+    expect(pm.uiBundle("good")).toBeUndefined(); // the bundle route is unauthenticated: running plugins only
     const jobs = calls.jobs;
     bus.emit("connection.open", { connId: "c", ip: "1", at: 0 });
     await sleep(250);

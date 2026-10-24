@@ -4,18 +4,24 @@ import { toWsUrl } from "../util/url";
 import { buildNip11 } from "./nip11";
 import { invitePage } from "./invite-page";
 import { verifyNip98 } from "./nip98";
+import { RateLimiter } from "../util/rate-limit";
+import { ipKey } from "../util/cidr";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "*",
+  // `*` never covers Authorization in a preflight, and NIP-98 (invite redeem, NIP-86 on "/") needs it
+  "Access-Control-Allow-Headers": "Authorization, Content-Type, *",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 const NIP05_NAME = /^[a-z0-9._-]{1,64}$/;
 const MAX_REDEEM_BODY = 4096;
+/** Invite redemption attempts per address per minute (each one costs a signature check and a replay-cache slot). */
+export const REDEEM_PER_MINUTE = 20;
 
 /** Relay HTTP routes: NIP-11, NIP-05 and invite redemption. Unhandled requests fall through via next(). */
 export function createHttp(ctx: RelayContext): Hono {
-  const app = new Hono();
+  const app = new Hono<{ Bindings: { ip?: string } }>();
+  const redeemLimiter = new RateLimiter();
 
   // CORS preflight for NIP-11 (and NIP-86, which shares "/")
   app.options("/", () => new Response(null, { status: 204, headers: CORS }));
@@ -46,8 +52,10 @@ export function createHttp(ctx: RelayContext): Hono {
 
   app.options("/invite/redeem", () => new Response(null, { status: 204, headers: CORS }));
   app.post("/invite/redeem", async (c) => {
-    const body = new Uint8Array(await c.req.arrayBuffer());
-    if (body.length > MAX_REDEEM_BODY) return c.json({ ok: false, error: "body too large" }, 413, CORS);
+    const ip = c.env?.ip;
+    if (ip && !redeemLimiter.take(`redeem:${ipKey(ip)}`, REDEEM_PER_MINUTE)) return c.json({ ok: false, error: "rate-limited: too many attempts" }, 429, CORS);
+    const body = await readCapped(c.req.raw, MAX_REDEEM_BODY);
+    if (!body) return c.json({ ok: false, error: "body too large" }, 413, CORS);
     const auth = verifyNip98(c.req.raw, { publicUrl: ctx.config.server.publicUrl, verifier: ctx.verifier, body });
     if (!auth.ok) return c.json({ ok: false, error: auth.error }, auth.status, CORS);
     let code: unknown;
@@ -76,5 +84,32 @@ export function createHttp(ctx: RelayContext): Hono {
     return c.html(html, 200, { "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
   });
 
-  return app;
+  return app as unknown as Hono;
+}
+
+/** Reads a request body, giving up (null) as soon as it exceeds `max` bytes instead of buffering it all. */
+async function readCapped(req: Request, max: number): Promise<Uint8Array | null> {
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!req.body) return new Uint8Array();
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let off = 0;
+  for (const ch of chunks) {
+    out.set(ch, off);
+    off += ch.byteLength;
+  }
+  return out;
 }

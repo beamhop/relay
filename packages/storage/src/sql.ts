@@ -19,7 +19,9 @@ export function inList(
   }
   const json = JSON.stringify(values);
   if (dialect === "sqlite") return { sql: `${column} IN (SELECT value FROM json_each(?))`, params: [json] };
-  const elem = type === "int" ? "(json_array_elements_text(?::json))::bigint" : "json_array_elements_text(?::json)";
+  // `?::text::json`, not `?::json`: postgres.js JSON.stringifies json-typed params, which would turn the
+  // already-serialized array into a JSON string scalar
+  const elem = type === "int" ? "(json_array_elements_text(?::text::json))::bigint" : "json_array_elements_text(?::text::json)";
   return { sql: `${column} IN (SELECT ${elem})`, params: [json] };
 }
 

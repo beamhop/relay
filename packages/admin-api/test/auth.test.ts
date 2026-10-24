@@ -200,10 +200,14 @@ describe("auth: password", () => {
     const s1 = await enable();
     const step = Math.floor(h.clock.now / 30_000);
     expect((await login(totpCode(s1, step + 1))).status).toBe(200); // drift window: next step accepted
-    expect((await h.withCookie(cookie, "/auth/totp/disable", { method: "POST", body: { code: totpCode(s1, step) } })).status).toBe(200);
+    // disabling consumes codes too: the already used step can't be replayed for it
+    expect((await h.withCookie(cookie, "/auth/totp/disable", { method: "POST", body: { code: totpCode(s1, step + 1) } })).status).toBe(400);
+    h.clock.now += 60_000;
+    const later = step + 2;
+    expect((await h.withCookie(cookie, "/auth/totp/disable", { method: "POST", body: { code: totpCode(s1, later) } })).status).toBe(200);
     const s2 = await enable();
-    expect((await login(totpCode(s2, step))).status).toBe(401); // the enabling code is spent
-    expect((await login(totpCode(s2, step + 1))).status).toBe(200);
+    expect((await login(totpCode(s2, later))).status).toBe(401); // the enabling code is spent
+    expect((await login(totpCode(s2, later + 1))).status).toBe(200);
   });
 });
 

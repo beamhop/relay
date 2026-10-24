@@ -29,7 +29,7 @@ export interface BusEvents {
 }
 export type EventSource = "ws" | "api" | "import" | "sync" | "relay" | "plugin";
 
-type Handler<T> = (payload: T) => void;
+type Handler<T> = (payload: T) => unknown;
 
 export class EventBus {
   private handlers = new Map<keyof BusEvents, Set<Handler<any>>>();
@@ -39,15 +39,20 @@ export class EventBus {
     set.add(fn);
     return () => set!.delete(fn);
   }
-  /** Synchronous, error-isolated fan-out. Handlers must be cheap; defer heavy work. */
+  /**
+   * Synchronous, error-isolated fan-out. Handlers must be cheap; defer heavy work.
+   * Async handlers are not awaited, but their rejections are caught so they can't crash the process.
+   */
   emit<K extends keyof BusEvents>(name: K, payload: BusEvents[K]): void {
     const set = this.handlers.get(name);
     if (!set) return;
+    const fail = (err: unknown) => console.error(`[bus] handler for ${String(name)} failed`, err);
     for (const fn of set) {
       try {
-        fn(payload);
+        const r = fn(payload);
+        if (r && typeof (r as Promise<unknown>).then === "function") (r as Promise<unknown>).then(undefined, fail);
       } catch (err) {
-        console.error(`[bus] handler for ${String(name)} failed`, err);
+        fail(err);
       }
     }
   }

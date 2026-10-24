@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Plus, ShieldBan, Trash2 } from "lucide-react";
+import { AlertTriangle, Plus, ShieldBan, Trash2 } from "lucide-react";
 import type { IpRule } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -32,6 +32,27 @@ const isIpv6 = (s: string) => {
 };
 const IP_RE = { test: (s: string) => V4.test(s) || (s.includes(":") && isIpv6(s)) };
 
+const BIG = [[1e18, "quintillion"], [1e15, "quadrillion"], [1e12, "trillion"], [1e9, "billion"], [1e6, "million"]] as const;
+const approx = (n: number) => {
+  for (const [v, word] of BIG) if (n >= v) return `about ${(n / v).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${word}`;
+  return n.toLocaleString();
+};
+
+/** How many addresses a rule covers, in words (an IPv4-mapped IPv6 rule covers IPv4 addresses, as the relay matches it). */
+function coverage(cidr: string): string {
+  const [addr, prefix] = cidr.split("/");
+  let v6 = addr.includes(":");
+  let bits = prefix === undefined ? (v6 ? 128 : 32) : Number(prefix);
+  if (v6 && /^\[::ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}\]$/i.test(new URL(`http://[${addr}]/`).hostname)) {
+    v6 = false;
+    bits -= 96;
+  }
+  if (bits <= 0) return v6 ? "every IPv6 address on the internet" : "every IPv4 address on the internet (about 4.3 billion)";
+  if (!v6) return `${approx(2 ** (32 - bits))} IPv4 addresses`;
+  // wide IPv6 ranges count in /64 networks: one is what a single home or server usually gets
+  return bits < 64 ? `${approx(2 ** (64 - bits))} IPv6 networks of /64 (each typically one home or server)` : `${approx(2 ** (128 - bits))} IPv6 addresses`;
+}
+
 function IpRulesPage() {
   const { data, isLoading, error, refetch } = useIpRules();
   const { remove } = useIpRuleActions();
@@ -47,7 +68,7 @@ function IpRulesPage() {
     <div className="space-y-4">
       <PageHeader
         title="IP rules"
-        description="Block or always-allow IP addresses and CIDR ranges"
+        description="Block IP addresses and CIDR ranges, or exempt trusted ones from per-IP limits"
         actions={
           <Button onClick={() => setAdding(true)}>
             <Plus /> Add rule
@@ -88,14 +109,39 @@ function IpRulesPage() {
 
 function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { add } = useIpRuleActions();
+  const confirm = useConfirm();
   const [cidr, setCidr] = React.useState("");
   const [action, setAction] = React.useState<"block" | "allow">("block");
   const [reason, setReason] = React.useState("");
   const valid = IP_RE.test(cidr.trim());
+  /** asked when the API refuses an allow rule wider than an IPv4 /16 or an IPv6 /48 */
+  const confirmBroad = async (range: string) =>
+    !!(await confirm({
+      title: "Allow this whole range?",
+      destructive: true,
+      confirmText: "Add allow rule anyway",
+      description: (
+        <div className="space-y-2">
+          <p>
+            <code className="font-mono">{range}</code> covers {coverage(range)}.
+          </p>
+          <p>
+            An allow rule doesn't decide who may connect: a public relay already accepts everyone. It <em>exempts</em> the addresses it
+            matches from the per-IP connection and message limits, and it overrides every block rule.
+          </p>
+          <p>
+            With a range this wide, anyone in it can open as many connections and send as many messages as they like, and you can't block
+            them by IP. Only allow addresses you control, such as your own servers or a trusted proxy.
+          </p>
+        </div>
+      ),
+    }));
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
-    await add.mutateAsync({ cidr: cidr.trim(), action, reason });
+    const rule = { cidr: cidr.trim(), action, reason };
+    // null: the broad-range warning was cancelled, keep the form as it is
+    if (!(await add.mutateAsync({ ...rule, confirmBroad: () => confirmBroad(rule.cidr) }))) return;
     setCidr("");
     setReason("");
     onOpenChange(false);
@@ -123,6 +169,17 @@ function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bool
             <ToggleGroupItem value="block" className="flex-1">Block</ToggleGroupItem>
             <ToggleGroupItem value="allow" className="flex-1">Allow</ToggleGroupItem>
           </ToggleGroup>
+          {action === "allow" ? (
+            <p className="flex gap-1.5 rounded-md bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="mt-px size-3.5 shrink-0" />
+              <span>
+                Allow rules are exemptions, not a whitelist: matching addresses skip the per-IP limits and override block rules. Everyone can
+                already connect, so only allow addresses you trust, like your own servers.
+              </span>
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">Matching addresses can't connect (unless an allow rule also matches them).</p>
+          )}
         </div>
         <div className="space-y-2">
           <Label htmlFor="ip-reason">Reason</Label>

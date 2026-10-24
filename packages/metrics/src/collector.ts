@@ -28,8 +28,15 @@ interface SecondCounters {
   connectionsOpened: number;
   blobsUploaded: number;
   blobBytesUploaded: number;
+  blobsServed: number;
   blobBytesServed: number;
 }
+
+/**
+ * Rejection codes that can be emitted before the signature was verified (size limits, bad id/sig,
+ * internal errors): their `pubkey` is unauthenticated, so it isn't credited in per-pubkey stats.
+ */
+const UNVERIFIED_CODES = new Set(["invalid", "too-large", "error"]);
 
 /**
  * Bus subscribers. Every handler is O(1): integer increments, plus a couple of Map updates on the
@@ -46,7 +53,7 @@ export class Collector {
     connectionsOpened: 0, connectionsClosed: 0, bytesIn: 0, bytesOut: 0,
     blobsUploaded: 0, blobBytesUploaded: 0, blobsServed: 0, blobBytesServed: 0,
   };
-  private sec: SecondCounters = { bytesIn: 0, bytesOut: 0, connectionsOpened: 0, blobsUploaded: 0, blobBytesUploaded: 0, blobBytesServed: 0 };
+  private sec: SecondCounters = { bytesIn: 0, bytesOut: 0, connectionsOpened: 0, blobsUploaded: 0, blobBytesUploaded: 0, blobsServed: 0, blobBytesServed: 0 };
   /** time of the last tick; used to stamp latency samples without calling the clock on the hot path */
   tickMs: number;
   private unsubs: (() => void)[] = [];
@@ -93,7 +100,7 @@ export class Collector {
         const h = this.rollup.hour;
         h.rejection(p.code, normalizeReason(p.reason));
         const pk = p.pubkey ?? p.event?.pubkey;
-        if (pk) h.pubkey(pk, 0, 1);
+        if (pk && !UNVERIFIED_CODES.has(p.code)) h.pubkey(pk, 0, 1);
       }),
       bus.on("req.executed", (p) => {
         t.req++;
@@ -121,6 +128,7 @@ export class Collector {
       bus.on("blob.served", (p) => {
         t.blobsServed++;
         t.blobBytesServed += p.size;
+        s.blobsServed++;
         s.blobBytesServed += p.size;
       }),
     );
@@ -147,7 +155,8 @@ export class Collector {
     add("connections_opened", s.connectionsOpened);
     add("blobs_uploaded", s.blobsUploaded);
     add("blob_bytes_uploaded", s.blobBytesUploaded);
+    add("blobs_served", s.blobsServed);
     add("blob_bytes_served", s.blobBytesServed);
-    s.bytesIn = s.bytesOut = s.connectionsOpened = s.blobsUploaded = s.blobBytesUploaded = s.blobBytesServed = 0;
+    s.bytesIn = s.bytesOut = s.connectionsOpened = s.blobsUploaded = s.blobBytesUploaded = s.blobsServed = s.blobBytesServed = 0;
   }
 }

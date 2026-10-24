@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import { z } from "zod";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
@@ -11,6 +12,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { ConfirmProvider } from "@/components/confirm";
 import { PageSkeleton } from "@/components/page-skeleton";
 import "./index.css";
+
+// zod probes `new Function` for its JIT path, which the admin CSP (no unsafe-eval) reports as a violation
+z.config({ jitless: true });
 
 const router = createRouter({
   routeTree,

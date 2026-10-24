@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { nip19 } from "nostr-tools";
 import { ConfigSchema, type BeamhopConfig } from "@beamhop/sdk";
+import { proxyMatcher } from "./runtime/common";
 
 type Json = Record<string, unknown>;
 
@@ -84,13 +85,38 @@ function setPath(obj: Json, path: string, value: unknown) {
 
 const bool = (v: string) => /^(1|true|yes|on)$/i.test(v.trim());
 const num = (name: string, v: string) => {
+  // Number("") / Number("  ") is 0, which for a limit means "unlimited": never let blank input get there
+  if (!v.trim()) throw new Error(`${name} must be a number (got "${v}")`);
   const n = Number(v);
   if (!Number.isFinite(n)) throw new Error(`${name} must be a number (got "${v}")`);
   return n;
 };
 const list = (v: string) => v.split(",").map((s) => s.trim()).filter(Boolean);
-/** "k=v,k2=v2" → record */
-const kvList = (v: string) => Object.fromEntries(list(v).map((p) => { const i = p.indexOf("="); return [p.slice(0, i).trim(), p.slice(i + 1).trim()]; }));
+/**
+ * "k=v,k2=v2" → record (OTLP-style; values are percent-decoded so `%2C` can carry a comma).
+ * Entries without `=` are rejected instead of silently mangled.
+ */
+const kvList = (v: string, name: string) =>
+  Object.fromEntries(
+    list(v).map((p) => {
+      const i = p.indexOf("=");
+      if (i <= 0) throw new Error(`${name}: expected key=value pairs (got "${p}")`);
+      const dec = (s: string) => {
+        try {
+          return decodeURIComponent(s.trim());
+        } catch {
+          return s.trim();
+        }
+      };
+      return [dec(p.slice(0, i)), dec(p.slice(i + 1))];
+    }),
+  );
+
+/** Example/placeholder values that must never protect a real endpoint. */
+export function isPlaceholderToken(token: string): boolean {
+  const t = token.trim().toLowerCase();
+  return t === "change-me" || t === "changeme" || t.startsWith("replace-with") || t === "secret" || t === "token";
+}
 
 type EnvSpec = [envName: string, path: string, parse: (v: string, name: string) => unknown];
 const ENV: EnvSpec[] = [
@@ -99,6 +125,8 @@ const ENV: EnvSpec[] = [
   ["PORT", "server.port", (v, n) => num(n, v)],
   ["BEAMHOP_PUBLIC_URL", "server.publicUrl", (v) => v.replace(/\/+$/, "")],
   ["BEAMHOP_TRUST_PROXY", "server.trustProxy", bool],
+  ["BEAMHOP_PROXY_IP_HEADER", "server.proxyIpHeader", (v) => v.trim().toLowerCase()],
+  ["BEAMHOP_TRUSTED_PROXIES", "server.trustedProxies", list],
   ["BEAMHOP_DB_DRIVER", "database.driver", (v) => v],
   ["BEAMHOP_SQLITE_PATH", "database.sqlitePath", (v) => v],
   ["BEAMHOP_DATABASE_URL", "database.postgresUrl", (v) => v],
@@ -112,21 +140,40 @@ const ENV: EnvSpec[] = [
   ["BEAMHOP_S3_ACCESS_KEY_ID", "blossom.s3.accessKeyId", (v) => v],
   ["BEAMHOP_S3_SECRET_ACCESS_KEY", "blossom.s3.secretAccessKey", (v) => v],
   ["BEAMHOP_S3_PUBLIC_URL", "blossom.s3.publicUrl", (v) => v],
+  ["BEAMHOP_BLOSSOM_UPLOADS_PER_MINUTE_PER_IP", "blossom.limits.uploadsPerMinutePerIp", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_UPLOADS_PER_MINUTE_PER_PUBKEY", "blossom.limits.uploadsPerMinutePerPubkey", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_MAX_CONCURRENT_UPLOADS", "blossom.limits.maxConcurrentUploads", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_MAX_QUEUED_UPLOADS", "blossom.limits.maxQueuedUploads", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_MAX_BUFFERED_UPLOAD_BYTES", "blossom.limits.maxBufferedUploadBytes", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_MAX_UPLOADS_PER_IP", "blossom.limits.maxConcurrentUploadsPerIp", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_UPLOAD_STALL_MS", "blossom.limits.uploadStallMs", (v, n) => num(n, v)],
+  ["BEAMHOP_BLOSSOM_MIN_UPLOAD_BYTES_PER_SEC", "blossom.limits.minUploadBytesPerSec", (v, n) => num(n, v)],
+  [
+    "BEAMHOP_BLOSSOM_MIRROR_PORTS",
+    "blossom.limits.mirrorPorts",
+    (v, n) => {
+      const ports = list(v).map((x) => num(n, x));
+      // an empty list would silently disable mirroring
+      if (!ports.length) throw new Error(`${n} must list at least one port (got "${v}")`);
+      return ports;
+    },
+  ],
   ["BEAMHOP_OTEL_ENABLED", "metrics.otel.enabled", bool],
   ["BEAMHOP_OTEL_ENDPOINT", "metrics.otel.endpoint", (v) => v],
-  ["BEAMHOP_OTEL_HEADERS", "metrics.otel.headers", kvList],
+  ["BEAMHOP_OTEL_HEADERS", "metrics.otel.headers", (v, n) => kvList(v, n)],
   ["BEAMHOP_OTEL_INTERVAL_MS", "metrics.otel.intervalMs", (v, n) => num(n, v)],
   ["BEAMHOP_GEOIP_DB", "metrics.geoipDbPath", (v) => v],
   ["BEAMHOP_METRICS_RETENTION_DAYS", "metrics.retentionDays", (v, n) => num(n, v)],
   ["BEAMHOP_ADMIN_ENABLED", "admin.enabled", bool],
   ["BEAMHOP_OWNERS", "admin.owners", (v) => list(v).map(toHexPubkey)],
-  ["BEAMHOP_SESSION_SECRET", "admin.sessionSecret", (v) => v],
+  // BEAMHOP_SESSION_SECRET / admin.sessionSecret: deprecated and ignored (sessions are random server-side ids)
   ["BEAMHOP_ADMIN_UI_DIR", "admin.uiDir", (v) => v],
   ["BEAMHOP_VAPID_PUBLIC_KEY", "admin.vapid.publicKey", (v) => v],
   ["BEAMHOP_VAPID_PRIVATE_KEY", "admin.vapid.privateKey", (v) => v],
   ["BEAMHOP_VAPID_SUBJECT", "admin.vapid.subject", (v) => v],
   ["BEAMHOP_PLUGINS_DIR", "plugins.dir", (v) => v],
   ["BEAMHOP_PLUGINS", "plugins.packages", list],
+  ["BEAMHOP_PLUGINS_AUTO_DISCOVER", "plugins.autoDiscoverNpm", bool],
   ["BEAMHOP_LOG_LEVEL", "logLevel", (v) => v.toLowerCase()],
 ];
 
@@ -134,7 +181,8 @@ export function envToConfig(env: Record<string, string | undefined>): Json {
   const out: Json = {};
   for (const [name, path, parse] of ENV) {
     const v = env[name];
-    if (v === undefined || v === "") continue;
+    // blank (incl. whitespace-only, e.g. compose's `${VAR:-}` with stray spaces) = unset, like every other var
+    if (v === undefined || v.trim() === "") continue;
     if (name === "PORT" && env.BEAMHOP_PORT) continue;
     setPath(out, path, parse(v, name));
   }
@@ -184,6 +232,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   if (typeof mergedServer?.publicUrl !== "string") config.server.publicUrl = `http://localhost:${config.server.port}`;
   if (config.blossom.driver === "s3" && !config.blossom.s3) throw new Error("blossom.driver is s3 but blossom.s3 is not configured (BEAMHOP_S3_*)");
   if (config.database.driver === "postgres" && !config.database.postgresUrl) throw new Error("database.driver is postgres but no database.postgresUrl / BEAMHOP_DATABASE_URL given");
+  proxyMatcher(config.server.trustedProxies); // fail at boot on an entry that isn't an address or range
 
   // resolve relative file paths against the config file location (or cwd)
   const base = configPath ? dirname(configPath) : (opts.cwd ?? process.cwd());
@@ -191,6 +240,8 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   config.database.sqlitePath = abs(config.database.sqlitePath);
   config.blossom.fsPath = abs(config.blossom.fsPath);
   config.plugins.dir = abs(config.plugins.dir);
+  // explicit plugin paths are relative to the config file like every other path (bare names stay npm specifiers)
+  config.plugins.packages = config.plugins.packages.map((p) => (p.startsWith(".") ? abs(p) : p));
   if (config.metrics.geoipDbPath) config.metrics.geoipDbPath = abs(config.metrics.geoipDbPath);
   if (config.admin.uiDir) config.admin.uiDir = abs(config.admin.uiDir);
   config.server.publicUrl = config.server.publicUrl.replace(/\/+$/, "");
@@ -198,10 +249,22 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   const filePlugins = (fileJson.plugins as Json | undefined)?.enabled;
   const fileServer = fileJson.server as Json | undefined;
   const ov = opts.overrides as { plugins?: { enabled?: string[] } } | undefined;
+  // like every other BEAMHOP_* variable, an empty value (compose `${VAR:-}`) means "unset"
+  const pluginsEnv = env.BEAMHOP_PLUGINS_ENABLED || undefined;
+  const prometheusEnv = env.BEAMHOP_PROMETHEUS || undefined;
   const extras: ServerExtras = {
-    pluginsEnabled: ov?.plugins?.enabled ?? (env.BEAMHOP_PLUGINS_ENABLED !== undefined ? list(env.BEAMHOP_PLUGINS_ENABLED) : Array.isArray(filePlugins) ? filePlugins.map(String) : []),
+    pluginsEnabled: ov?.plugins?.enabled ?? (pluginsEnv !== undefined ? list(pluginsEnv) : Array.isArray(filePlugins) ? filePlugins.map(String) : []),
     metricsToken: env.BEAMHOP_METRICS_TOKEN || (typeof fileServer?.metricsToken === "string" ? fileServer.metricsToken : undefined),
-    prometheus: env.BEAMHOP_PROMETHEUS !== undefined ? bool(env.BEAMHOP_PROMETHEUS) : fileServer?.prometheus !== false,
+    prometheus: prometheusEnv !== undefined ? bool(prometheusEnv) : fileServer?.prometheus !== false,
   };
+  if (extras.metricsToken !== undefined && isPlaceholderToken(extras.metricsToken)) {
+    // refusing to boot would crash-loop deployments that copied the old example; serving /metrics behind a
+    // well-known token would be worse than public — so turn the endpoint off and say why
+    console.error(
+      "beamhop: server.metricsToken / BEAMHOP_METRICS_TOKEN is still the example placeholder; /metrics is DISABLED. Set a long random token (e.g. `openssl rand -hex 32`) to enable it.",
+    );
+    extras.metricsToken = undefined;
+    extras.prometheus = false;
+  }
   return { config, extras, configPath };
 }

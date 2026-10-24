@@ -11,7 +11,7 @@ import type {
 import { getDTag, isAddressable, isEphemeral, isReplaceable, nowSec } from "@beamhop/sdk";
 import { escapeLike, greatest, inList, insertRows, isUniqueViolation, parseJson, toNum } from "./sql";
 
-/** Tag values longer than this are not indexed (and thus not matchable by `#x` filters). */
+/** Tag values longer than this many UTF-8 bytes are not indexed (and thus not matchable by `#x` filters). */
 export const MAX_INDEXED_TAG_VALUE = 1024;
 
 const EVENT_COLUMNS = "e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig";
@@ -28,7 +28,8 @@ interface EventRow {
 }
 
 interface BuiltFilter {
-  join: string;
+  /** FROM clause (aliasing events as `e`) */
+  from: string;
   conds: string[];
   params: unknown[];
   /** extra ORDER BY prefix (relevance) and its params, appended after WHERE params */
@@ -70,7 +71,8 @@ const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
 export function parseSearch(search: string): { terms: string[]; phrases: boolean[] } {
   const terms: string[] = [];
   const phrases: boolean[] = [];
-  for (const tok of search.match(/"[^"]*"|\S+/g) ?? []) {
+  // NUL: postgres can't bind it, and stored content never contains it
+  for (const tok of search.replace(/\u0000/g, "").match(/"[^"]*"|\S+/g) ?? []) {
     const quoted = tok.length >= 2 && tok.startsWith('"') && tok.endsWith('"');
     if (!quoted && EXTENSION_TOKEN.test(tok)) continue;
     const text = (quoted ? tok.slice(1, -1) : tok).replace(/"/g, " ").trim();
@@ -81,9 +83,22 @@ export function parseSearch(search: string): { terms: string[]; phrases: boolean
   return { terms, phrases };
 }
 
+/**
+ * Shorter last terms are matched as whole tokens: a 1-2 letter prefix expands to most of the index (and
+ * diacritic folding makes "é" behave like "e"). CJK terms keep prefix matching at any length: the
+ * tokenizer keeps runs of CJK characters as one long token, so a short CJK query only ever matches as a prefix.
+ */
+export const MIN_PREFIX_TERM_LENGTH = 3;
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
 /** FTS5 MATCH expression: every term quoted (no operator injection), AND-ed, last term prefix-matched. */
 export function toFts5Query(terms: string[]): string {
-  return terms.map((t, i) => `"${t.replace(/"/g, '""')}"${i === terms.length - 1 && !/\s/.test(t) ? "*" : ""}`).join(" ");
+  return terms
+    .map((t, i) => {
+      const prefix = i === terms.length - 1 && !/\s/.test(t) && ([...t].length >= MIN_PREFIX_TERM_LENGTH || CJK.test(t));
+      return `"${t.replace(/"/g, '""')}"${prefix ? "*" : ""}`;
+    })
+    .join(" ");
 }
 
 /** websearch_to_tsquery input: phrases kept quoted, other terms plain (operators already stripped). */
@@ -133,6 +148,7 @@ export class SqlEventStore implements EventStore {
   }
 
   private async saveIn(tx: Db, event: NostrEvent): Promise<SaveResult> {
+    await lockPubkey(tx, event.pubkey);
     if (await tx.get("SELECT 1 AS x FROM events WHERE id = ?", [event.id])) {
       return { status: "duplicate", message: "duplicate: already have this event" };
     }
@@ -207,10 +223,10 @@ export class SqlEventStore implements EventStore {
       const b = this.build(filter, { now });
       if (!b) continue;
       const params = [...b.params, ...(b.rank?.params ?? [])];
-      let sql = `SELECT ${EVENT_COLUMNS} FROM events e${b.join}${where(b.conds)} ORDER BY ${b.rank ? `${b.rank.sql}, ` : ""}e.created_at DESC, e.id ASC`;
+      let sql = `SELECT ${EVENT_COLUMNS} FROM ${b.from}${where(b.conds)} ORDER BY ${b.rank ? `${b.rank.sql}, ` : ""}e.created_at DESC, e.id ASC`;
       if (limit !== undefined) {
         sql += " LIMIT ?";
-        params.push(Math.floor(limit));
+        params.push(safeInt(limit));
       }
       for (const r of await this.db.all<EventRow>(sql, params)) {
         if (seen.has(r.id)) continue;
@@ -228,7 +244,7 @@ export class SqlEventStore implements EventStore {
     for (const filter of filters) {
       const b = this.build(filter, { now });
       if (!b) continue;
-      parts.push(`SELECT e.seq FROM events e${b.join}${where(b.conds)}`);
+      parts.push(`SELECT e.seq FROM ${b.from}${where(b.conds)}`);
       params.push(...b.params);
     }
     if (!parts.length) return 0;
@@ -248,10 +264,10 @@ export class SqlEventStore implements EventStore {
     const b = this.build({ ...filter, search: undefined }, { now: nowSec() });
     if (!b) return [];
     const params = [...b.params];
-    let sql = `SELECT e.id, e.created_at FROM events e${b.join}${where(b.conds)} ORDER BY e.created_at ASC, e.id ASC`;
+    let sql = `SELECT e.id, e.created_at FROM ${b.from}${where(b.conds)} ORDER BY e.created_at ASC, e.id ASC`;
     if (filter.limit !== undefined) {
       sql += " LIMIT ?";
-      params.push(Math.max(0, Math.floor(filter.limit)));
+      params.push(safeInt(filter.limit));
     }
     const rows = await this.db.all<{ id: string; created_at: number }>(sql, params);
     return rows.map((r) => ({ id: r.id, created_at: Number(r.created_at) }));
@@ -274,6 +290,7 @@ export class SqlEventStore implements EventStore {
     if (!ids.size && !coords.size) return 0;
 
     return this.db.tx(async (tx) => {
+      await lockPubkey(tx, deletion.pubkey);
       let deleted = 0;
       const idList = [...ids];
       for (let i = 0; i < idList.length; i += 500) {
@@ -324,16 +341,19 @@ export class SqlEventStore implements EventStore {
     const now = nowSec();
     const built = filters.map((f) => ({ f, b: this.build(f, { now, includeExpired: true }) }));
     if (built.some(({ b }) => b?.unconstrained)) throw new Error("deleteByFilter: refusing to delete with an empty filter");
+    // serialize with save() for the authors involved (postgres), so a concurrent save can't slip in
+    const authors = [...new Set(filters.flatMap((f) => f.authors ?? []))].sort();
     return this.db.tx(async (tx) => {
+      if (authors.length <= MAX_LOCKED_AUTHORS) for (const pk of authors) await lockPubkey(tx, pk);
       let deleted = 0;
       for (const { f, b } of built) {
         if (!b) continue;
         if (f.limit !== undefined && f.limit <= 0) continue;
         const params = [...b.params];
-        let sub = `SELECT e.seq FROM events e${b.join}${where(b.conds)}`;
+        let sub = `SELECT e.seq FROM ${b.from}${where(b.conds)}`;
         if (f.limit !== undefined) {
           sub += " ORDER BY e.created_at DESC LIMIT ?";
-          params.push(Math.floor(f.limit));
+          params.push(safeInt(f.limit));
         }
         deleted += (await tx.run(`DELETE FROM events WHERE seq IN (${sub})`, params)).changes;
       }
@@ -347,7 +367,7 @@ export class SqlEventStore implements EventStore {
 
   async purgeExpired(now: number): Promise<number> {
     return this.db.tx(
-      async (tx) => (await tx.run("DELETE FROM events WHERE expiration IS NOT NULL AND expiration < ?", [now])).changes,
+      async (tx) => (await tx.run("DELETE FROM events WHERE expiration IS NOT NULL AND expiration <= ?", [now])).changes,
     );
   }
 
@@ -382,7 +402,7 @@ export class SqlEventStore implements EventStore {
     const dialect = this.db.dialect;
     const conds: string[] = [];
     const params: unknown[] = [];
-    let join = "";
+    let from = "events e";
     let rank: BuiltFilter["rank"];
     const add = (c: { sql: string; params: unknown[] }) => {
       conds.push(c.sql);
@@ -404,8 +424,8 @@ export class SqlEventStore implements EventStore {
       if (!kinds.length) return null;
       add(inList(dialect, "e.kind", kinds, "int"));
     }
-    if (typeof filter.since === "number") add({ sql: "e.created_at >= ?", params: [Math.floor(filter.since)] });
-    if (typeof filter.until === "number") add({ sql: "e.created_at <= ?", params: [Math.floor(filter.until)] });
+    if (typeof filter.since === "number") add({ sql: "e.created_at >= ?", params: [safeInt(filter.since)] });
+    if (typeof filter.until === "number") add({ sql: "e.created_at <= ?", params: [safeInt(filter.until)] });
 
     for (const key of Object.keys(filter)) {
       if (!key.startsWith("#")) continue;
@@ -431,7 +451,10 @@ export class SqlEventStore implements EventStore {
           add({ sql: "e.search @@ websearch_to_tsquery('simple', ?)", params: [q] });
           rank = { sql: "ts_rank(e.search, websearch_to_tsquery('simple', ?)) DESC", params: [q] };
         } else if (this.opts.fts) {
-          join = " JOIN events_fts ON events_fts.rowid = e.seq";
+          // CROSS JOIN pins the FTS index as the outer loop. Otherwise, without planner stats (fresh
+          // database), sqlite may walk an events index and probe FTS once per row: quadratic in the
+          // number of matches, and a synchronous stall of the whole relay.
+          from = "events_fts CROSS JOIN events e ON e.seq = events_fts.rowid";
           add({ sql: "events_fts MATCH ?", params: [toFts5Query(terms)] });
           rank = { sql: "events_fts.rank", params: [] };
         } else {
@@ -441,19 +464,37 @@ export class SqlEventStore implements EventStore {
     }
 
     const unconstrained = conds.length === 0;
-    if (!o.includeExpired) add({ sql: "(e.expiration IS NULL OR e.expiration >= ?)", params: [o.now] });
-    return { join, conds, params, rank, unconstrained };
+    // NIP-40: an event is expired once now >= expiration (same boundary as core's isExpired)
+    if (!o.includeExpired) add({ sql: "(e.expiration IS NULL OR e.expiration > ?)", params: [o.now] });
+    return { from, conds, params, rank, unconstrained };
   }
 }
 
-const where = (conds: string[]) => (conds.length ? ` WHERE ${conds.join(" AND ")}` : "");
-const strings = (xs: unknown[]) => [...new Set(xs.filter((x): x is string => typeof x === "string"))];
+/**
+ * Postgres (READ COMMITTED, many connections): serializes save() and applyDeletion() for one pubkey,
+ * otherwise a save can miss a tombstone being written while the deletion misses the not-yet-inserted
+ * row, and the deleted event survives. SQLite transactions are already serialized.
+ */
+async function lockPubkey(tx: Db, pubkey: string): Promise<void> {
+  if (tx.dialect === "postgres") await tx.run("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", [pubkey]);
+}
 
+/** deleteByFilter takes per-author locks only for small author lists (vanish, admin user deletes). */
+const MAX_LOCKED_AUTHORS = 20;
+
+const where = (conds: string[]) => (conds.length ? ` WHERE ${conds.join(" AND ")}` : "");
+/** Distinct string values; NUL-containing ones are dropped (never stored, and postgres can't bind them). */
+const strings = (xs: unknown[]) => [...new Set(xs.filter((x): x is string => typeof x === "string" && !x.includes("\u0000")))];
+/** Integer in [0, 2^53): larger values overflow postgres bigint (and stringify as `1e+21`). */
+const safeInt = (n: number) => (Number.isFinite(n) ? Math.min(Math.max(0, Math.floor(n)), Number.MAX_SAFE_INTEGER) : n > 0 ? Number.MAX_SAFE_INTEGER : 0);
+
+/** NIP-40 expiration: first `expiration` tag with a value; must match core's expirationOf. */
 function expirationOf(e: NostrEvent): number | null {
-  const v = e.tags.find((t) => t[0] === "expiration")?.[1];
-  if (v === undefined || !/^\d+$/.test(v)) return null;
-  const n = Number(v);
-  return Number.isSafeInteger(n) ? n : null;
+  for (const t of e.tags) {
+    if (t[0] !== "expiration" || t[1] === undefined) continue;
+    return /^\d{1,12}$/.test(t[1]) ? Number(t[1]) : null;
+  }
+  return null;
 }
 
 function indexableTags(e: NostrEvent): [string, string][] {
@@ -462,7 +503,8 @@ function indexableTags(e: NostrEvent): [string, string][] {
   for (const t of e.tags) {
     const [name, value] = t;
     if (typeof name !== "string" || !SINGLE_LETTER.test(name) || typeof value !== "string") continue;
-    if (value.length > MAX_INDEXED_TAG_VALUE) continue;
+    // UTF-8 bytes, not UTF-16 chars: postgres btree index rows are capped at 2704 bytes
+    if (value.length > MAX_INDEXED_TAG_VALUE || Buffer.byteLength(value, "utf8") > MAX_INDEXED_TAG_VALUE) continue;
     const k = `${name}\u0000${value}`;
     if (seen.has(k)) continue;
     seen.add(k);

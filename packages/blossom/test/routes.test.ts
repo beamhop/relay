@@ -249,13 +249,14 @@ describe("list + delete", () => {
     const hash = await sha256(PDF);
     await upload(PDF);
     await upload(PDF, { user: bob });
-    const del = (u: typeof alice, x?: string[]) =>
-      h.request(`/${hash}`, { method: "DELETE", headers: { authorization: authHeader(u.sk, "delete", { x }) } });
+    const del = (u: typeof alice, x?: string[], expiration?: number) =>
+      h.request(`/${hash}`, { method: "DELETE", headers: { authorization: authHeader(u.sk, "delete", { x, expiration }) } });
     expect((await del(alice)).status).toBe(401); // x tag required
     expect((await del(alice, ["cd".repeat(32)])).status).toBe(401);
     expect((await del(alice, [hash])).status).toBe(200);
     expect((await h.request(`/${hash}`)).status).toBe(200);
-    expect((await del(alice, [hash])).status).toBe(403);
+    // a fresh token (delete tokens are single-use, an identical one would be a replay)
+    expect((await del(alice, [hash], Math.floor(Date.now() / 1000) + 700)).status).toBe(403);
     expect((await del(bob, [hash])).status).toBe(200);
     expect((await h.request(`/${hash}`)).status).toBe(404);
     expect(await h.svc.driver.has(hash)).toBe(false);

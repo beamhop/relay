@@ -20,6 +20,7 @@ import type {
 } from "@beamhop/sdk";
 import { discoverPlugins, importSpecifier, type DiscoveredPlugin } from "./discovery";
 import { fileBody } from "../static";
+import { redactSecrets } from "./redact";
 
 export interface PluginManagerDeps {
   config: BeamhopConfig;
@@ -56,6 +57,8 @@ interface Entry {
   http?: Hono;
   adminHttp?: Hono;
   migrated: boolean;
+  /** serializes enable/disable so concurrent calls can't run setup twice */
+  transition?: Promise<void>;
 }
 
 export interface ServerPluginManager extends PluginManager {
@@ -63,6 +66,8 @@ export interface ServerPluginManager extends PluginManager {
   start(): Promise<void>;
   /** Teardown all running plugins without changing their persisted enabled state. */
   stop(): Promise<void>;
+  /** Discover + load plugins and apply their database migrations without enabling them. Returns how many migrated. */
+  migrate(): Promise<number>;
   /** Dispatch a public request for /plugins/:name/* (path rewritten relative to the plugin). */
   handlePublic(name: string, req: Request, env?: unknown): Promise<Response | undefined>;
   /** Serve the admin-ui bundle of a plugin (GET /admin/plugins-ui/:name.js). */
@@ -95,6 +100,29 @@ function validatePluginShape(mod: unknown): BeamhopPlugin {
 
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/**
+ * Config handed to plugins with server secrets removed. Plugins are trusted in-process code (they get the db),
+ * but there's no reason to hand them keys they don't need, and it keeps secrets out of plugin logs/dumps.
+ */
+export function redactConfigForPlugins(config: BeamhopConfig): Readonly<BeamhopConfig> {
+  const c = structuredClone(config);
+  delete c.relaySecretKey;
+  delete c.admin.sessionSecret;
+  if (c.admin.vapid) c.admin.vapid = { ...c.admin.vapid, privateKey: "" };
+  if (c.blossom.s3) c.blossom.s3 = { ...c.blossom.s3, accessKeyId: "", secretAccessKey: "" };
+  if (c.database.postgresUrl) {
+    try {
+      const u = new URL(c.database.postgresUrl);
+      u.password = "";
+      c.database.postgresUrl = u.toString();
+    } catch {
+      c.database.postgresUrl = "";
+    }
+  }
+  if (Object.keys(c.metrics.otel.headers).length) c.metrics.otel.headers = {};
+  return Object.freeze(c);
+}
+
 /** Rewrites `/anything/<name>/rest` → `/rest` keeping the query string. */
 function rewriteRequest(req: Request, name: string, marker: string): Request {
   const url = new URL(req.url);
@@ -111,11 +139,28 @@ function rewriteRequest(req: Request, name: string, marker: string): Request {
   return new Request(url, req);
 }
 
+/** Public plugin routes are anonymous: drop identity headers a client could forge to look like the admin proxy. */
+function stripAdminIdentity(req: Request): Request {
+  const spoofed = [...req.headers.keys()].filter((h) => h.toLowerCase().startsWith("x-beamhop-admin-"));
+  if (!spoofed.length) return req;
+  const headers = new Headers(req.headers);
+  for (const h of spoofed) headers.delete(h);
+  return new Request(req, { headers });
+}
+
 export function createPluginManager(deps: PluginManagerDeps): ServerPluginManager {
   const log = deps.logger.child("plugins");
   const entries = new Map<string, Entry>();
   const { kv, audit } = deps.stores;
   const defaultEnabled = new Set(deps.defaultEnabled ?? []);
+  const pluginConfig = redactConfigForPlugins(deps.config);
+
+  /** Runs state transitions of one plugin one at a time. */
+  const serialize = (e: Entry, fn: () => Promise<void>): Promise<void> => {
+    const next = (e.transition ?? Promise.resolve()).then(fn, fn);
+    e.transition = next.catch(() => {});
+    return next;
+  };
 
   const info = (e: Entry): PluginInfo => {
     let settingsSchema: Record<string, unknown> | undefined;
@@ -203,7 +248,7 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
     const ctx: PluginContext = {
       name: e.name,
       logger: plog,
-      config: deps.config,
+      config: pluginConfig,
       db: deps.stores.db,
       events: deps.stores.events,
       users: deps.stores.users,
@@ -296,17 +341,12 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
     if (!e || e.status !== "running" || !e.adminHttp) return c.json({ error: `plugin ${name} is not running` }, 404);
     return e.adminHttp.fetch(rewriteRequest(c.req.raw, name, "/x"), c.env);
   });
-  adminRoutes.all("/:name", (c) => c.redirect(c.req.path + "/"));
+  adminRoutes.all("/:name", (c) => c.redirect(new URL(c.req.url).pathname + "/"));
 
-  const manager: ServerPluginManager = {
-    adminRoutes,
-    list: () => [...entries.values()].map(info).sort((a, b) => a.name.localeCompare(b.name)),
-    get: (name) => {
-      const e = entries.get(name);
-      return e ? info(e) : undefined;
-    },
-
-    async start() {
+  let loadedOnce: Promise<void> | undefined;
+  /** Discover + import + validate plugins once (imports run module top-level code; setup only runs on enable). */
+  const loadAll = () =>
+    (loadedOnce ??= (async () => {
       const loaded: { plugin?: BeamhopPlugin; error?: string; discovered?: DiscoveredPlugin; source: "local" | "npm"; root: string }[] = [];
       if (deps.plugins) {
         for (const p of deps.plugins) {
@@ -349,19 +389,44 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
           migrated: false,
         });
       }
-      for (const e of entries.values()) if (e.enabled && e.plugin) await enableEntry(e);
+    })());
+
+  const manager: ServerPluginManager = {
+    adminRoutes,
+    list: () => [...entries.values()].map(info).sort((a, b) => a.name.localeCompare(b.name)),
+    get: (name) => {
+      const e = entries.get(name);
+      return e ? info(e) : undefined;
+    },
+
+    async start() {
+      await loadAll();
+      for (const e of entries.values()) if (e.enabled && e.plugin) await serialize(e, () => enableEntry(e));
       log.info(`${entries.size} plugin(s) found, ${[...entries.values()].filter((e) => e.status === "running").length} running`);
     },
 
+    async migrate() {
+      await loadAll();
+      let n = 0;
+      for (const e of entries.values()) {
+        // disabled plugins get their migrations when they're enabled; touching their tables now is a side effect
+        if (!e.enabled || !e.plugin?.migrations?.length || e.migrated) continue;
+        await deps.stores.db.migrate(OWNER(e.name), e.plugin.migrations);
+        e.migrated = true;
+        n++;
+      }
+      return n;
+    },
+
     async stop() {
-      for (const e of [...entries.values()].reverse()) if (e.status === "running") await deactivate(e);
+      for (const e of [...entries.values()].reverse()) if (e.status === "running") await serialize(e, () => deactivate(e));
     },
 
     async enable(name, actor) {
       const e = must(name);
       e.enabled = true;
       await kv.set(KV_NS, `enabled:${name}`, true);
-      await enableEntry(e);
+      await serialize(e, () => enableEntry(e));
       await audit.record({ actor, action: "plugin.enable", target: name, details: { status: e.status, ...(e.error ? { error: e.error } : {}) }, ip: null });
       if (e.status === "error") throw new PluginError(`plugin ${name} failed to start: ${e.error}`, 500);
     },
@@ -370,7 +435,7 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
       const e = must(name);
       e.enabled = false;
       await kv.set(KV_NS, `enabled:${name}`, false);
-      await deactivate(e);
+      await serialize(e, () => deactivate(e));
       if (e.plugin) e.error = undefined;
       await audit.record({ actor, action: "plugin.disable", target: name, details: {}, ip: null });
       log.info(`disabled ${name}`);
@@ -395,19 +460,22 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
           log.warn(`settings listener of ${name} failed`, { error: errMsg(err) });
         }
       }
-      await audit.record({ actor, action: "plugin.settings", target: name, details: { values: parsed }, ip: null });
+      // never write credentials into the audit log (readable with audit.view)
+      const redacted = redactSecrets(parsed, info(e).settingsSchema);
+      await audit.record({ actor, action: "plugin.settings", target: name, details: { values: redacted }, ip: null });
       return parsed;
     },
 
     async handlePublic(name, req, env) {
       const e = entries.get(name);
       if (!e || e.status !== "running" || !e.http) return undefined;
-      return e.http.fetch(rewriteRequest(req, name, "/plugins"), env);
+      return e.http.fetch(stripAdminIdentity(rewriteRequest(req, name, "/plugins")), env);
     },
 
     uiBundle(name) {
       const e = entries.get(name);
-      if (!e?.plugin?.ui) return undefined;
+      // served without login, so only for plugins that are actually running
+      if (!e?.plugin?.ui || e.status !== "running") return undefined;
       const p = isAbsolute(e.plugin.ui) ? e.plugin.ui : resolve(e.root, e.plugin.ui);
       if (!existsSync(p)) return undefined;
       return new Response(fileBody(p), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff" } });

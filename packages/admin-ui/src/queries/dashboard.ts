@@ -12,7 +12,7 @@ export const RANGES: Record<RangeKey, { seconds: number; step: number; label: st
 };
 
 /** Range aligned to step so query keys stay stable for a while. */
-export function rangeParams(r: RangeKey) {
+function rangeParams(r: RangeKey) {
   const { seconds, step } = RANGES[r];
   const to = Math.ceil(nowSec() / step) * step;
   return { from: to - seconds, to, step };
@@ -26,7 +26,8 @@ export function useSeries(names: string[], range: RangeKey) {
   return useQuery({
     queryKey: ["series", names, range, p.to],
     queryFn: async () => {
-      const res = await Promise.all(names.map((name) => api.get<SeriesResponse>("/metrics/series", { name, ...p }).catch(() => ({ name, points: [] }))));
+      // unknown series names come back as empty points, so any rejection here is a real error and must surface
+      const res = await Promise.all(names.map((name) => api.get<SeriesResponse>("/metrics/series", { name, ...p })));
       const byT = new Map<number, Record<string, number>>();
       for (const s of res) for (const pt of s.points ?? []) {
         const row = byT.get(pt.t) ?? { t: pt.t };

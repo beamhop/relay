@@ -132,6 +132,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     if (body.allowed !== undefined) patch.allowed = body.allowed;
     if (body.notes !== undefined) patch.notes = body.notes;
     if (body.tags !== undefined) patch.tags = body.tags;
+    await ctx.users.assertCanEdit(principalOf(c), pubkey, patch);
     const user = await ctx.users.update(pubkey, patch, principalOf(c).pubkey);
     await ctx.audit(c, "user.create", pubkey, patch);
     return c.json(await ctx.users.toView(user), 201);
@@ -171,17 +172,20 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
             break;
           case "unban":
           case "unmute":
+            await ctx.users.assertCanModerate(actor, pubkey);
             if ((await ctx.users.getOrDefault(pubkey)).status === (body.action === "unban" ? "banned" : "muted"))
               await ctx.users.setStatus(pubkey, "active", actor.pubkey);
             break;
           case "allow":
-          case "disallow":
-            await ctx.users.assertCanEdit(actor, pubkey);
-            await ctx.users.update(pubkey, { allowed: body.action === "allow" }, actor.pubkey);
+          case "disallow": {
+            const patch = { allowed: body.action === "allow" };
+            await ctx.users.assertCanEdit(actor, pubkey, patch);
+            await ctx.users.update(pubkey, patch, actor.pubkey);
             break;
+          }
           case "deny":
           case "undeny":
-            if (body.action === "deny") await ctx.users.assertCanModerate(actor, pubkey);
+            await ctx.users.assertCanModerate(actor, pubkey);
             await ctx.users.update(pubkey, { denied: body.action === "deny" }, actor.pubkey);
             break;
           case "delete-events":
@@ -236,8 +240,8 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   app.patch("/users/:pubkey", requirePermission("users.edit"), async (c) => {
     const pubkey = parsePubkey(c.req.param("pubkey"));
     const patch = await readBody(c, UserPatchSchema);
-    if (patch.denied) await ctx.users.assertCanModerate(principalOf(c), pubkey);
-    else await ctx.users.assertCanEdit(principalOf(c), pubkey);
+    if (patch.denied !== undefined) await ctx.users.assertCanModerate(principalOf(c), pubkey);
+    else await ctx.users.assertCanEdit(principalOf(c), pubkey, patch as Partial<UserRecord>);
     if (patch.nip05Name) {
       const holder = await stores.users.getByNip05(patch.nip05Name);
       if (holder && holder.pubkey !== pubkey) throw conflict("nip05 name already taken");
@@ -268,7 +272,8 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     app.post(`/users/:pubkey/${path}`, requirePermission("users.ban"), async (c) => {
       const pubkey = parsePubkey(c.req.param("pubkey"));
       const actor = principalOf(c);
-      if (status === "muted") await ctx.users.assertCanModerate(actor, pubkey);
+      // lifting a ban/mute needs the same rank as imposing it (a moderator can't undo an owner's ban of an admin)
+      await ctx.users.assertCanModerate(actor, pubkey);
       const current = await ctx.users.getOrDefault(pubkey);
       let user: UserRecord = current;
       if (!from || current.status === from) user = await ctx.users.setStatus(pubkey, status, actor.pubkey);
@@ -293,7 +298,10 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
       if (owners.size === 0) throw conflict("cannot remove the last owner", "last_owner");
     }
     const user = await ctx.users.update(pubkey, { role }, principalOf(c).pubkey);
-    if (!role) await ctx.sessions.destroyAllFor(pubkey);
+    if (!role) {
+      await ctx.sessions.destroyAllFor(pubkey);
+      await ctx.push.unsubscribeAllFor(pubkey);
+    }
     await ctx.audit(c, "user.role", pubkey, { from: current, to: role });
     return c.json(await ctx.users.toView(user));
   });

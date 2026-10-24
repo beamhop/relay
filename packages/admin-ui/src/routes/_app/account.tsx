@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { Bell, BellOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Plus, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { PushTopic } from "@beamhop/sdk/admin-contract";
@@ -18,7 +19,7 @@ import { useConfirm } from "@/components/confirm";
 import { useLogout } from "@/components/layout/user-menu";
 import { useMe, useSystem } from "@/queries/auth";
 import { useApiMutation } from "@/queries/client";
-import { api, enc, errorMessage } from "@/lib/api";
+import { api, enc, errorMessage, HttpError } from "@/lib/api";
 import { registerPasskey } from "@/lib/auth";
 import { currentSubscription, pushSupported, storedTopics, subscribePush, unsubscribePush } from "@/lib/push";
 import { useTheme, type Theme } from "@/lib/theme";
@@ -57,7 +58,7 @@ function AccountPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <PasswordCard hasPassword={me.hasPassword} />
         <TotpCard hasPassword={me.hasPassword} enabled={me.hasTotp} />
-        <PasskeysCard passkeys={me.passkeys} />
+        <PasskeysCard passkeys={me.passkeys} hasPassword={me.hasPassword} />
         <PushCard />
         <ThemeCard />
       </div>
@@ -79,7 +80,8 @@ function PasswordCard({ hasPassword }: { hasPassword: boolean }) {
       setPw2("");
     },
   });
-  const tooShort = pw.length > 0 && pw.length < 10;
+  // matches the server's minimum (admin-api PasswordSet)
+  const tooShort = pw.length > 0 && pw.length < 8;
   const mismatch = pw2.length > 0 && pw !== pw2;
   return (
     <Card>
@@ -96,20 +98,22 @@ function PasswordCard({ hasPassword }: { hasPassword: boolean }) {
           onSubmit={(e) => {
             e.preventDefault();
             if (tooShort || mismatch || !pw) return;
-            set.mutate({ password: pw, currentPassword: hasPassword ? current : undefined });
+            // the server waives the current password right after a Nostr sign-in, so only send it when entered
+            set.mutate({ password: pw, currentPassword: hasPassword && current ? current : undefined });
           }}
         >
           <input type="text" autoComplete="username" className="hidden" readOnly />
           {hasPassword && (
             <div className="space-y-2">
               <Label htmlFor="pw-current">Current password</Label>
-              <Input id="pw-current" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+              <Input id="pw-current" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Not needed within 10 minutes of signing in with your Nostr key.</p>
             </div>
           )}
           <div className="space-y-2">
             <Label htmlFor="pw-new">New password</Label>
             <Input id="pw-new" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} aria-invalid={tooShort} />
-            {tooShort && <p className="text-xs text-destructive">Use at least 10 characters</p>}
+            {tooShort && <p className="text-xs text-destructive">Use at least 8 characters</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="pw-new2">Confirm new password</Label>
@@ -136,10 +140,21 @@ function TotpCard({ hasPassword, enabled }: { hasPassword: boolean; enabled: boo
     setDisabling(false);
     setCode("");
   };
-  const start = useApiMutation({
-    fn: () => api.post<{ secret: string; uri: string }>("/auth/totp/setup", {}),
-    onSuccess: (d) => setSetup(d),
-  });
+  const [reauth, setReauth] = React.useState<Reauth | null>(null);
+  const [starting, setStarting] = React.useState(false);
+  const begin = async (currentPassword?: string) => {
+    setStarting(true);
+    try {
+      setSetup(await api.post<{ secret: string; uri: string }>("/auth/totp/setup", currentPassword ? { currentPassword } : {}));
+      setReauth(null);
+    } catch (err) {
+      // a session that isn't fresh confirms the password (or signs in again when the password is newer than it)
+      if (err instanceof HttpError && err.code === "reauth_required") setReauth(currentPassword ? "signin" : "password");
+      else toast.error("Could not start setup", { description: errorMessage(err) });
+    } finally {
+      setStarting(false);
+    }
+  };
   const enable = useApiMutation({
     fn: (c: string) => api.post("/auth/totp/enable", { code: c }),
     invalidate: [["me"]],
@@ -173,7 +188,7 @@ function TotpCard({ hasPassword, enabled }: { hasPassword: boolean; enabled: boo
             Disable
           </Button>
         ) : (
-          <Button variant="outline" onClick={() => start.mutate()} disabled={!hasPassword || start.isPending}>
+          <Button variant="outline" onClick={() => begin()} disabled={!hasPassword || starting}>
             <ShieldCheck /> Set up
           </Button>
         )}
@@ -182,7 +197,7 @@ function TotpCard({ hasPassword, enabled }: { hasPassword: boolean; enabled: boo
         open={!!setup || disabling}
         onOpenChange={(o) => !o && close()}
         title={disabling ? "Disable two-factor authentication" : "Set up authenticator app"}
-        description={disabling ? "Enter a current code from your authenticator app." : "Add this account to your authenticator app, then enter the 6-digit code it shows."}
+        description={disabling ? "Enter a current code from your authenticator app. A code you just used to sign in can't be reused — wait for the next one." : "Add this account to your authenticator app, then enter the 6-digit code it shows."}
         footer={
           <Button type="submit" form="totp-form" disabled={!validCode || pending}>
             {disabling ? "Disable" : "Verify and enable"}
@@ -227,27 +242,99 @@ function TotpCard({ hasPassword, enabled }: { hasPassword: boolean; enabled: boo
           </div>
         </form>
       </ResponsiveDialog>
+      <ReauthDialog reauth={reauth} action="set up two-factor authentication" busy={starting} onCancel={() => setReauth(null)} onSubmit={(pw) => begin(pw)} />
     </Card>
   );
 }
 
-function PasskeysCard({ passkeys }: { passkeys: { id: string; name: string; createdAt: number; lastUsedAt: number | null }[] }) {
+/** "password": the server wants the current password; "signin": only a fresh sign-in will do */
+type Reauth = "password" | "signin";
+
+/** Asks a session that isn't fresh to prove it's still its owner before a security-sensitive change. */
+function ReauthDialog({ reauth, action, busy, onCancel, onSubmit }: { reauth: Reauth | null; action: string; busy: boolean; onCancel: () => void; onSubmit: (pw: string) => void }) {
+  const [pw, setPw] = React.useState("");
+  // keeps showing the last mode while the dialog animates closed
+  const [mode, setMode] = React.useState<Reauth>("password");
+  React.useEffect(() => {
+    if (reauth) setMode(reauth);
+    else setPw("");
+  }, [reauth]);
+  return (
+    <ResponsiveDialog
+      open={!!reauth}
+      onOpenChange={(o) => !o && onCancel()}
+      title="Confirm it's you"
+      footer={
+        mode === "password" ? (
+          <Button type="submit" form="reauth-form" disabled={!pw || busy}>
+            Continue
+          </Button>
+        ) : (
+          <Button variant="outline" onClick={onCancel}>
+            Close
+          </Button>
+        )
+      }
+    >
+      {mode === "password" ? (
+        <form
+          id="reauth-form"
+          className="space-y-2 pb-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pw) onSubmit(pw);
+          }}
+        >
+          <Label htmlFor="reauth-pw">Current password</Label>
+          <Input id="reauth-pw" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
+          <p className="text-xs text-muted-foreground">Confirm your password to {action}, or sign in again.</p>
+        </form>
+      ) : (
+        <p className="pb-2 text-sm text-muted-foreground">For your security, sign out and sign in again, then {action} within 15 minutes.</p>
+      )}
+    </ResponsiveDialog>
+  );
+}
+
+function PasskeysCard({ passkeys, hasPassword }: { passkeys: { id: string; name: string; createdAt: number; lastUsedAt: number | null }[]; hasPassword: boolean }) {
   const confirm = useConfirm();
   const [adding, setAdding] = React.useState(false);
   const [name, setName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const remove = useApiMutation({ fn: (id: string) => api.del(`/auth/passkey/${enc(id)}`), invalidate: [["me"]], success: "Passkey removed" });
+  const [reauth, setReauth] = React.useState<Reauth | null>(null);
+  const [pw, setPw] = React.useState("");
+  const qc = useQueryClient();
+  const [removing, setRemoving] = React.useState<{ id: string; reauth: Reauth } | null>(null);
+  const [removeBusy, setRemoveBusy] = React.useState(false);
+  const remove = async (id: string, currentPassword?: string) => {
+    setRemoveBusy(true);
+    try {
+      await api.del(`/auth/passkey/${enc(id)}`, currentPassword ? { currentPassword } : undefined);
+      toast.success("Passkey removed");
+      setRemoving(null);
+      qc.invalidateQueries({ queryKey: ["me"] });
+    } catch (err) {
+      if (err instanceof HttpError && err.code === "reauth_required") setRemoving({ id, reauth: hasPassword && !currentPassword ? "password" : "signin" });
+      else toast.error("Could not remove passkey", { description: errorMessage(err) });
+    } finally {
+      setRemoveBusy(false);
+    }
+  };
   const supported = typeof window !== "undefined" && "PublicKeyCredential" in window;
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await registerPasskey(name.trim() || defaultPasskeyName());
+      await registerPasskey(name.trim() || defaultPasskeyName(), pw || undefined);
       toast.success("Passkey added");
       setAdding(false);
       setName("");
+      setReauth(null);
+      setPw("");
     } catch (err) {
-      if ((err as Error).name !== "NotAllowedError") toast.error("Could not add passkey", { description: errorMessage(err) });
+      // no password, or one the server won't accept for this session (set during it): a password field can't help
+      if (err instanceof HttpError && err.code === "reauth_required") setReauth(hasPassword && !pw ? "password" : "signin");
+      else if ((err as Error).name !== "NotAllowedError") toast.error("Could not add passkey", { description: errorMessage(err) });
     } finally {
       setBusy(false);
     }
@@ -277,7 +364,7 @@ function PasskeysCard({ passkeys }: { passkeys: { id: string; name: string; crea
               className="text-destructive"
               aria-label="Remove passkey"
               onClick={async () => {
-                if (await confirm({ title: `Remove passkey “${p.name}”?`, destructive: true, confirmText: "Remove" })) remove.mutate(p.id);
+                if (await confirm({ title: `Remove passkey “${p.name}”?`, destructive: true, confirmText: "Remove" })) await remove(p.id);
               }}
             >
               <Trash2 />
@@ -292,7 +379,13 @@ function PasskeysCard({ passkeys }: { passkeys: { id: string; name: string; crea
       </CardFooter>
       <ResponsiveDialog
         open={adding}
-        onOpenChange={setAdding}
+        onOpenChange={(o) => {
+          setAdding(o);
+          if (!o) {
+            setReauth(null);
+            setPw("");
+          }
+        }}
         title="Add passkey"
         description="Give it a name so you can recognise it later."
         footer={
@@ -304,8 +397,25 @@ function PasskeysCard({ passkeys }: { passkeys: { id: string; name: string; crea
         <form id="pk-form" onSubmit={add} className="space-y-2 pb-2">
           <Label htmlFor="pk-name">Name</Label>
           <Input id="pk-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={defaultPasskeyName()} />
+          {reauth === "signin" && (
+            <p className="text-xs text-muted-foreground">For your security, sign out and sign in again, then add the passkey within 15 minutes.</p>
+          )}
+          {reauth === "password" && (
+            <>
+              <Label htmlFor="pk-pw">Current password</Label>
+              <Input id="pk-pw" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Confirm your password to add a passkey, or sign in again.</p>
+            </>
+          )}
         </form>
       </ResponsiveDialog>
+      <ReauthDialog
+        reauth={removing?.reauth ?? null}
+        action="remove a passkey"
+        busy={removeBusy}
+        onCancel={() => setRemoving(null)}
+        onSubmit={(pw) => removing && remove(removing.id, pw)}
+      />
     </Card>
   );
 }
@@ -319,7 +429,6 @@ function defaultPasskeyName() {
 const TOPICS: { key: PushTopic; label: string; hint: string }[] = [
   { key: "reports", label: "New reports", hint: "When a user files a report" },
   { key: "alerts", label: "System alerts", hint: "High load, errors, plugin failures" },
-  { key: "users", label: "New users", hint: "When someone joins via invite or is added" },
 ];
 
 function PushCard() {

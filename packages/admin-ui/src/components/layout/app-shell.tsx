@@ -29,6 +29,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const can = useCan();
   const plugins = usePlugins(can("plugins.view"));
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   React.useEffect(() => {
     live.onNavigate = (url) => navigate({ to: url as "/" });
@@ -47,7 +48,8 @@ export function AppShell() {
         <SidebarInset className="min-w-0">
           <TopBar />
           <div className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 px-3 pt-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:px-6 sm:pt-6 md:pb-8">
-            <ErrorBoundary label="Page">
+            {/* keyed so a crashed page doesn't keep showing the error after navigating away */}
+            <ErrorBoundary key={pathname} label="Page">
               <Outlet />
             </ErrorBoundary>
           </div>

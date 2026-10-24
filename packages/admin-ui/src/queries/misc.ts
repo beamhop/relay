@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type {
   AuditView, GroupView, InviteView, IpRuleInput, IpRule, PluginView, SettingsPatch, SettingsResponse,
 } from "@beamhop/sdk/admin-contract";
-import { api, enc } from "@/lib/api";
+import { api, enc, HttpError } from "@/lib/api";
 import { useApiMutation } from "./client";
 
 // invites
@@ -21,8 +21,26 @@ export function useInviteActions() {
 // ip rules
 export const useIpRules = () =>
   useQuery({ queryKey: ["ip-rules"], queryFn: () => api.get<{ items: IpRule[] }>("/ip-rules").then((r) => r.items ?? []) });
+/**
+ * The API refuses an allow rule wider than an IPv4 /16 or an IPv6 /48 (`broad_allow_rule`) unless it is resent with
+ * `confirmBroad: true`. `confirmBroad` is asked when that happens: true resends, false resolves to null (no toast).
+ */
+export type AddIpRuleVars = Omit<IpRuleInput, "confirmBroad"> & { confirmBroad?: () => Promise<boolean> };
+
 export function useIpRuleActions() {
-  const add = useApiMutation({ fn: (body: IpRuleInput) => api.post("/ip-rules", body), invalidate: [["ip-rules"]], success: "Rule added" });
+  const add = useApiMutation({
+    fn: async ({ confirmBroad, ...rule }: AddIpRuleVars) => {
+      try {
+        return await api.post<IpRule>("/ip-rules", rule);
+      } catch (e) {
+        if (!(e instanceof HttpError && e.code === "broad_allow_rule" && confirmBroad)) throw e;
+        if (!(await confirmBroad())) return null;
+        return api.post<IpRule>("/ip-rules", { ...rule, confirmBroad: true });
+      }
+    },
+    invalidate: [["ip-rules"]],
+    success: (r) => (r ? "Rule added" : undefined),
+  });
   const remove = useApiMutation({ fn: (cidr: string) => api.del(`/ip-rules/${enc(cidr)}`), invalidate: [["ip-rules"]], success: "Rule removed" });
   return { add, remove };
 }

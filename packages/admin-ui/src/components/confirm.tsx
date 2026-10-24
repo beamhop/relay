@@ -20,30 +20,35 @@ export interface ConfirmOptions {
 }
 export interface ConfirmResult { options: Record<string, boolean>; input: string }
 
-type Pending = ConfirmOptions & { resolve: (r: ConfirmResult | null) => void };
+/** a queued dialog carries its own checkbox/input state, initialised when it's enqueued */
+type Pending = ConfirmOptions & { resolve: (r: ConfirmResult | null) => void; values: Record<string, boolean>; text: string };
 const Ctx = React.createContext<(o: ConfirmOptions) => Promise<ConfirmResult | null>>(async () => null);
 
 /** `const confirm = useConfirm(); if (await confirm({...})) …` */
 export const useConfirm = () => React.useContext(Ctx);
 
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
-  const [pending, setPending] = React.useState<Pending | null>(null);
-  const [opts, setOpts] = React.useState<Record<string, boolean>>({});
-  const [input, setInput] = React.useState("");
+  // queued so a second confirm() while one is open waits its turn instead of orphaning the first promise
+  const [queue, setQueue] = React.useState<Pending[]>([]);
+  const pending = queue[0] ?? null;
+  const updateCurrent = (patch: Partial<Pick<Pending, "values" | "text">>) =>
+    setQueue((q) => (q.length ? [{ ...q[0], ...patch }, ...q.slice(1)] : q));
 
   const confirm = React.useCallback(
     (o: ConfirmOptions) =>
-      new Promise<ConfirmResult | null>((resolve) => {
-        setOpts(Object.fromEntries((o.options ?? []).map((x) => [x.key, !!x.default])));
-        setInput("");
-        setPending({ ...o, resolve });
-      }),
+      new Promise<ConfirmResult | null>((resolve) =>
+        setQueue((q) => [...q, { ...o, resolve, values: Object.fromEntries((o.options ?? []).map((x) => [x.key, !!x.default])), text: "" }]),
+      ),
     [],
   );
 
   const close = (ok: boolean) => {
-    pending?.resolve(ok ? { options: opts, input } : null);
-    setPending(null);
+    if (!pending) return;
+    pending.resolve(ok ? { options: pending.values, input: pending.text } : null);
+    // drop only the dialog just resolved (items are copied on edit, so match by its resolver): a second close
+    // before the re-render must not drop the next queued dialog
+    const done = pending.resolve;
+    setQueue((q) => (q[0]?.resolve === done ? q.slice(1) : q));
   };
 
   return (
@@ -58,14 +63,17 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
           {pending?.input && (
             <div className="space-y-2">
               <Label htmlFor="confirm-input">{pending.input.label}</Label>
-              <Input id="confirm-input" value={input} placeholder={pending.input.placeholder} onChange={(e) => setInput(e.target.value)} />
+              <Input id="confirm-input" value={pending.text} placeholder={pending.input.placeholder} onChange={(e) => updateCurrent({ text: e.target.value })} />
             </div>
           )}
           {!!pending?.options?.length && (
             <div className="space-y-3">
               {pending.options.map((o) => (
                 <label key={o.key} className="flex min-h-8 cursor-pointer items-center gap-3 text-sm">
-                  <Checkbox checked={opts[o.key]} onCheckedChange={(v) => setOpts((s) => ({ ...s, [o.key]: v === true }))} />
+                  <Checkbox
+                    checked={!!pending.values[o.key]}
+                    onCheckedChange={(v) => updateCurrent({ values: { ...pending.values, [o.key]: v === true } })}
+                  />
                   {o.label}
                 </label>
               ))}

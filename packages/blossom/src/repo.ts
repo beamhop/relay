@@ -89,10 +89,6 @@ export class BlobRepo {
     return (await this.db.run("UPDATE blossom_blobs SET status = ? WHERE sha256 = ?", [status, sha256])).changes > 0;
   }
 
-  async setThumbnail(sha256: string, has: boolean): Promise<void> {
-    await this.db.run("UPDATE blossom_blobs SET has_thumbnail = ? WHERE sha256 = ?", [has ? 1 : 0, sha256]);
-  }
-
   async remove(sha256: string): Promise<void> {
     await this.db.run("DELETE FROM blossom_owners WHERE sha256 = ?", [sha256]);
     await this.db.run("DELETE FROM blossom_blobs WHERE sha256 = ?", [sha256]);

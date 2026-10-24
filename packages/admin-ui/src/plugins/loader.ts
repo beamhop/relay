@@ -12,7 +12,7 @@ function ensureHost() {
   return hostReady;
 }
 
-export function createPluginApi(name: string): AdminUiPluginApi {
+function createPluginApi(name: string): AdminUiPluginApi {
   const api: AdminUiPluginApi = {
     pluginName: name,
     registerPage(page) {
@@ -44,7 +44,22 @@ export function createPluginApi(name: string): AdminUiPluginApi {
 
 /** Load the UI bundles of all running plugins. Errors are isolated per plugin. */
 export async function loadPluginUis(plugins: PluginView[]) {
-  const withUi = plugins.filter((p) => p.uiUrl && p.enabled && p.status === "running" && !loaded.has(p.name));
+  const running = new Set(plugins.filter((p) => p.uiUrl && p.enabled && p.status === "running").map((p) => p.name));
+  // unload UIs of plugins that were disabled/stopped since they were loaded
+  const gone = [...loaded].filter((n) => !running.has(n));
+  if (gone.length) {
+    for (const n of gone) loaded.delete(n);
+    const keep = <T extends { plugin: string }>(xs: T[]) => xs.filter((x) => !gone.includes(x.plugin));
+    registry.set((s) => ({
+      ...s,
+      pages: keep(s.pages),
+      widgets: keep(s.widgets),
+      userActions: keep(s.userActions),
+      eventActions: keep(s.eventActions),
+      errors: Object.fromEntries(Object.entries(s.errors).filter(([k]) => !gone.includes(k))),
+    }));
+  }
+  const withUi = plugins.filter((p) => running.has(p.name) && !loaded.has(p.name));
   if (!withUi.length) {
     registry.set((s) => ({ ...s, loaded: true }));
     return;

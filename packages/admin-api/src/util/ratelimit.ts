@@ -54,6 +54,30 @@ export class LoginLimiter {
   }
 }
 
+/** Fixed-window counter per key (e.g. unauthenticated challenge requests per IP). */
+export class WindowCounter {
+  private windows = new Map<string, { start: number; count: number }>();
+  constructor(
+    private readonly now: () => number,
+    private readonly max: number,
+    private readonly windowMs: number,
+  ) {}
+  /** Counts a hit; false when the key exceeded `max` in the current window. */
+  hit(key: string): boolean {
+    const n = this.now();
+    let w = this.windows.get(key);
+    if (!w || n - w.start >= this.windowMs) {
+      if (!w && this.windows.size >= 50_000) this.prune(n);
+      this.windows.set(key, (w = { start: n, count: 0 }));
+    }
+    w.count++;
+    return w.count <= this.max;
+  }
+  private prune(n: number) {
+    for (const [k, w] of this.windows) if (n - w.start >= this.windowMs) this.windows.delete(k);
+  }
+}
+
 /** Simple token bucket (used for SSE event throttling). */
 export class TokenBucket {
   private tokens: number;

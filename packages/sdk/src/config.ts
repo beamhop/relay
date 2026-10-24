@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Loopback and private networks: a reverse proxy on the same host, a container network or a LAN. */
+export const DEFAULT_TRUSTED_PROXIES = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"] as const;
+
 /** Static, boot-time configuration (file `beamhop.config.json` + env BEAMHOP_*). Restart required to change. */
 export const ConfigSchema = z.object({
   server: z
@@ -8,8 +11,18 @@ export const ConfigSchema = z.object({
       port: z.number().int().default(3334),
       /** public base URL e.g. https://relay.example.com — used for NIP-42 relay tag, NIP-98, Blossom URLs */
       publicUrl: z.string().default("http://localhost:3334"),
-      /** trust X-Forwarded-For / X-Real-IP */
+      /** trust the reverse proxy's client-IP header (see proxyIpHeader) */
       trustProxy: z.boolean().default(false),
+      /**
+       * header the trusted proxy puts the client IP in: "x-forwarded-for" (rightmost entry; default) or a
+       * single-address header the proxy *sets* such as "x-real-ip" / "cf-connecting-ip"
+       */
+      proxyIpHeader: z.string().default("x-forwarded-for"),
+      /**
+       * peers (addresses or CIDR ranges) whose client-IP header is believed when trustProxy is on; anyone else
+       * is identified by their own socket address, so a client that reaches the port directly can't spoof it
+       */
+      trustedProxies: z.array(z.string()).default([...DEFAULT_TRUSTED_PROXIES]),
     })
     .prefault({}),
   database: z
@@ -37,6 +50,29 @@ export const ConfigSchema = z.object({
           publicUrl: z.string().optional(),
         })
         .optional(),
+      /** upload/mirror abuse limits; unset fields keep the built-in defaults (see the blossom README) */
+      limits: z
+        .object({
+          /** PUT /upload + PUT /mirror per minute per client IP (IPv6: /64); 0 = unlimited (default 60) */
+          uploadsPerMinutePerIp: z.number().int().min(0).optional(),
+          /** PUT /upload + PUT /mirror per minute per pubkey; 0 = unlimited (default 60) */
+          uploadsPerMinutePerPubkey: z.number().int().min(0).optional(),
+          /** ingests (sniffing, stripping, thumbnails, storing) running at once (default 8) */
+          maxConcurrentUploads: z.number().int().min(1).optional(),
+          /** received bodies waiting for an ingest slot before 503 (default 32) */
+          maxQueuedUploads: z.number().int().min(0).optional(),
+          /** upload/mirror bodies held in memory at once, bytes (default 256 MiB; never below 2 × maxUploadBytes) */
+          maxBufferedUploadBytes: z.number().int().min(1).optional(),
+          /** bodies being received at once per client IP (IPv6: /64); 0 = unlimited (default 4) */
+          maxConcurrentUploadsPerIp: z.number().int().min(0).optional(),
+          /** abort an upload body that sends nothing for this long, ms (default 15000) */
+          uploadStallMs: z.number().int().min(1000).optional(),
+          /** after the first 30 s, abort bodies averaging below this many bytes/s; 0 = off (default 4096) */
+          minUploadBytesPerSec: z.number().int().min(0).optional(),
+          /** destination ports BUD-04 mirroring may connect to (default [80, 443]) */
+          mirrorPorts: z.array(z.number().int().min(1).max(65535)).optional(),
+        })
+        .optional(),
     })
     .prefault({}),
   metrics: z
@@ -60,7 +96,7 @@ export const ConfigSchema = z.object({
       enabled: z.boolean().default(true),
       /** pubkeys (hex) that are always `owner` */
       owners: z.array(z.string()).default([]),
-      /** HMAC secret for sessions; generated + persisted to KV if absent */
+      /** @deprecated unused (admin sessions are random server-side ids); still accepted so old configs load */
       sessionSecret: z.string().optional(),
       /** directory of the built admin-ui (defaults to packages/admin-ui/dist or embedded) */
       uiDir: z.string().optional(),
@@ -71,8 +107,14 @@ export const ConfigSchema = z.object({
     .object({
       /** local folder of plugins (each a folder with package.json / index.ts) */
       dir: z.string().default("./plugins"),
-      /** npm package names to load in addition to auto-discovered beamhop-plugin-NAME and @scope/beamhop-plugin-NAME */
+      /** npm package names (or paths) to load */
       packages: z.array(z.string()).default([]),
+      /**
+       * also load every beamhop-plugin-NAME / @scope/beamhop-plugin-NAME package found in node_modules. Off by default:
+       * discovered modules are imported (their top-level code runs) at boot, so a transitive dependency or typosquat
+       * with such a name would run inside the relay
+       */
+      autoDiscoverNpm: z.boolean().default(false),
     })
     .prefault({}),
   logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
@@ -106,6 +148,20 @@ export const WordFilterSchema = z.object({
 });
 export type WordFilter = z.infer<typeof WordFilterSchema>;
 
+/** "" or an absolute http(s) URL — these render as links/images on the public landing page and in NIP-11. */
+const HttpUrlOrEmpty = z
+  .string()
+  .refine((v) => {
+    if (v === "") return true;
+    try {
+      const u = new URL(v);
+      return u.protocol === "http:" || u.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }, "must be an http(s) URL")
+  .default("");
+
 /**
  * Runtime settings — stored in KV (namespace "settings", key "runtime"), editable live from admin panel.
  * Every package reads these through `SettingsService`.
@@ -115,13 +171,13 @@ export const RuntimeSettingsSchema = z.object({
     .object({
       name: z.string().default("beamhop relay"),
       description: z.string().default("A beamhop nostr relay"),
-      icon: z.string().default(""),
-      banner: z.string().default(""),
+      icon: HttpUrlOrEmpty,
+      banner: HttpUrlOrEmpty,
       contact: z.string().default(""),
       /** operator pubkey for NIP-11 */
       pubkey: z.string().default(""),
-      termsOfService: z.string().default(""),
-      postingPolicy: z.string().default(""),
+      termsOfService: HttpUrlOrEmpty,
+      postingPolicy: HttpUrlOrEmpty,
     })
     .prefault({}),
   access: z

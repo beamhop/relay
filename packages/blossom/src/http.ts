@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 
 export class BlossomError extends Error {
   constructor(readonly status: number, readonly reason: string) {
@@ -35,36 +36,98 @@ export function jsonResponse(body: unknown, status = 200): Response {
 
 export const sha256Hex = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
+export interface ReadLimits {
+  /** reserves memory for each chunk before it is kept (shared budget); false aborts with 503 */
+  reserve?: (bytes: number) => boolean;
+  /**
+   * admission check against the announced size (Content-Length) before anything is read: false → 503 right away
+   * instead of mid-body. Nothing is held by it — bytes are still reserved as they arrive — so a client lying
+   * about its Content-Length can't park budget it never sends.
+   */
+  admit?: (bytes: number) => boolean;
+  /** abort with 408 when no data arrives for this long (ms) */
+  stallMs?: number;
+  /** once `rateGraceMs` have passed, abort with 408 while the average rate is below this (bytes/s) */
+  minBytesPerSec?: number;
+  rateGraceMs?: number;
+}
+
+const EMPTY = new Uint8Array(0);
+
+type ReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>["read"]>>;
+
+async function readOrStall<T>(reader: ReadableStreamDefaultReader<T>, ms: number | undefined): Promise<ReadResult<T> | "stalled"> {
+  if (!ms) return reader.read();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([reader.read(), new Promise<"stalled">((r) => (timer = setTimeout(() => r("stalled"), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Reads a stream fully while hashing incrementally; aborts with 413 once `maxBytes` is exceeded.
+ * With a size hint (Content-Length) bytes go straight into one buffer of that size. Without one (chunked) the
+ * chunks are kept and copied once at the end — the body is briefly held twice, which is what gets reserved —
+ * instead of regrowing a buffer (old + new copy alive on every doubling).
  */
 export async function readLimited(
   stream: ReadableStream<Uint8Array> | null,
   maxBytes: number,
+  sizeHint?: number,
+  limits: ReadLimits = {},
 ): Promise<{ data: Uint8Array; sha256: string }> {
   const hash = createHash("sha256");
+  const hint = sizeHint !== undefined && Number.isFinite(sizeHint) && sizeHint > 0 ? Math.min(sizeHint, maxBytes) : 0;
+  let buf: Uint8Array | undefined = hint ? new Uint8Array(hint) : undefined;
   const chunks: Uint8Array[] = [];
   let total = 0;
   if (stream) {
+    if (hint && limits.admit && !limits.admit(hint)) {
+      await stream.cancel().catch(() => {});
+      throw new BlossomError(503, "server busy, retry later");
+    }
     const reader = stream.getReader();
+    const fail = async (status: number, reason: string): Promise<never> => {
+      await reader.cancel().catch(() => {});
+      throw new BlossomError(status, reason);
+    };
+    const started = Date.now();
     for (;;) {
-      const { done, value } = await reader.read();
+      const r = await readOrStall(reader, limits.stallMs);
+      if (r === "stalled") await fail(408, "upload stalled");
+      const { done, value } = r as ReadResult<Uint8Array>;
       if (done) break;
       if (!value?.byteLength) continue;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        throw new BlossomError(413, `blob too large (max ${maxBytes} bytes)`);
+      if (total + value.byteLength > maxBytes) await fail(413, `blob too large (max ${maxBytes} bytes)`);
+      if (buf && total + value.byteLength > buf.byteLength) {
+        // more than the hint announced: fall back to collecting chunks
+        chunks.push(buf.subarray(0, total));
+        buf = undefined;
       }
+      if (limits.reserve && !limits.reserve(buf ? value.byteLength : value.byteLength * 2)) await fail(503, "server busy, retry later");
+      if (buf) buf.set(value, total);
+      else chunks.push(value);
+      total += value.byteLength;
       hash.update(value);
-      chunks.push(value);
+      const elapsed = Date.now() - started;
+      if (limits.minBytesPerSec && elapsed > (limits.rateGraceMs ?? 0) && total < (limits.minBytesPerSec * elapsed) / 1000) {
+        await fail(408, "upload too slow");
+      }
     }
   }
-  const data = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    data.set(c, off);
-    off += c.byteLength;
+  let data: Uint8Array;
+  if (buf) data = total === buf.byteLength ? buf : buf.subarray(0, total);
+  else if (chunks.length === 1) data = chunks[0];
+  else {
+    data = new Uint8Array(total);
+    let offset = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      data.set(chunks[i], offset);
+      offset += chunks[i].byteLength;
+      chunks[i] = EMPTY;
+    }
   }
   return { data, sha256: hash.digest("hex") };
 }
@@ -83,27 +146,44 @@ export function parseRange(header: string | null | undefined, size: number): { s
   let end: number;
   if (s === "") {
     const suffix = Number(e);
-    if (suffix === 0) return "unsatisfiable";
+    if (suffix === 0 || size === 0) return "unsatisfiable";
     start = Math.max(size - suffix, 0);
     end = size - 1;
   } else {
     start = Number(s);
+    // last-pos < first-pos is syntactically invalid: ignore the header (RFC 9110 §14.1.1), don't 416
+    if (e !== "" && Number(e) < start) return undefined;
     end = e === "" ? size - 1 : Math.min(Number(e), size - 1);
   }
-  if (start >= size || start > end) return "unsatisfiable";
+  if (start >= size) return "unsatisfiable";
   return { start, end };
 }
 
-/** Client IP; only trusts proxy headers when configured to. */
+/** Strips brackets, an IPv4 port and the IPv4-mapped IPv6 prefix (same rules as the server adapters). */
+export function normalizeIp(ip: string): string {
+  let s = ip.trim();
+  if (s.startsWith("[")) s = s.slice(1, s.indexOf("]"));
+  else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(s)) s = s.slice(0, s.lastIndexOf(":"));
+  if (s.toLowerCase().startsWith("::ffff:") && s.includes(".")) s = s.slice(7);
+  return s || "unknown";
+}
+
+/**
+ * Client IP. Prefers the address resolved by the server runtime adapter (`env.ip`, already proxy-aware and
+ * normalized) so blossom and the relay always agree. Standalone (no adapter): when trustProxy is on, the
+ * rightmost X-Forwarded-For hop (the one appended by the trusted proxy; anything left of it is client-controlled),
+ * X-Real-IP only when there's no X-Forwarded-For; non-IP values are ignored.
+ */
 export function clientIp(req: Request, trustProxy: boolean, env?: unknown): string {
-  if (trustProxy) {
-    const xff = req.headers.get("x-forwarded-for");
-    if (xff) return xff.split(",")[0].trim();
-    const real = req.headers.get("x-real-ip");
-    if (real) return real.trim();
-  }
   const e = env as { ip?: unknown; remoteAddress?: unknown } | undefined;
-  if (e && typeof e.ip === "string") return e.ip;
-  if (e && typeof e.remoteAddress === "string") return e.remoteAddress;
+  if (e && typeof e.ip === "string" && e.ip) return normalizeIp(e.ip);
+  if (trustProxy) {
+    // same default rules as the server adapters: rightmost X-Forwarded-For hop, X-Real-IP only without XFF
+    const hops = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const raw = hops.length ? hops[hops.length - 1] : req.headers.get("x-real-ip");
+    const ip = raw?.trim() ? normalizeIp(raw) : "";
+    if (isIP(ip)) return ip;
+  }
+  if (e && typeof e.remoteAddress === "string") return normalizeIp(e.remoteAddress);
   return "unknown";
 }

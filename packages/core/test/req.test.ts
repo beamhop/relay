@@ -7,7 +7,7 @@ describe("REQ", () => {
   test("stored results, EOSE, live delivery, CLOSE", async () => {
     const { connect, bus } = await setup();
     const executed: BusEvents["req.executed"][] = [];
-    bus.on("req.executed", (e) => executed.push(e));
+    bus.on("req.executed", (e) => void executed.push(e));
     const writer = connect();
     const reader = connect();
     const kp = keypair();
@@ -112,7 +112,7 @@ describe("NIP-42 AUTH", () => {
   test("valid auth, wrong challenge, wrong relay, stale", async () => {
     const { connect, bus } = await setup();
     const authed: unknown[] = [];
-    bus.on("connection.auth", (e) => authed.push(e));
+    bus.on("connection.auth", (e) => void authed.push(e));
     const c = connect();
     expect(c.challenge.length).toBeGreaterThan(8);
     const kp = keypair();

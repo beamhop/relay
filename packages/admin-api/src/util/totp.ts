@@ -2,7 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
-export function base32Encode(buf: Uint8Array): string {
+function base32Encode(buf: Uint8Array): string {
   let bits = 0;
   let value = 0;
   let out = "";
@@ -18,7 +18,7 @@ export function base32Encode(buf: Uint8Array): string {
   return out;
 }
 
-export function base32Decode(s: string): Buffer {
+function base32Decode(s: string): Buffer {
   const clean = s.replace(/=+$/, "").replace(/\s+/g, "").toUpperCase();
   let bits = 0;
   let value = 0;

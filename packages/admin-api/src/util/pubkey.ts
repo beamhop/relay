@@ -3,8 +3,6 @@ import { badRequest } from "../errors";
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 
-export const isHex64 = (s: string) => HEX64.test(s);
-
 /** Accepts hex, npub or nprofile; returns lowercase hex or undefined. */
 export function tryParsePubkey(input: string | undefined | null): string | undefined {
   if (!input) return undefined;

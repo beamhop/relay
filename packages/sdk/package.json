@@ -8,11 +8,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./admin-contract": "./src/admin-contract.ts",
-    "./ui-contract": "./src/ui-contract.ts"
+    "./ui-contract": "./src/ui-contract.ts",
+    "./regex-safety": "./src/regex-safety.ts"
   },
   "dependencies": {
     "hono": "^4.13.13",
-    "nostr-tools": "^2.25.2",
     "zod": "^4.6.7"
   }
 }

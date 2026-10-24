@@ -1,6 +1,7 @@
 import type { RejectCode } from "@beamhop/sdk";
 
-export const PREFIXES = [
+/** NIP-01 machine-readable prefixes ("mute" is NIP-01 too; it maps to the generic "blocked" code). */
+const PREFIXES = [
   "invalid",
   "pow",
   "duplicate",

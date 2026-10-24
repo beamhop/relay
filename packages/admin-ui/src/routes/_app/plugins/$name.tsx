@@ -86,7 +86,7 @@ function PluginPage() {
                 <Skeleton className="h-24" />
               ) : settings.error ? (
                 <ErrorState error={settings.error} retry={() => settings.refetch()} />
-              ) : !schema || (schema.type === "object" && !Object.keys(schema.properties ?? {}).length) ? (
+              ) : !schema || !Object.keys(schema).length || ((schema.type === "object" || !schema.type) && !Object.keys(schema.properties ?? {}).length) ? (
                 <p className="text-sm text-muted-foreground">This plugin has no configurable settings.</p>
               ) : (
                 <form

@@ -20,7 +20,17 @@ export class RoleService {
   isConfigOwner(pubkey: string) {
     return this.owners.has(pubkey);
   }
+  /**
+   * Role for admin access (panel, NIP-98, NIP-86, pushes): a banned or deny-listed user has none, though the stored
+   * role is kept, so lifting the ban restores it. Config owners can't be banned through the API and always resolve.
+   */
   async resolve(pubkey: string): Promise<AdminRole | null> {
+    if (this.owners.has(pubkey)) return "owner";
+    const u = await this.users.get(pubkey);
+    return u && u.status !== "banned" && !u.denied ? u.role : null;
+  }
+  /** Role for rank checks: the stored role whatever the status (a banned admin still outranks a moderator). */
+  async rankRole(pubkey: string): Promise<AdminRole | null> {
     if (this.owners.has(pubkey)) return "owner";
     return (await this.users.get(pubkey))?.role ?? null;
   }

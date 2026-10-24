@@ -132,7 +132,7 @@ class LiveStore {
   }
 
   private openUrl(url: string) {
-    if (/^https?:/.test(url)) window.open(url, "_blank");
+    if (/^https?:\/\//i.test(url)) window.open(url, "_blank", "noopener,noreferrer");
     else this.onNavigate?.(url.replace(/^\/admin/, ""));
   }
 }

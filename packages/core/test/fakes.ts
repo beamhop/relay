@@ -123,7 +123,7 @@ export class FakeEventStore implements EventStore {
     let n = 0;
     for (const e of [...this.events.values()]) {
       const exp = getTag(e, "expiration");
-      if (exp && Number(exp) < now && this.events.delete(e.id)) n++;
+      if (exp && Number(exp) <= now && this.events.delete(e.id)) n++;
     }
     return n;
   }
@@ -357,3 +357,12 @@ export async function setup(opts: { settings?: DeepPartial<RuntimeSettings>; con
 }
 
 export const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
+
+/** Polls `cond` until it holds (or fails after `timeoutMs`), for effects that run after an OK. */
+export async function eventually(cond: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await cond())) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await tick(5);
+  }
+}

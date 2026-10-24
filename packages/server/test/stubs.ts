@@ -173,7 +173,8 @@ export function stubMetrics(): MetricsService & { stopped: boolean; counters: Re
 
 export function stubAdminApi(): AdminApi {
   const app = new Hono();
-  app.get("/me", (c) => c.json({ pubkey: "me", ip: c.req.header("x-beamhop-client-ip") }));
+  // like the real admin-api: the client IP comes from the runtime adapter binding, never from a header
+  app.get("/me", (c) => c.json({ pubkey: "me", ip: (c.env as { ip?: string } | undefined)?.ip }));
   return { app, nip86: async () => Response.json({ result: ["supportedmethods"] }) };
 }
 

@@ -19,6 +19,7 @@ const ResolveSchema = z.object({ action: z.enum(ACTIONS), note: z.string().max(2
 const BulkSchema = z.object({ ids: z.array(z.string()).min(1).max(500), action: z.enum(ACTIONS), note: z.string().max(2000).optional() });
 
 export function registerReportRoutes(app: AdminApp, ctx: ApiContext) {
+  // ?target: a pubkey (hex / npub) lists the reports whose targetPubkey it is (see ReportService.list), or an event id / blob hash
   app.get("/reports", requirePermission("reports.view"), async (c) => {
     const q = readQuery(c, ListQuery);
     const target = q.target ? (tryParsePubkey(q.target) ?? q.target.toLowerCase()) : undefined;

@@ -149,7 +149,9 @@ export function authHeader(
   const now = Math.floor(Date.now() / 1000);
   const tags = [["t", verb], ["expiration", String(opts.expiration ?? now + 600)]];
   for (const x of opts.x ?? []) tags.push(["x", x]);
-  for (const s of opts.server ?? []) tags.push(["server", s]);
+  // upload tokens must be scoped (x or server tag); unscoped helper calls get this test server's domain
+  const servers = opts.server ?? (verb === "upload" && !opts.x?.length ? ["cdn.example.com"] : []);
+  for (const s of servers) tags.push(["server", s]);
   const ev = finalizeEvent({ kind: opts.kind ?? 24242, created_at: opts.createdAt ?? now - 1, tags, content: `${verb} blob` }, sk);
   const b64 = Buffer.from(JSON.stringify(ev)).toString("base64url");
   return `Nostr ${b64}`;

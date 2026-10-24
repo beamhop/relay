@@ -64,6 +64,9 @@ export class SpamScorer {
   private content = new Map<string, Map<string, { at: number; count: number }>>();
   /** pubkey → timestamps (ms) of recent events */
   private rate = new Map<string, number[]>();
+  /** event id → verdict: a re-sent copy of the same signed event (client retry / rebroadcast) isn't a repeat */
+  private verdicts = new Map<string, { at: number; verdict: SpamVerdict }>();
+  private static readonly MAX_VERDICTS = 50_000;
 
   private s: () => SpamSettings;
   private now: () => number;
@@ -74,8 +77,19 @@ export class SpamScorer {
   }
 
   score(event: NostrEvent, opts: { firstSeenAt?: number } = {}): SpamVerdict {
-    const s = this.s();
     const now = this.now();
+    const cached = event.id ? this.verdicts.get(event.id) : undefined;
+    if (cached && now - cached.at <= this.s().duplicateWindowSec * 1000) return cached.verdict;
+    const verdict = this.compute(event, opts, now);
+    if (event.id) {
+      if (this.verdicts.size >= SpamScorer.MAX_VERDICTS) this.verdicts.delete(this.verdicts.keys().next().value!);
+      this.verdicts.set(event.id, { at: now, verdict });
+    }
+    return verdict;
+  }
+
+  private compute(event: NostrEvent, opts: { firstSeenAt?: number }, now: number): SpamVerdict {
+    const s = this.s();
     const reasons: string[] = [];
     let score = 0;
     const text = event.content ?? "";
@@ -152,6 +166,7 @@ export class SpamScorer {
       if (recent.length) this.rate.set(pk, recent);
       else this.rate.delete(pk);
     }
+    for (const [id, v] of this.verdicts) if (now - v.at > windowMs) this.verdicts.delete(id);
   }
 
   get size() {
@@ -220,7 +235,8 @@ const plugin: BeamhopPlugin<typeof Settings> = {
       const event = (await c.req.json().catch(() => null)) as NostrEvent | null;
       const valid =
         !!event && typeof event === "object" && typeof event.content === "string" && typeof event.pubkey === "string" &&
-        typeof event.kind === "number" && Array.isArray(event.tags);
+        typeof event.kind === "number" && Array.isArray(event.tags) &&
+        event.tags.every((t) => Array.isArray(t) && t.every((v) => typeof v === "string"));
       if (!valid) return c.json({ error: "body must be a nostr event {pubkey, kind, tags, content}", code: "validation" }, 400);
       const preview = new SpamScorer(() => ctx.settings.get());
       return c.json(preview.score(event, { firstSeenAt: (await userInfo(event.pubkey)).firstSeenAt }));

@@ -23,7 +23,7 @@ export function CopyButton({ value, label, className, size = "icon-sm" }: { valu
       variant="ghost"
       size={size}
       className={cn("text-muted-foreground", className)}
-      aria-label={label ?? "Copy"}
+      aria-label={label ? `Copy ${label}` : "Copy"}
       onClick={async (e) => {
         e.stopPropagation();
         if (await copyText(value, label ? `${label} copied` : undefined)) {

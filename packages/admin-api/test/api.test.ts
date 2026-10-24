@@ -187,6 +187,13 @@ describe("settings", () => {
       body: { moderation: { wordFilters: [{ id: "r", pattern: "(", isRegex: true }] } },
     });
     expect(regex.status).toBe(400);
+    // catastrophic-backtracking patterns are refused at save time (they run on every event)
+    const redos = await h.asKey(h.owner, "/settings", {
+      method: "PATCH",
+      body: { moderation: { wordFilters: [{ id: "r", pattern: "^(\\w+\\s?)+$", isRegex: true }] } },
+    });
+    expect(redos.status).toBe(400);
+    expect(((await redos.json()) as { error: string }).error).toContain("nested quantifiers");
   });
 });
 
@@ -239,7 +246,7 @@ describe("events", () => {
     expect(q.items[0].reports).toBe(1);
     expect((await h.asKey(h.owner, "/events/query", { method: "POST", body: { filters: [{ bogus: 1 }] } })).status).toBe(400);
     const deleted: string[][] = [];
-    h.bus.on("event.deleted", (e) => deleted.push(e.ids));
+    h.bus.on("event.deleted", (e) => void deleted.push(e.ids));
     expect((await h.asKey(h.owner, `/events/${ev.id}`, { method: "DELETE", body: { reason: "spam" } })).status).toBe(200);
     expect(deleted).toEqual([[ev.id]]);
     expect((await h.asKey(h.owner, `/events/${ev.id}`)).status).toBe(404);
@@ -352,7 +359,7 @@ describe("media / misc", () => {
   test("bus admin.action emitted for mutations", async () => {
     const h = await createHarness();
     const seen: string[] = [];
-    h.bus.on("admin.action", (e) => seen.push(e.entry.action));
+    h.bus.on("admin.action", (e) => void seen.push(e.entry.action));
     await h.asKey(h.owner, `/users/${newKey().pk}/mute`, { method: "POST" });
     expect(seen).toContain("user.mute");
   });
@@ -379,7 +386,7 @@ describe("push", () => {
     });
     const vapid = (await (await h.asKey(h.owner, "/push/vapid")).json()) as { publicKey: string };
     expect(vapid.publicKey.length).toBeGreaterThan(40);
-    const sub = { endpoint: "https://push.example/abc", keys: { p256dh: "k", auth: "a" } };
+    const sub = { endpoint: "https://updates.push.services.mozilla.com/wpush/v2/abc", keys: { p256dh: "k", auth: "a" } };
     expect((await h.asKey(h.owner, "/push/subscribe", { method: "POST", body: { subscription: sub, topics: ["reports"] } })).status).toBe(200);
     const report = signEvent(newKey(), 1984, [["p", newKey().pk, "spam"]]);
     await h.relay.publish(report, "api");

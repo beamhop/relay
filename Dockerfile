@@ -29,10 +29,12 @@ ENV NODE_ENV=production \
     BEAMHOP_PLUGINS_DIR=/app/plugins \
     BEAMHOP_ADMIN_UI_DIR=/app/packages/admin-ui/dist
 WORKDIR /app
-COPY --from=deps --chown=bun:bun /app /app
-COPY --from=build --chown=bun:bun /app/packages/admin-ui/dist /app/packages/admin-ui/dist
-COPY --from=build --chown=bun:bun /app/plugins /app/plugins
-RUN mkdir -p /data && chown -R bun:bun /data
+# code (incl. the auto-imported plugins dir) stays root-owned and read-only for the runtime user, so a
+# file-write bug can't turn into persistent code execution; only /data is writable
+COPY --from=deps /app /app
+COPY --from=build /app/packages/admin-ui/dist /app/packages/admin-ui/dist
+COPY --from=build /app/plugins /app/plugins
+RUN mkdir -p /data && chown -R bun:bun /data && chmod -R go-w /app
 USER bun
 VOLUME ["/data"]
 EXPOSE 3334

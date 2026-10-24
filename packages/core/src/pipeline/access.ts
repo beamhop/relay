@@ -3,6 +3,12 @@ import type { RelayContext } from "../context";
 import type { Connection } from "../protocol/connection";
 
 const MAX_P_TAGS_CHECKED = 20;
+/**
+ * Kinds a non-member may send to a member's inbox on whitelist / invite relays (allowInboundToMembers):
+ * notes/replies, DMs, reposts, reactions, gift wraps, comments, zap receipts. Anything else (profiles,
+ * long-form, group content, …) would turn a p tag into a way around the access mode.
+ */
+export const INBOUND_KINDS: ReadonlySet<number> = new Set([1, 4, 6, 7, 16, 1059, 1111, 9735]);
 
 /** Access mode check (public / whitelist / invite / auth-required) for events received over websocket. */
 export async function checkAccess(ctx: RelayContext, event: NostrEvent, user: UserRecord | undefined, conn: Connection): Promise<string | undefined> {
@@ -21,7 +27,7 @@ export async function checkAccess(ctx: RelayContext, event: NostrEvent, user: Us
     case "whitelist":
     case "invite": {
       if (ctx.users.isMember(event.pubkey, user)) return undefined;
-      if (access.allowInboundToMembers && (await pTagsAMember(ctx, event))) return undefined;
+      if (access.allowInboundToMembers && INBOUND_KINDS.has(event.kind) && (await pTagsAMember(ctx, event))) return undefined;
       return access.mode === "invite"
         ? "restricted: this relay is invite-only; redeem an invite code first"
         : "restricted: you are not a member of this relay";

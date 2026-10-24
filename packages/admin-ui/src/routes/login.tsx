@@ -168,7 +168,25 @@ function PrivateKeyLogin({ busy, run }: { busy: string | null; run: RunFn }) {
     >
       <div className="space-y-1.5">
         <Label htmlFor="nsec">Private key</Label>
-        <Input id="nsec" type="password" placeholder="nsec1… or hex" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)} required />
+        {/* not type="password": browsers offer to save (and sync) password fields whatever autocomplete says, and a
+            Nostr secret key must never land in a password manager. Masked with CSS instead. */}
+        <Input
+          id="nsec"
+          type="text"
+          className="[-webkit-text-security:disc]"
+          placeholder="nsec1… or hex"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore
+          data-form-type="other"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          required
+        />
       </div>
       <p className="text-xs text-muted-foreground">Signs the login challenge in this browser. Your key is never sent to the server or saved — prefer an extension or remote signer where possible.</p>
       <Button type="submit" className="w-full" disabled={!!busy || !key.trim()}>

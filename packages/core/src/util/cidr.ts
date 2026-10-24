@@ -102,8 +102,20 @@ export function ipInCidr(ip: string, cidr: string): boolean {
   return !!p && !!c && cidrContains(c, p);
 }
 
-/** Canonical key for an IP (used for per-IP accounting). */
+/**
+ * Canonical key for an IP's network (used for per-IP rate limits and the per-network connection cap).
+ * IPv4-mapped forms collapse to IPv4; IPv6 is aggregated to its /64, since a single client
+ * typically controls a whole /64 and could otherwise rotate addresses for fresh buckets.
+ */
 export function ipKey(ip: string): string {
   const p = parseIp(ip);
-  return p ? `${p.v}:${p.value.toString(16)}` : ip;
+  if (!p) return ip;
+  return p.v === 4 ? `4:${p.value.toString(16)}` : `6:${(p.value >> 64n).toString(16)}/64`;
+}
+
+/** Canonical key for one address (IPv4-mapped forms collapse to IPv4); unlike ipKey(), IPv6 is not aggregated. */
+export function ipAddrKey(ip: string): string {
+  const p = parseIp(ip);
+  if (!p) return ip;
+  return p.v === 4 ? `4:${p.value.toString(16)}` : `6:${p.value.toString(16)}`;
 }

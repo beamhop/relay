@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { finalizeEvent } from "nostr-tools/pure";
 import { keypair, now, setup, type Keypair } from "./fakes";
 
-function nip98(kp: Keypair, url: string, method = "POST", created_at = now()) {
-  const ev = finalizeEvent({ kind: 27235, created_at, content: "", tags: [["u", url], ["method", method]] }, kp.sk);
+function nip98(kp: Keypair, url: string, method = "POST", created_at = now(), body?: string) {
+  const tags = [["u", url], ["method", method]];
+  if (body !== undefined) tags.push(["payload", createHash("sha256").update(body).digest("hex")]);
+  const ev = finalizeEvent({ kind: 27235, created_at, content: "", tags }, kp.sk);
   return `Nostr ${btoa(JSON.stringify(ev))}`;
 }
 
@@ -43,19 +46,21 @@ describe("HTTP", () => {
     const inv = await stores.invites.create({ createdBy: "admin", maxUses: 1 });
     const kp = keypair();
     const url = "https://relay.example.com/invite/redeem";
+    const body = (code: string) => JSON.stringify({ code });
     const post = (auth: string | undefined, code = inv.code) =>
-      relay.http.request("/invite/redeem", { method: "POST", headers: auth ? { Authorization: auth } : {}, body: JSON.stringify({ code }) });
+      relay.http.request("/invite/redeem", { method: "POST", headers: auth ? { Authorization: auth } : {}, body: body(code) });
 
     expect((await post(undefined)).status).toBe(401);
-    expect((await post(nip98(kp, "https://evil.example.com/invite/redeem"))).status).toBe(401);
-    expect((await post(nip98(kp, url, "GET"))).status).toBe(401);
-    expect((await post(nip98(kp, url, "POST", now() - 120))).status).toBe(401);
-    const used = nip98(kp, url, "POST", now() - 1);
+    expect((await post(nip98(kp, "https://evil.example.com/invite/redeem", "POST", now(), body(inv.code)))).status).toBe(401);
+    expect((await post(nip98(kp, url, "GET", now(), body(inv.code)))).status).toBe(401);
+    expect((await post(nip98(kp, url, "POST", now() - 120, body(inv.code)))).status).toBe(401);
+    expect((await post(nip98(kp, url))).status).toBe(401); // POST without a payload tag
+    const used = nip98(kp, url, "POST", now() - 1, body("wrong"));
     expect((await post(used, "wrong")).status).toBe(400);
-    expect((await post(used)).status).toBe(401); // replayed auth event
-    const ok = await post(nip98(kp, url));
+    expect((await post(used, "wrong")).status).toBe(401); // replayed auth event
+    const ok = await post(nip98(kp, url, "POST", now(), body(inv.code)));
     expect(ok.status).toBe(200);
     expect((await stores.users.get(kp.pk))?.allowed).toBe(true);
-    expect((await post(nip98(keypair(), url))).status).toBe(400); // exhausted
+    expect((await post(nip98(keypair(), url, "POST", now(), body(inv.code)))).status).toBe(400); // exhausted
   });
 });

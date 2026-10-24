@@ -48,12 +48,13 @@ export class CredentialService {
     private readonly nowSec: () => number,
   ) {}
 
-  async getPassword(pubkey: string): Promise<{ hash: string; totpSecret: string | null } | undefined> {
-    const r = await this.db.get<{ password_hash: string; totp_secret: string | null }>(
-      "SELECT password_hash, totp_secret FROM admin_credentials WHERE pubkey = ?",
+  /** `setAt`: when the password was last set (null for rows older than that column). */
+  async getPassword(pubkey: string): Promise<{ hash: string; totpSecret: string | null; setAt: number | null } | undefined> {
+    const r = await this.db.get<{ password_hash: string; totp_secret: string | null; password_set_at: number | string | null }>(
+      "SELECT password_hash, totp_secret, password_set_at FROM admin_credentials WHERE pubkey = ?",
       [pubkey],
     );
-    return r ? { hash: r.password_hash, totpSecret: r.totp_secret } : undefined;
+    return r ? { hash: r.password_hash, totpSecret: r.totp_secret, setAt: r.password_set_at == null ? null : Number(r.password_set_at) } : undefined;
   }
 
   async hasPassword(pubkey: string): Promise<boolean> {
@@ -63,14 +64,43 @@ export class CredentialService {
 
   async setPassword(pubkey: string, hash: string): Promise<void> {
     const now = this.nowSec();
-    const updated = await this.db.run("UPDATE admin_credentials SET password_hash = ?, updated_at = ? WHERE pubkey = ?", [hash, now, pubkey]);
+    const updated = await this.db.run("UPDATE admin_credentials SET password_hash = ?, updated_at = ?, password_set_at = ? WHERE pubkey = ?", [hash, now, now, pubkey]);
     if (!updated.changes) {
-      await this.db.run("INSERT INTO admin_credentials (pubkey, password_hash, totp_secret, updated_at) VALUES (?, ?, NULL, ?)", [pubkey, hash, now]);
+      await this.db.run("INSERT INTO admin_credentials (pubkey, password_hash, totp_secret, updated_at, password_set_at) VALUES (?, ?, NULL, ?, ?)", [
+        pubkey,
+        hash,
+        now,
+        now,
+      ]);
     }
   }
 
-  async setTotp(pubkey: string, secret: string | null): Promise<void> {
-    await this.db.run("UPDATE admin_credentials SET totp_secret = ?, updated_at = ? WHERE pubkey = ?", [secret, this.nowSec(), pubkey]);
+  /**
+   * Replaces a hash with a re-parameterized hash of the same password. Not a password change: `password_set_at` (and
+   * so trusted devices and fresh-auth checks) stays, and a concurrent password change wins (the old hash must match).
+   */
+  async rehashPassword(pubkey: string, oldHash: string, newHash: string): Promise<boolean> {
+    const r = await this.db.run("UPDATE admin_credentials SET password_hash = ? WHERE pubkey = ? AND password_hash = ?", [newHash, pubkey, oldHash]);
+    return r.changes > 0;
+  }
+
+  /** `usedStep`: the time step of the code that enabled the secret (it counts as consumed). */
+  async setTotp(pubkey: string, secret: string | null, usedStep: number | null = null): Promise<void> {
+    await this.db.run("UPDATE admin_credentials SET totp_secret = ?, totp_last_step = ?, updated_at = ? WHERE pubkey = ?", [
+      secret,
+      usedStep,
+      this.nowSec(),
+      pubkey,
+    ]);
+  }
+
+  /** Atomically marks a TOTP time step as used; false when it (or a later step) was already used. */
+  async consumeTotpStep(pubkey: string, step: number): Promise<boolean> {
+    const r = await this.db.run(
+      "UPDATE admin_credentials SET totp_last_step = ? WHERE pubkey = ? AND (totp_last_step IS NULL OR totp_last_step < ?)",
+      [step, pubkey, step],
+    );
+    return r.changes > 0;
   }
 
   async listPasskeys(pubkey: string): Promise<PasskeyRow[]> {

@@ -10,11 +10,11 @@ export { createS3Driver, type S3DriverConfig } from "./s3";
 type BlossomConfig = BeamhopConfig["blossom"];
 
 /** Creates the configured blob driver. Accepts either the full config or its `blossom` section. */
-export function createBlobDriver(config: BeamhopConfig | BlossomConfig): BlobDriver {
+export function createBlobDriver(config: BeamhopConfig | BlossomConfig, opts: { warn?: (msg: string, meta?: Record<string, unknown>) => void } = {}): BlobDriver {
   const cfg: BlossomConfig = "blossom" in config ? config.blossom : config;
   if (cfg.driver === "s3") {
     if (!cfg.s3) throw new Error("blossom.driver is 's3' but blossom.s3 is not configured");
-    return createS3Driver(cfg.s3);
+    return createS3Driver({ ...cfg.s3, warn: opts.warn });
   }
   return createFsDriver(cfg.fsPath);
 }

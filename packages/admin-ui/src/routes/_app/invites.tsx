@@ -110,7 +110,7 @@ function InvitesPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
-                        <CopyButton value={i.url} label="Invite link copied" />
+                        <CopyButton value={i.url} label="Invite link" />
                         <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => doRevoke(i.code)} aria-label="Revoke">
                           <Trash2 />
                         </Button>

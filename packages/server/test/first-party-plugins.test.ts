@@ -48,6 +48,14 @@ describe("first-party plugins", () => {
     const stats = await (await pm.adminRoutes.fetch(new Request("http://x/spam-filter/stats"))).json();
     expect(stats.blocked).toBeGreaterThan(0);
   });
+
+  test("spam-filter /score validates tags instead of throwing", async () => {
+    const score = (tags: unknown) =>
+      pm.adminRoutes.fetch(new Request("http://x/spam-filter/score", { method: "POST", body: JSON.stringify({ pubkey: "a".repeat(64), kind: 1, content: "hi", tags }) }));
+    expect((await score([null])).status).toBe(400);
+    expect((await score([["p", 5]])).status).toBe(400);
+    expect((await score([["p", "b".repeat(64)]])).status).toBe(200);
+  });
 });
 
 describe("SpamScorer heuristics", () => {
@@ -75,5 +83,13 @@ describe("SpamScorer heuristics", () => {
     expect(last.score).toBeGreaterThanOrEqual(1);
     for (let i = 0; i < 7; i++) last = s.score(ev(`msg ${i}`, "e".repeat(64)), { firstSeenAt: old });
     expect(last.score).toBe(0);
+  });
+
+  test("re-sending the same signed event (client retry) is not counted as a repeat or towards the rate", () => {
+    const s = new SpamScorer(settings);
+    const once = { ...ev("check out my new site at https://example.com please"), id: "f".repeat(64) };
+    const first = s.score(once);
+    expect(first.score).toBe(0.4); // new account posting a link
+    for (let i = 0; i < 8; i++) expect(s.score({ ...once }).score).toBe(first.score);
   });
 });

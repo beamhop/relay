@@ -8,6 +8,7 @@ import { useMe } from "@/queries/auth";
 import { useTheme, type Theme } from "@/lib/theme";
 import { logout } from "@/lib/auth";
 import { live } from "@/lib/live";
+import { unsubscribePush } from "@/lib/push";
 import { resetPluginUis } from "@/plugins/loader";
 import { displayName, shortNpub } from "@/lib/nostr";
 import { RoleBadge } from "@/components/badges";
@@ -28,6 +29,8 @@ export function useLogout() {
   return async () => {
     live.stop();
     resetPluginUis();
+    // drop this device's push subscription while the session is still valid, so a shared device stops receiving alerts
+    await unsubscribePush().catch(() => {});
     await logout().catch(() => {});
     navigate({ to: "/login" });
   };

@@ -4,6 +4,7 @@ import type { GroupsService } from "./nips/nip29/groups";
 import type { ContentPolicy } from "./pipeline/content-policy";
 import type { Verifier } from "./pipeline/verify";
 import type { Connection } from "./protocol/connection";
+import type { ReadLimits } from "./protocol/read-limits";
 import type { SubscriptionIndex } from "./subscriptions/index";
 import type { UserCache } from "./users";
 import type { RateLimiter } from "./util/rate-limit";
@@ -28,6 +29,10 @@ export interface RelayContext extends CoreDeps {
   policy: ContentPolicy;
   /** NIP-62: pubkey → created_at of its vanish request */
   vanished: Map<string, number>;
+  /** NIP-77 relay-wide accounting: items held by open sessions, NEG-OPENs being prepared (in total and per address) */
+  neg: { items: number; opening: number; openingByIp: Map<string, number> };
+  /** relay-wide read throttling: search/query concurrency, materialized result memory */
+  reads: ReadLimits;
   s(): RuntimeSettings;
   /** Fans out an accepted event to matching live subscriptions; returns recipient count. */
   broadcast(event: NostrEvent): number;

@@ -10,13 +10,6 @@ export function toNpub(hex: string): string {
     return hex;
   }
 }
-export function toNote(hex: string): string {
-  try {
-    return nip19.noteEncode(hex);
-  } catch {
-    return hex;
-  }
-}
 
 /** Accepts hex, npub, nprofile → hex pubkey (or undefined). */
 export function parsePubkey(input: string): string | undefined {
@@ -63,7 +56,7 @@ export function pubkeyHue(pubkey: string): number {
   return h;
 }
 
-export const KIND_NAMES: Record<number, string> = {
+const KIND_NAMES: Record<number, string> = {
   0: "Profile",
   1: "Note",
   2: "Relay rec.",
@@ -170,7 +163,6 @@ export function kindName(kind: number): string {
   if (kind >= 30000 && kind < 40000) return `Addressable ${kind}`;
   return `Kind ${kind}`;
 }
-export const kindLabel = (kind: number) => `${kindName(kind)} (${kind})`;
 
 export const getTag = (tags: string[][], name: string) => tags.find((t) => t[0] === name)?.[1];
 export const getTags = (tags: string[][], name: string) => tags.filter((t) => t[0] === name).map((t) => t[1]);

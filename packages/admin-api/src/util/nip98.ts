@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "@beamhop/sdk";
 
-export const NIP98_KIND = 27235;
+const NIP98_KIND = 27235;
 const HEX64 = /^[0-9a-f]{64}$/;
 
 export const sha256Hex = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
@@ -46,7 +46,7 @@ export function parseNostrAuthorization(header: string | undefined | null): Nost
   }
 }
 
-export function normalizeUrl(u: string): string | null {
+function normalizeUrl(u: string): string | null {
   try {
     const url = new URL(u);
     let path = url.pathname;
@@ -66,6 +66,8 @@ export interface Nip98Options {
   body?: Uint8Array | string | null;
   /** fail if there's no payload tag (NIP-86) */
   requirePayload?: boolean;
+  /** skip the payload hash check (caller verifies it later with `payloadMatches`, e.g. after authorization) */
+  skipPayload?: boolean;
   maxSkewSec?: number;
 }
 
@@ -82,10 +84,37 @@ export function verifyNip98(ev: NostrEvent, opts: Nip98Options): Nip98Result {
   if ((tag("method") ?? "").toUpperCase() !== opts.method.toUpperCase()) return { ok: false, reason: "auth event method mismatch" };
   const payload = tag("payload");
   if (opts.requirePayload && !payload) return { ok: false, reason: "auth event payload tag required" };
-  if (payload) {
-    const body = opts.body ?? "";
-    if (payload.toLowerCase() !== sha256Hex(body)) return { ok: false, reason: "auth event payload mismatch" };
-  }
+  if (payload && !opts.skipPayload && !payloadMatches(ev, opts.body)) return { ok: false, reason: "auth event payload mismatch" };
   if (!isValidSignedEvent(ev)) return { ok: false, reason: "invalid auth event signature" };
   return { ok: true };
+}
+
+/** True when the event has no `payload` tag, or it equals sha256(body). */
+export function payloadMatches(ev: NostrEvent, body: Uint8Array | string | null | undefined): boolean {
+  const payload = ev.tags.find((t) => t[0] === "payload")?.[1];
+  return !payload || payload.toLowerCase() === sha256Hex(body ?? "");
+}
+
+/** Reads a request body, giving up (null) as soon as it exceeds `max` bytes — also for chunked bodies without Content-Length. */
+export async function readBodyCapped(req: Request, max: number): Promise<Uint8Array | null> {
+  const len = Number(req.headers.get("content-length") ?? 0);
+  if (len > max) return null;
+  if (!req.body) return new Uint8Array(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let off = 0;
+  for (const c of chunks) (out.set(c, off), (off += c.byteLength));
+  return out;
 }

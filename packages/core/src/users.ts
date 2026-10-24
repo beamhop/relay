@@ -42,10 +42,6 @@ export class UserCache {
     else this.cache.clear();
   }
 
-  isOwner(pubkey: string) {
-    return this.owners.has(pubkey);
-  }
-
   /** Relay member: allow-listed, any admin-panel role, or configured owner. */
   isMember(pubkey: string, rec: UserRecord | undefined): boolean {
     return this.owners.has(pubkey) || !!rec?.allowed || (rec?.role ?? null) !== null;

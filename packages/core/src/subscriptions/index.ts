@@ -1,16 +1,16 @@
 import type { Filter, NostrEvent } from "@beamhop/sdk";
 import type { Subscription } from "../protocol/connection";
-import { matchFilter } from "../util/filter";
+import { type CompiledFilter, compileFilter, matchCompiled } from "../util/filter";
 
 interface Entry {
   sub: Subscription;
-  filter: Filter;
+  filter: CompiledFilter;
 }
 
 /**
  * Global fan-out index across all connections. Each filter is registered under its most selective
  * attribute (ids > authors > tag values > kinds); filters without any of these go to a broad list.
- * Candidate entries are then matched exactly with `matchFilter`.
+ * Candidate entries are then matched exactly (compiled filters, Set lookups).
  */
 export class SubscriptionIndex {
   private index = new Map<string, Set<Entry>>();
@@ -25,7 +25,7 @@ export class SubscriptionIndex {
     this.remove(sub);
     const regs: { entry: Entry; keys: string[] }[] = [];
     for (const filter of sub.filters) {
-      const entry: Entry = { sub, filter };
+      const entry: Entry = { sub, filter: compileFilter(filter) };
       const keys = keysForFilter(filter);
       if (keys.length === 0) this.broad.add(entry);
       for (const k of keys) {
@@ -58,7 +58,7 @@ export class SubscriptionIndex {
     const out = new Set<Subscription>();
     const check = (set: Set<Entry> | undefined) => {
       if (!set) return;
-      for (const e of set) if (!out.has(e.sub) && matchFilter(e.filter, event)) out.add(e.sub);
+      for (const e of set) if (!out.has(e.sub) && matchCompiled(e.filter, event)) out.add(e.sub);
     };
     check(this.index.get(`i:${event.id}`));
     check(this.index.get(`a:${event.pubkey}`));

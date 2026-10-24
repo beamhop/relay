@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { AuthError, authenticate, type AuthVerb, type BlossomAuth } from "./auth";
 import { SHA256_RE } from "./driver";
 import { BlossomError, clientIp, CORS_HEADERS, errorResponse, jsonResponse, parseRange, readLimited, withCors } from "./http";
-import { normalizeMime, isMimeAllowed } from "./mime";
+import { blobCsp, extFromMime, normalizeMime, isMimeAllowed, isInlineSafe } from "./mime";
 import { fetchRemote } from "./mirror";
 import type { BlossomCore } from "./service";
 
@@ -10,6 +10,10 @@ import type { BlossomCore } from "./service";
 const BLOB_PATH = "/:name{[0-9a-f]{64}(?:\\.[a-z0-9]{1,16}){0,2}}";
 const LIST_PATH = "/list/:pubkey{[0-9a-f]{64}}";
 const THUMB_SUFFIX = ".thumb.webp";
+/** PUT /mirror JSON body (`{"url": …}`) */
+const MAX_MIRROR_BODY = 16 * 1024;
+
+const contentLength = (v: string | null | undefined): number | undefined => (v && /^\d+$/.test(v.trim()) ? Number(v.trim()) : undefined);
 
 type Handler = (c: Context) => Promise<Response>;
 
@@ -39,6 +43,16 @@ export function createRoutes(core: BlossomCore): Hono {
   const auth = (c: Context, verb: AuthVerb, sha256?: string, requireX = false): BlossomAuth | undefined =>
     authenticate(c.req.header("authorization"), { verb, domains: core.domains, sha256, requireX });
 
+  /** For endpoints where auth only *widens* access: a bad/expired token is treated like no token. */
+  const optionalAuth = (c: Context, verb: AuthVerb, sha256?: string): BlossomAuth | undefined => {
+    try {
+      return auth(c, verb, sha256);
+    } catch (err) {
+      if (err instanceof AuthError) return undefined;
+      throw err;
+    }
+  };
+
   const requireAuth = (c: Context, verb: AuthVerb, sha256?: string, requireX = false): BlossomAuth => {
     const a = auth(c, verb, sha256, requireX);
     if (!a) throw new BlossomError(401, "authorization required");
@@ -57,31 +71,45 @@ export function createRoutes(core: BlossomCore): Hono {
       const sha256 = name.slice(0, 64);
       const thumb = name.endsWith(THUMB_SUFFIX) || c.req.query("thumb") === "1";
       const head = c.req.method === "HEAD";
+      // A sent token is verified and its rights resolved before the blob lookup, so a missing blob and a hidden
+      // (pending/blocked) one cost the same and response timing doesn't reveal that the latter exists.
+      let viewer: { staff: boolean; owner: boolean } | undefined;
+      if (c.req.header("authorization")) {
+        const a = optionalAuth(c, "get", sha256);
+        if (a) viewer = { staff: await core.isStaff(a.pubkey), owner: await core.repo.isOwner(sha256, a.pubkey) };
+      }
       const row = await core.repo.get(sha256);
       if (!row) throw new BlossomError(404, "blob not found");
 
       let isPublic = row.status === "approved";
       if (!isPublic) {
-        // only owners (pending) and staff (pending/blocked) may fetch unapproved blobs
-        const a = auth(c, "get", sha256);
-        const allowed =
-          !!a && ((await core.isStaff(a.pubkey)) || (row.status === "pending" && (await core.repo.isOwner(sha256, a.pubkey))));
+        // only owners (pending) and staff (pending/blocked) may fetch unapproved blobs; anyone else gets the
+        // same 404 as for a missing blob (also with a malformed/expired token) so existence isn't revealed
+        const allowed = !!viewer && (viewer.staff || (row.status === "pending" && viewer.owner));
         if (!allowed) throw new BlossomError(404, "blob not found");
       }
 
       const etag = `"${thumb ? `${sha256}.thumb` : sha256}"`;
+      const type = thumb ? "image/webp" : row.type;
+      const inline = isInlineSafe(type);
       const headers = new Headers({
-        "Content-Type": thumb ? "image/webp" : row.type,
+        "Content-Type": type,
         ETag: etag,
         "Cache-Control": isPublic ? "public, max-age=31536000, immutable" : "private, no-store",
+        // blobs are user content served from the relay (and admin panel) origin: never sniff, never run
+        // scripts (SVG/HTML), and make active types download instead of rendering
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": blobCsp(type),
+        "Cross-Origin-Resource-Policy": "cross-origin",
       });
+      if (!inline) headers.set("Content-Disposition", `attachment; filename="${sha256}.${extFromMime(type)}"`);
       if (c.req.header("if-none-match")?.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
         return new Response(null, { status: 304, headers });
       }
 
       if (thumb) {
         if (!row.hasThumbnail) throw new BlossomError(404, "thumbnail not found");
-        const obj = await core.driver.getThumbnail(sha256);
+        const obj = await core.driver.getThumbnail(sha256, { hidden: !isPublic });
         if (!obj) throw new BlossomError(404, "thumbnail not found");
         headers.set("Content-Length", String(obj.size));
         if (head) {
@@ -93,7 +121,8 @@ export function createRoutes(core: BlossomCore): Hono {
       }
 
       headers.set("Accept-Ranges", "bytes");
-      const redirect = isPublic ? core.driver.publicUrl?.(sha256, "") : undefined;
+      // only redirect to the CDN for types that are safe to render there (the CDN doesn't send our headers)
+      const redirect = isPublic && inline ? core.driver.publicUrl?.(sha256) : undefined;
       if (redirect) {
         headers.set("Location", redirect);
         return new Response(null, { status: 307, headers });
@@ -106,10 +135,16 @@ export function createRoutes(core: BlossomCore): Hono {
         return res;
       }
       if (head) {
+        // mirror what GET would answer, without opening the object
+        if (range) {
+          headers.set("Content-Range", `bytes ${range.start}-${range.end}/${row.size}`);
+          headers.set("Content-Length", String(range.end - range.start + 1));
+          return new Response(null, { status: 206, headers });
+        }
         headers.set("Content-Length", String(row.size));
         return new Response(null, { status: 200, headers });
       }
-      const obj = await core.driver.get(sha256, range);
+      const obj = await core.driver.get(sha256, range, { hidden: !isPublic });
       if (!obj) throw new BlossomError(404, "blob data missing");
       let status = 200;
       let length = obj.size;
@@ -132,8 +167,14 @@ export function createRoutes(core: BlossomCore): Hono {
       if (name.endsWith(THUMB_SUFFIX)) throw new BlossomError(400, "cannot delete a thumbnail");
       const sha256 = name.slice(0, 64);
       const a = requireAuth(c, "delete", sha256, true);
+      // A missing blob is a 404 even for a used token (a client retrying a DELETE whose response was lost).
       if (!(await core.repo.get(sha256))) throw new BlossomError(404, "blob not found");
+      // single-use per blob: replaying a captured delete token after the signer re-uploads the blob would delete
+      // it again. Keyed by token *and* blob so one token listing several `x` tags still deletes each of them once.
+      const tokenKey = `${a.event.id}:${sha256}`;
+      if (await core.isDeleteTokenUsed(tokenKey)) throw new BlossomError(401, "auth token already used");
       if (!(await core.releaseOwnership(sha256, a.pubkey, a.pubkey))) throw new BlossomError(403, "you do not own this blob");
+      await core.markDeleteTokenUsed(tokenKey, a.expiration * 1000);
       return new Response(null, { status: 200 });
     }),
   );
@@ -169,23 +210,26 @@ export function createRoutes(core: BlossomCore): Hono {
     "/upload",
     wrap(async (c) => {
       const max = core.settings.maxUploadBytes;
+      const ip = clientIp(c.req.raw, trustProxy, c.env);
+      core.assertIpRate(ip);
       const shaHeader = c.req.header("x-sha-256")?.toLowerCase();
       if (shaHeader !== undefined && !SHA256_RE.test(shaHeader)) throw new BlossomError(400, "invalid X-SHA-256 header");
       const a = requireAuth(c, "upload", shaHeader);
+      core.assertPubkeyRate(a.pubkey);
       const user = await core.assertCanUpload(a.pubkey);
-      const len = c.req.header("content-length");
-      if (len && Number(len) > max) throw new BlossomError(413, `blob too large (max ${max} bytes)`);
+      const len = contentLength(c.req.header("content-length"));
+      if (len !== undefined && len > max) throw new BlossomError(413, `blob too large (max ${max} bytes)`);
       if (shaHeader) await core.assertNotBlocked(shaHeader);
 
-      const { data, sha256 } = await readLimited(c.req.raw.body, max);
-      if (data.byteLength === 0) throw new BlossomError(400, "empty body");
-      if (shaHeader && shaHeader !== sha256) throw new BlossomError(409, "X-SHA-256 does not match body");
-      if (a.hashes.length > 0 && !a.hashes.includes(sha256)) throw new BlossomError(401, "auth x tag does not match blob");
-
-      const { descriptor } = await core.ingest(
-        { data, sha256, pubkey: a.pubkey, declaredType: c.req.header("content-type"), ip: clientIp(c.req.raw, trustProxy, c.env), strip: true },
-        user,
-      );
+      const descriptor = await core.withUploadBody(ip, async (limits) => {
+        const { data, sha256 } = await readLimited(c.req.raw.body, max, len, limits);
+        if (data.byteLength === 0) throw new BlossomError(400, "empty body");
+        if (shaHeader && shaHeader !== sha256) throw new BlossomError(409, "X-SHA-256 does not match body");
+        if (a.hashes.length > 0 && !a.hashes.includes(sha256)) throw new BlossomError(401, "auth x tag does not match blob");
+        return core.withUploadSlot(
+          async () => (await core.ingest({ data, sha256, pubkey: a.pubkey, declaredType: c.req.header("content-type"), ip, strip: true }, user)).descriptor,
+        );
+      });
       return jsonResponse(descriptor);
     }),
   );
@@ -195,41 +239,69 @@ export function createRoutes(core: BlossomCore): Hono {
     "/mirror",
     wrap(async (c) => {
       const max = core.settings.maxUploadBytes;
+      const ip = clientIp(c.req.raw, trustProxy, c.env);
+      core.assertIpRate(ip);
       const a = requireAuth(c, "upload");
       if (a.hashes.length === 0) throw new BlossomError(401, "auth missing x tag");
+      core.assertPubkeyRate(a.pubkey);
       const user = await core.assertCanUpload(a.pubkey);
       for (const h of a.hashes) await core.assertNotBlocked(h);
       let body: { url?: unknown };
       try {
-        body = (await c.req.json()) as { url?: unknown };
-      } catch {
+        const raw = await readLimited(c.req.raw.body, MAX_MIRROR_BODY, undefined, { stallMs: core.options.uploadStallMs ?? 15_000 });
+        body = JSON.parse(new TextDecoder().decode(raw.data)) as { url?: unknown };
+      } catch (err) {
+        if (err instanceof BlossomError) throw err;
         throw new BlossomError(400, "invalid JSON body");
       }
       if (typeof body?.url !== "string") throw new BlossomError(400, "missing url");
+      const mirrorUrl = body.url;
 
-      const res = await fetchRemote(body.url, {
-        fetch: core.options.fetch ?? fetch,
-        allowPrivate: !!core.options.allowPrivateMirror,
-        timeoutMs: core.options.mirrorTimeoutMs ?? 30_000,
+      const descriptor = await core.withUploadBody(ip, async (limits) => {
+        // one timeout for the whole transfer, so a body cut off by it is reported as a timeout (504)
+        const signal = AbortSignal.timeout(core.options.mirrorTimeoutMs ?? 30_000);
+        const res = await fetchRemote(mirrorUrl, {
+          fetch: core.options.fetch,
+          allowPrivate: !!core.options.allowPrivateMirror,
+          timeoutMs: core.options.mirrorTimeoutMs ?? 30_000,
+          allowedPorts: core.options.mirrorPorts,
+          signal,
+        });
+        const len = contentLength(res.headers.get("content-length"));
+        if (len !== undefined && len > max) {
+          await res.body?.cancel();
+          throw new BlossomError(413, `blob too large (max ${max} bytes)`);
+        }
+        // Don't download what the quota can't hold anyway: refused up front from Content-Length, otherwise cut off
+        // once the body outgrows it. Only skipped when *every* hash the token allows is already the signer's (then
+        // ingest charges nothing whichever one arrives); owning just one would let a token listing a cheap owned
+        // hash next to a big new one pull the full size limit before ingest refuses it.
+        let owned = true;
+        for (const h of a.hashes) owned &&= await core.repo.isOwner(h, a.pubkey);
+        const room = owned ? Infinity : await core.quotaRemaining(a.pubkey, user);
+        const quotaError = () => new BlossomError(413, `storage quota exceeded (${room} bytes left)`);
+        if (len !== undefined && len > room) {
+          await res.body?.cancel();
+          throw quotaError();
+        }
+        let read: { data: Uint8Array; sha256: string };
+        try {
+          read = await readLimited(res.body, Math.min(max, room), len, limits);
+        } catch (err) {
+          if (err instanceof BlossomError && err.status === 413 && room < max) throw quotaError();
+          if (err instanceof BlossomError) throw err.status === 408 ? new BlossomError(504, "mirror source too slow") : err;
+          if (signal.aborted) throw new BlossomError(504, "mirror fetch timed out");
+          throw new BlossomError(502, "mirror download failed");
+        }
+        if (!a.hashes.includes(read.sha256)) throw new BlossomError(409, "mirrored blob hash does not match auth x tag");
+        // Mirrors are stored byte-identical (no EXIF stripping) so the hash matches the source server.
+        return core.withUploadSlot(
+          async () =>
+            (
+              await core.ingest({ data: read.data, sha256: read.sha256, pubkey: a.pubkey, declaredType: res.headers.get("content-type"), ip, strip: false }, user)
+            ).descriptor,
+        );
       });
-      const len = res.headers.get("content-length");
-      if (len && Number(len) > max) {
-        await res.body?.cancel();
-        throw new BlossomError(413, `blob too large (max ${max} bytes)`);
-      }
-      let read: { data: Uint8Array; sha256: string };
-      try {
-        read = await readLimited(res.body, max);
-      } catch (err) {
-        if (err instanceof BlossomError) throw err;
-        throw new BlossomError(502, "mirror download failed");
-      }
-      if (!a.hashes.includes(read.sha256)) throw new BlossomError(409, "mirrored blob hash does not match auth x tag");
-      // Mirrors are stored byte-identical (no EXIF stripping) so the hash matches the source server.
-      const { descriptor } = await core.ingest(
-        { data: read.data, sha256: read.sha256, pubkey: a.pubkey, declaredType: res.headers.get("content-type"), ip: clientIp(c.req.raw, trustProxy, c.env), strip: false },
-        user,
-      );
       return jsonResponse(descriptor);
     }),
   );
@@ -239,9 +311,11 @@ export function createRoutes(core: BlossomCore): Hono {
     LIST_PATH,
     wrap(async (c) => {
       const pubkey = c.req.param("pubkey")!;
-      const a = auth(c, "list");
+      // a bad token still gets the public listing
+      const a = optionalAuth(c, "list");
       const includeUnapproved = !!a && (a.pubkey === pubkey || (await core.isStaff(a.pubkey)));
-      const int = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : undefined);
+      // clamped: digit strings past 2^53 overflow postgres bigint
+      const int = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Math.min(Number(v), Number.MAX_SAFE_INTEGER) : undefined);
       const cursor = c.req.query("cursor")?.toLowerCase();
       const limit = int(c.req.query("limit"));
       const rows = await core.repo.listByOwner(pubkey, {

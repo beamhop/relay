@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { type EventSource, type NostrEvent, type RejectCode, type UserRecord, type WriteContext, isEphemeral, nowSec } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 import { expirationOf } from "../nips/nip40";
-import { GroupConflict } from "../nips/nip29/groups";
+import { GroupConflict, GroupDuplicate } from "../nips/nip29/groups";
 import { validateEventShape } from "../protocol/messages";
 import type { Connection } from "../protocol/connection";
 import { codeOf, withPrefix } from "../util/reasons";
@@ -29,7 +29,8 @@ const IP_RATE_FACTOR = 4;
 /**
  * The event write pipeline (see docs/ARCHITECTURE.md):
  * size limits → id/sig → created_at → expiration → PoW → bans/mute/vanish → access mode → NIP-70 →
- * rate limit → plugin hooks → content policy → special kinds → store/ephemeral → fan-out → bus.
+ * already stored (duplicate) → rate limit → plugin hooks → content policy → special kinds (deletion/vanish
+ * before storing) → store/ephemeral → vanish re-check → NIP-29 state changes → fan-out → bus.
  */
 export async function processEvent(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Promise<WriteResult> {
   try {
@@ -93,6 +94,10 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     // ---- access mode, NIP-70
     const denied = (await checkAccess(ctx, event, user, conn)) ?? checkProtected(event, conn);
     if (denied) return reject(denied);
+    // ---- replays of stored events change nothing: answered before anyone's rate limit is charged
+    if (!isEphemeral(event.kind) && (await ctx.stores.events.getById(event.id))) {
+      return { ok: true, message: "duplicate: already have this event", status: "duplicate" };
+    }
     // ---- rate limit
     if (!rateOk(ctx, event, user, conn)) return reject("rate-limited: slow down, too many events");
   }
@@ -118,14 +123,14 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   }
 
   // ---- special kinds (deletion, vanish, reports, NIP-29)
-  const special = await prepareSpecial(ctx, event, user);
+  const special = await prepareSpecial(ctx, event, user, { source, ipKey: conn?.ipKey });
   if ("reject" in special) return reject(special.reject);
-  try {
-    await special.before?.();
-  } catch (err) {
-    if (err instanceof GroupConflict) return reject(err.message);
-    throw err;
+  if ("duplicate" in special) return { ok: true, message: special.duplicate, status: "duplicate" };
+  // Deletion / vanish must not be re-applied by replaying an already-stored event.
+  if (special.before && !isEphemeral(event.kind) && (await ctx.stores.events.getById(event.id))) {
+    return { ok: true, message: "duplicate: already have this event", status: "duplicate" };
   }
+  await special.before?.();
 
   // ---- store
   let status: "saved" | "replaced" | "ephemeral";
@@ -146,7 +151,27 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
       default:
         return reject(withPrefix(res.message || "event refused by storage", "blocked"));
     }
+    // NIP-62: a vanish request processed while this event was in flight (its marker is set before deleting)
+    const vanished = ctx.vanished.get(event.pubkey);
+    if (vanished !== undefined && event.kind !== KIND_VANISH && event.created_at <= vanished) {
+      await ctx.stores.events.deleteByIds([event.id]);
+      return reject("blocked: pubkey has requested to vanish from this relay");
+    }
     ctx.stores.users.touch(event.pubkey, now).catch((err) => ctx.logger.warn("users.touch failed", { err: String(err) }));
+  }
+
+  // ---- state changes (NIP-29): only for events stored as new, so replays change nothing
+  if (special.commit) {
+    try {
+      await special.commit();
+    } catch (err) {
+      // the state change didn't happen, so the event must not stay stored either: otherwise a retry would
+      // be a "duplicate" that never applies it (and a replay of one removed by 9005 would linger)
+      if (status !== "ephemeral") await ctx.stores.events.deleteByIds([event.id]);
+      if (err instanceof GroupDuplicate) return { ok: true, message: err.message, status: "duplicate" };
+      if (err instanceof GroupConflict) return reject(err.message);
+      throw err;
+    }
   }
 
   await special.after?.();
@@ -163,11 +188,19 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   return { ok: true, message: "", status };
 }
 
+/**
+ * Per-author and per-address write buckets. Anyone can re-send an author's signed events, so the author's
+ * own bucket is only charged on connections authenticated (NIP-42) as the author: nobody else can drain
+ * it to get the author's events refused. Other submissions are charged per author and address, so
+ * replays from elsewhere don't touch it either; a key used without AUTH from many addresses is then
+ * limited per address (relays wanting one cap per key across addresses can require AUTH for writes).
+ */
 function rateOk(ctx: RelayContext, event: NostrEvent, user: UserRecord | undefined, conn: Connection): boolean {
   if (ctx.users.isStaff(event.pubkey, user)) return true;
   const def = ctx.s().limits.eventsPerMinute;
   const override = user?.rateLimit?.eventsPerMinute;
-  if (!ctx.rate.take(`ev:pk:${event.pubkey}`, override ?? def)) return false;
+  const key = conn.authedPubkeys.has(event.pubkey) ? `ev:pk:${event.pubkey}` : `ev:pk:${event.pubkey}:${conn.ipKey}`;
+  if (!ctx.rate.take(key, override ?? def)) return false;
   if (override !== undefined) return true;
-  return ctx.rate.take(`ev:ip:${conn.ip}`, def * IP_RATE_FACTOR);
+  return ctx.rate.take(`ev:ip:${conn.ipKey}`, def * IP_RATE_FACTOR);
 }

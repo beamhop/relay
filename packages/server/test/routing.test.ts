@@ -65,7 +65,7 @@ describe("routing order", () => {
   });
 
   test("client ip header cannot be spoofed", async () => {
-    const me = await bh.fetch(new Request(url("/admin/api/me"), { headers: { "x-beamhop-client-ip": "6.6.6.6" } }), { ip: "10.0.0.1" });
+    const me = await bh.fetch(new Request(url("/admin/api/me"), { headers: { "x-beamhop-client-ip": "6.6.6.6", "x-forwarded-for": "6.6.6.6" } }), { ip: "10.0.0.1" });
     expect((await me.json()).ip).toBe("10.0.0.1");
   });
 
@@ -131,6 +131,7 @@ describe("routing order", () => {
     expect((f.stores.db as unknown as { closed: boolean }).closed).toBe(true);
     // secrets were generated & persisted
     expect(typeof f.stores.kvData.get("server/relaySecretKey")).toBe("string");
-    expect(b.config.admin.sessionSecret).toBe(f.stores.kvData.get("server/sessionSecret") as string);
+    // admin.sessionSecret is deprecated: no longer generated
+    expect(f.stores.kvData.has("server/sessionSecret")).toBe(false);
   });
 });

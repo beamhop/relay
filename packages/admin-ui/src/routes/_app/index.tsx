@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { KpiCard } from "@/components/kpi-card";
 import { PageHeader } from "@/components/page-header";
 import { UserChip } from "@/components/user-chip";
-import { EmptyState } from "@/components/empty-state";
+import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { useLiveHistory, useLiveSnapshot } from "@/lib/live";
 import { RANGES, useGeo, useKindStats, useRejections, useSeries, useSnapshot, useTopPubkeys, type RangeKey } from "@/queries/dashboard";
@@ -108,7 +108,7 @@ const trafficConfig = {
   rejected: { label: "Rejected", color: "var(--chart-4)" },
 } satisfies ChartConfig;
 
-function ChartCard({ title, description, children, loading, empty, className, action }: { title: string; description?: string; children: React.ReactNode; loading?: boolean; empty?: boolean; className?: string; action?: React.ReactNode }) {
+function ChartCard({ title, description, children, loading, empty, error, retry, className, action }: { title: string; description?: string; children: React.ReactNode; loading?: boolean; empty?: boolean; error?: unknown; retry?: () => void; className?: string; action?: React.ReactNode }) {
   return (
     <Card className={cn("gap-3", className)}>
       <CardHeader>
@@ -117,16 +117,16 @@ function ChartCard({ title, description, children, loading, empty, className, ac
         {action && <CardAction>{action}</CardAction>}
       </CardHeader>
       <CardContent className="px-2 sm:px-6">
-        {loading ? <Skeleton className="h-64 w-full" /> : empty ? <EmptyState icon={Activity} title="No data for this range yet" className="h-64 border-0" /> : children}
+        {loading ? <Skeleton className="h-64 w-full" /> : error ? <ErrorState error={error} retry={retry} /> : empty ? <EmptyState icon={Activity} title="No data for this range yet" className="h-64 border-0" /> : children}
       </CardContent>
     </Card>
   );
 }
 
 function TrafficChart({ range }: { range: RangeKey }) {
-  const { data, isLoading } = useSeries(["events_in", "events_out", "req", "rejected"], range);
+  const { data, isLoading, error, refetch } = useSeries(["events_in", "events_out", "req", "rejected"], range);
   return (
-    <ChartCard title="Traffic" description={`Messages per interval · last ${RANGES[range].label}`} loading={isLoading} empty={!data?.length}>
+    <ChartCard title="Traffic" description={`Messages per interval · last ${RANGES[range].label}`} loading={isLoading} error={error} retry={() => refetch()} empty={!data?.length}>
       <ChartContainer config={trafficConfig} className="aspect-auto h-64 w-full">
         <AreaChart data={data} margin={{ left: 0, right: 8 }}>
           <defs>
@@ -161,7 +161,7 @@ const resourceConfig = {
 function ResourceChart({ range }: { range: RangeKey }) {
   const [metric, setMetric] = React.useState<"connections" | "cpu" | "latency" | "memory">("connections");
   const names = metric === "latency" ? ["req_latency_p95", "loop_lag"] : [metric];
-  const { data, isLoading } = useSeries(names, range);
+  const { data, isLoading, error, refetch } = useSeries(names, range);
   const config: ChartConfig = metric === "memory" ? { memory: { label: "Memory", color: "var(--chart-5)" } } : resourceConfig;
   const fmt = metric === "memory" ? (v: number) => formatBytes(v, 0) : (v: number) => formatCompact(v);
   return (
@@ -169,6 +169,8 @@ function ResourceChart({ range }: { range: RangeKey }) {
       title="System"
       description={`Last ${RANGES[range].label}`}
       loading={isLoading}
+      error={error}
+      retry={() => refetch()}
       empty={!data?.length}
       action={
         <ToggleGroup type="single" size="sm" variant="outline" value={metric} onValueChange={(v) => v && setMetric(v as typeof metric)}>

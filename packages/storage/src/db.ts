@@ -80,8 +80,12 @@ abstract class BaseDb implements Db {
 
   async migrate(namespace: string, migrations: Migration[]): Promise<void> {
     await this.exec(
-      "CREATE TABLE IF NOT EXISTS _migrations (namespace TEXT NOT NULL, id TEXT NOT NULL, applied_at INTEGER NOT NULL, PRIMARY KEY (namespace, id))",
+      "CREATE TABLE IF NOT EXISTS _migrations (namespace TEXT NOT NULL, id TEXT NOT NULL, applied_at BIGINT NOT NULL, PRIMARY KEY (namespace, id))",
     );
+    await this.runMigrations(namespace, migrations);
+  }
+
+  protected async runMigrations(namespace: string, migrations: Migration[]): Promise<void> {
     const done = new Set(
       (await this.all<{ id: string }>("SELECT id FROM _migrations WHERE namespace = ?", [namespace])).map((r) => r.id),
     );
@@ -103,32 +107,56 @@ abstract class BaseDb implements Db {
 class SqliteDb extends BaseDb {
   readonly dialect = "sqlite" as const;
   private chain: Promise<unknown> = Promise.resolve();
-  /** Tracks whether the current async context is inside a transaction (for nesting). */
-  private txContext = new AsyncLocalStorage<true>();
+  /** Identifies the transaction the current async context belongs to (for nesting). */
+  private txContext = new AsyncLocalStorage<object>();
+  /** Token of the transaction open on the (single) connection, if any. */
+  private openTx: object | null = null;
   constructor(private d: SqliteDriver) {
     super();
   }
-  async all<T>(sql: string, params?: unknown[]) {
-    return this.d.all(sql, normalizeParams(params)) as T[];
+  /**
+   * There is one connection: a statement issued from outside the open transaction's async context
+   * would run inside it (seeing uncommitted data, and being rolled back with it). Such statements
+   * wait until the transaction finishes. Work started inside a transaction that outlives it (fire and
+   * forget) keeps a stale token and is treated like any other outside caller.
+   */
+  private op<T>(fn: () => T): Promise<T> {
+    if (this.openTx === null || this.txContext.getStore() === this.openTx) {
+      try {
+        return Promise.resolve(fn());
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
+    const next = this.chain.then(fn);
+    this.chain = next.catch(() => {});
+    return next;
   }
-  async get<T>(sql: string, params?: unknown[]) {
-    return (this.d.get(sql, normalizeParams(params)) ?? undefined) as T | undefined;
+  all<T>(sql: string, params?: unknown[]) {
+    return this.op(() => this.d.all(sql, normalizeParams(params)) as T[]);
   }
-  async run(sql: string, params?: unknown[]) {
-    return this.d.run(sql, normalizeParams(params));
+  get<T>(sql: string, params?: unknown[]) {
+    return this.op(() => (this.d.get(sql, normalizeParams(params)) ?? undefined) as T | undefined);
   }
-  async exec(sql: string) {
-    this.d.exec(sql);
+  run(sql: string, params?: unknown[]) {
+    return this.op(() => this.d.run(sql, normalizeParams(params)));
+  }
+  exec(sql: string) {
+    return this.op(() => {
+      this.d.exec(sql);
+    });
   }
   /**
-   * Transactions are serialized; tx() calls made from within a transaction's async context
-   * reuse the outer transaction (concurrent unrelated callers wait their turn).
+   * Transactions are serialized; tx() calls made from within the open transaction's async context
+   * reuse it (concurrent unrelated callers wait their turn).
    */
   tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
-    if (this.txContext.getStore()) return fn(this);
-    const next = this.chain.then(() =>
-      this.txContext.run(true, async () => {
+    if (this.openTx !== null && this.txContext.getStore() === this.openTx) return fn(this);
+    const next = this.chain.then(() => {
+      const token = {};
+      return this.txContext.run(token, async () => {
         this.d.exec("BEGIN IMMEDIATE");
+        this.openTx = token;
         try {
           const r = await fn(this);
           this.d.exec("COMMIT");
@@ -136,9 +164,11 @@ class SqliteDb extends BaseDb {
         } catch (e) {
           this.d.exec("ROLLBACK");
           throw e;
+        } finally {
+          this.openTx = null;
         }
-      }),
-    );
+      });
+    });
     this.chain = next.catch(() => {});
     return next;
   }
@@ -166,6 +196,11 @@ export function toPgPlaceholders(sql: string): string {
 }
 
 type PgSql = import("postgres").Sql;
+
+/** Postgres per-statement limit: a runaway query (e.g. a broad search) can't pin a pool connection forever. */
+export const PG_STATEMENT_TIMEOUT_MS = 30_000;
+/** Postgres limit for a transaction left open without activity (its locks block other writers). */
+export const PG_IDLE_IN_TX_TIMEOUT_MS = 60_000;
 class PostgresDb extends BaseDb {
   readonly dialect = "postgres" as const;
   constructor(private sql: PgSql, private root = true) {
@@ -191,7 +226,30 @@ class PostgresDb extends BaseDb {
     )) as T;
   }
   async close() {
-    if (this.root) await this.sql.end();
+    if (this.root) await this.sql.end({ timeout: 5 });
+  }
+  /**
+   * Holds a transaction-scoped advisory lock for the whole run, so instances starting together (or
+   * `beamhop migrate` during startup) don't apply the same migration twice. All pending migrations of
+   * the namespace commit together.
+   */
+  override async migrate(namespace: string, migrations: Migration[]): Promise<void> {
+    if (!this.root) return super.migrate(namespace, migrations);
+    await this.tx(async (db) => {
+      const tx = db as PostgresDb;
+      // migrations (and waiting for another instance's) may legitimately outlast the statement timeout
+      await tx.exec("SET LOCAL statement_timeout = 0");
+      await tx.run("SELECT pg_advisory_xact_lock(hashtextextended('beamhop:migrate', 0))");
+      await tx.exec(
+        "CREATE TABLE IF NOT EXISTS _migrations (namespace TEXT NOT NULL, id TEXT NOT NULL, applied_at BIGINT NOT NULL, PRIMARY KEY (namespace, id))",
+      );
+      // tables created before applied_at was BIGINT (int4 overflows in 2038)
+      const col = await tx.get<{ data_type: string }>(
+        "SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '_migrations' AND column_name = 'applied_at'",
+      );
+      if (col?.data_type === "integer") await tx.exec("ALTER TABLE _migrations ALTER COLUMN applied_at TYPE BIGINT");
+      await tx.runMigrations(namespace, migrations);
+    });
   }
 }
 
@@ -203,6 +261,10 @@ export async function createDb(config: Pick<BeamhopConfig, "database">): Promise
     const sql = postgres(postgresUrl, {
       max: 20,
       onnotice: () => {},
+      connection: {
+        statement_timeout: PG_STATEMENT_TIMEOUT_MS,
+        idle_in_transaction_session_timeout: PG_IDLE_IN_TX_TIMEOUT_MS,
+      },
       // int8 (COUNT(*), BIGINT timestamps, BIGSERIAL) → JS number instead of string
       types: { int8: { to: 20, from: [20], serialize: (x: unknown) => String(x), parse: (x: string) => Number(x) } },
     });

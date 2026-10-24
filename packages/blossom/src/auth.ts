@@ -8,6 +8,8 @@ export interface BlossomAuth {
   event: NostrEvent;
   /** lowercase `x` tag values */
   hashes: string[];
+  /** `expiration` tag (unix seconds) */
+  expiration: number;
 }
 
 export class AuthError extends Error {
@@ -18,6 +20,13 @@ export class AuthError extends Error {
 
 /** Allowed clock skew for `created_at` (seconds). */
 const CREATED_AT_SKEW = 60;
+/**
+ * Upload/delete tokens may not be valid for longer than this (seconds from now). Upload tokens are reusable
+ * bearer tokens until they expire (an `x`-bound one can only re-upload the same blob, which is idempotent; a
+ * `server`-scoped one can upload anything here in the signer's name), so this bounds a leaked token's lifetime.
+ * Delete tokens are single-use (see the DELETE route). Common clients sign for 1 minute to 1 hour.
+ */
+export const MAX_WRITE_AUTH_LIFETIME = 24 * 3600;
 
 function decodeBase64(token: string): string {
   let b64 = token.trim().replace(/-/g, "+").replace(/_/g, "/");
@@ -70,6 +79,9 @@ export function verifyAuthEvent(event: NostrEvent, opts: VerifyAuthOptions): Blo
   const exp = event.tags.find((t) => t[0] === "expiration")?.[1];
   if (!exp || !/^\d+$/.test(exp)) throw new AuthError("auth missing expiration");
   if (Number(exp) <= now) throw new AuthError("auth expired");
+  if ((opts.verb === "upload" || opts.verb === "delete") && Number(exp) > now + MAX_WRITE_AUTH_LIFETIME) {
+    throw new AuthError(`auth expiration too far in the future (max ${MAX_WRITE_AUTH_LIFETIME}s)`);
+  }
   const verbs = event.tags.filter((t) => t[0] === "t").map((t) => t[1]);
   if (!verbs.includes(opts.verb)) throw new AuthError(`auth t tag must be '${opts.verb}'`);
   const servers = event.tags.filter((t) => t[0] === "server").map((t) => (t[1] ?? "").toLowerCase());
@@ -77,11 +89,16 @@ export function verifyAuthEvent(event: NostrEvent, opts: VerifyAuthOptions): Blo
     throw new AuthError("auth not valid for this server");
   }
   const hashes = event.tags.filter((t) => t[0] === "x" && t[1]).map((t) => t[1].toLowerCase());
+  // an upload token bound to neither a blob nor a server would let anyone holding it (e.g. another Blossom
+  // server it was sent to) upload arbitrary content here in the signer's name
+  if (opts.verb === "upload" && hashes.length === 0 && servers.length === 0) {
+    throw new AuthError("upload auth must include an x or server tag");
+  }
   if (opts.sha256) {
     if (opts.requireX && hashes.length === 0) throw new AuthError("auth missing x tag");
     if (hashes.length > 0 && !hashes.includes(opts.sha256)) throw new AuthError("auth x tag does not match blob");
   }
-  return { pubkey: event.pubkey, event, hashes };
+  return { pubkey: event.pubkey, event, hashes, expiration: Number(exp) };
 }
 
 /** Tolerates clients that put a full URL into the `server` tag. */

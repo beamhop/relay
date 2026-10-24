@@ -22,11 +22,14 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 }
 
 const TOPICS_KEY = "beamhop:push-topics";
+const KNOWN_TOPICS: PushTopic[] = ["reports", "alerts"];
 export const storedTopics = (): PushTopic[] => {
   try {
-    return JSON.parse(localStorage.getItem(TOPICS_KEY) ?? "") as PushTopic[];
+    const v = JSON.parse(localStorage.getItem(TOPICS_KEY) ?? "") as unknown;
+    if (!Array.isArray(v)) return KNOWN_TOPICS;
+    return v.filter((t): t is PushTopic => KNOWN_TOPICS.includes(t as PushTopic));
   } catch {
-    return ["reports", "alerts"];
+    return KNOWN_TOPICS;
   }
 };
 

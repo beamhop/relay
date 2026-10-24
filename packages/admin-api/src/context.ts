@@ -7,7 +7,8 @@ import type { ReportService } from "./services/reports";
 import type { PushSender, PushService } from "./services/push";
 import type { UserService } from "./services/users";
 import type { CredentialService } from "./services/credentials";
-import type { ExpiringMap } from "./util/lru";
+import type { ReplayGuard } from "./services/replay";
+import type { PasswordHasher, ScryptParams } from "./util/password";
 
 export interface Principal {
   pubkey: string;
@@ -36,6 +37,8 @@ export interface AdminApiOptions {
   heartbeatMs?: number;
   /** web-push delivery override (tests / custom transports) */
   pushSender?: PushSender;
+  /** scrypt parameters for new password hashes, default N=2^17, r=8, p=1 (tests use cheaper ones) */
+  scryptParams?: ScryptParams;
 }
 
 export interface ApiContext {
@@ -56,10 +59,9 @@ export interface ApiContext {
   reports: ReportService;
   push: PushService;
   credentials: CredentialService;
-  /** single-use login challenges */
-  challenges: ExpiringMap<true>;
-  /** NIP-98 event ids already used (replay protection) */
-  usedAuthEvents: ExpiringMap<true>;
+  passwords: PasswordHasher;
+  /** NIP-98 event ids already used (replay protection, shared through the database) */
+  replay: ReplayGuard;
   /** subscribe to enriched views of newly created reports (bus "report.created") */
   onReport(fn: (r: ReportView) => void): () => void;
   /** Records audit entry + emits bus "admin.action". Actor/ip taken from the request. */

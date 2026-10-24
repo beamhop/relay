@@ -15,9 +15,9 @@ import { toNpub } from "@/lib/nostr";
 export const Route = createFileRoute("/_app/system")({ component: SystemPage });
 
 const NIP_NAMES: Record<number, string> = {
-  1: "Basic protocol", 2: "Follow list", 5: "Deletion", 9: "Event deletion", 11: "Relay info", 13: "Proof of work", 17: "Private DMs", 22: "Comments",
+  1: "Basic protocol", 2: "Follow list", 4: "Encrypted DMs (legacy)", 5: "DNS identifiers", 9: "Event deletion", 10: "Replies and threads", 11: "Relay info", 13: "Proof of work", 17: "Private DMs", 22: "Comments",
   23: "Long-form", 28: "Public chat", 29: "Relay-based groups", 40: "Expiration", 42: "Authentication", 45: "Counting", 50: "Search",
-  56: "Reporting", 59: "Gift wrap", 62: "Request to vanish", 65: "Relay list", 70: "Protected events", 77: "Negentropy", 86: "Relay management API", 96: "HTTP file storage", 98: "HTTP auth",
+  56: "Reporting", 44: "Encrypted payloads", 51: "Lists", 59: "Gift wrap", 62: "Request to vanish", 65: "Relay list", 70: "Protected events", 77: "Negentropy", 86: "Relay management API", 96: "HTTP file storage", 98: "HTTP auth",
 };
 
 function SystemPage() {

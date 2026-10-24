@@ -117,6 +117,12 @@ export interface BlossomService {
   /** Raw blob (or its thumbnail) regardless of moderation status — for authenticated admin previews. */
   read(sha256: string, opts?: { thumbnail?: boolean }): Promise<{ body: ReadableStream<Uint8Array>; size: number; type: string } | undefined>;
   stats(): Promise<{ count: number; bytes: number; byType: { type: string; count: number; bytes: number }[] }>;
+  /** Adds a hash to the blocklist (purging any stored copy). Optional so test doubles can omit it. */
+  block?(sha256: string, reason: string, actor: string): Promise<void>;
+  /** Removes a hash from the blocklist; false when it wasn't blocked. */
+  unblock?(sha256: string, actor: string): Promise<boolean>;
+  /** Blocked hashes, newest first. */
+  blocklist?(): Promise<{ sha256: string; reason: string; createdAt: number }[]>;
 }
 export type CreateBlossom = (deps: CoreDeps) => Promise<BlossomService>;
 

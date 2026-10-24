@@ -7,7 +7,29 @@ export function createBlossomService(deps: CoreDeps, options: BlossomOptions = {
   return buildService(deps, options, createRoutes);
 }
 
-export const createBlossom: CreateBlossom = (deps) => createBlossomService(deps);
+/** Upload/mirror abuse limits from `config.blossom.limits` (unset fields keep the built-in defaults). */
+export function optionsFromConfig(config: CoreDeps["config"]): BlossomOptions {
+  const l = config.blossom.limits ?? {};
+  const out: BlossomOptions = {};
+  for (const k of [
+    "uploadsPerMinutePerIp",
+    "uploadsPerMinutePerPubkey",
+    "maxConcurrentUploads",
+    "maxQueuedUploads",
+    "maxBufferedUploadBytes",
+    "maxConcurrentUploadsPerIp",
+    "uploadStallMs",
+    "minUploadBytesPerSec",
+    "mirrorPorts",
+  ] as const) {
+    if (l[k] !== undefined) (out as Record<string, unknown>)[k] = l[k];
+  }
+  // an empty allowlist would silently disable mirroring
+  if (out.mirrorPorts && !out.mirrorPorts.length) throw new Error("blossom.limits.mirrorPorts must list at least one port");
+  return out;
+}
+
+export const createBlossom: CreateBlossom = (deps) => createBlossomService(deps, optionsFromConfig(deps.config));
 
 export type { BlossomOptions, BlossomServiceImpl, BlobDescriptor } from "./service";
 export * from "./driver";
@@ -15,4 +37,3 @@ export { createImageProcessor, loadSharp, type ImageProcessor } from "./image";
 export { stripMetadata, stripJpegMetadata, stripPngMetadata, stripWebpMetadata, type StripResult } from "./exif";
 export { parseAuthHeader, verifyAuthEvent, AuthError, type AuthVerb, type BlossomAuth } from "./auth";
 export { extFromMime, isMimeAllowed } from "./mime";
-export { migrations as blossomMigrations } from "./repo";

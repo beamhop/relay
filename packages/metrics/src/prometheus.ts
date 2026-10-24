@@ -34,7 +34,11 @@ const fmt = (n: number) => (Number.isFinite(n) ? String(n) : n > 0 ? "+Inf" : n 
 /** Prometheus text exposition (format 0.0.4) of the live snapshot, cumulative counters and plugin metrics. */
 export function renderPrometheus(service: MetricsService): string {
   const out: string[] = [];
+  /** a name may appear once (a duplicate `# TYPE` makes Prometheus reject the whole scrape) */
+  const emitted = new Set<string>();
   const metric = (name: string, type: "gauge" | "counter", help: string, samples: [string, number][]) => {
+    if (emitted.has(name)) return;
+    emitted.add(name);
     out.push(`# HELP ${name} ${escapeHelp(help)}`, `# TYPE ${name} ${type}`);
     for (const [labels, v] of samples) out.push(`${name}${labels} ${fmt(v)}`);
   };
@@ -61,6 +65,7 @@ export function renderPrometheus(service: MetricsService): string {
     c("blobs_served", "Blobs served", t.blobsServed);
     c("blob_bytes_served", "Blob bytes served", t.blobBytesServed);
   }
+  // plugin metrics come last, so a plugin can't shadow a built-in series (collisions are skipped)
   if (typeof impl.customMetrics === "function") {
     const { counters, gauges } = impl.customMetrics();
     for (const [name, m] of counters) {

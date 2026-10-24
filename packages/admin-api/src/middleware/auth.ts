@@ -2,17 +2,22 @@ import type { MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Permission } from "@beamhop/sdk";
 import type { AdminContext, AdminEnv, ApiContext, Principal } from "../context";
-import { forbidden, unauthorized } from "../errors";
+import { forbidden, HttpError, unauthorized } from "../errors";
 import { permissionsFor } from "../services/roles";
 import { SESSION_TTL_SEC, type SessionRecord } from "../services/sessions";
-import { parseNostrAuthorization, verifyNip98 } from "../util/nip98";
+import { parseNostrAuthorization, payloadMatches, readBodyCapped, verifyNip98 } from "../util/nip98";
 
-export const SESSION_COOKIE = "bh_session";
+const SESSION_COOKIE = "bh_session";
 const COOKIE_PATH = "/admin";
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/** max body hashed for a NIP-98 `payload` tag (the import route is exempt from the 1 MB JSON body limit) */
+const PAYLOAD_MAX = 1024 * 1024;
+const IMPORT_PAYLOAD_MAX = 256 * 1024 * 1024;
+/** NIP-98 events are valid for ±60 s; keep their ids a little longer than that */
+export const AUTH_REPLAY_TTL_MS = 125_000;
 
 export function setSessionCookie(c: AdminContext, ctx: ApiContext, s: SessionRecord) {
-  setCookie(c, SESSION_COOKIE, s.id, {
+  setCookie(c, SESSION_COOKIE, s.token, {
     httpOnly: true,
     sameSite: "Strict",
     secure: ctx.secureCookies,
@@ -25,14 +30,14 @@ export function clearSessionCookie(c: AdminContext, ctx: ApiContext) {
 }
 
 /** Absolute URL a NIP-98 `u` tag must carry for this request (publicUrl + /admin/api + path + query). */
-export function expectedAdminUrl(ctx: ApiContext, reqUrl: string): string {
+function expectedAdminUrl(ctx: ApiContext, reqUrl: string): string {
   const u = new URL(reqUrl);
   let path = u.pathname;
   if (!path.startsWith("/admin/api")) path = `/admin/api${path === "/" ? "" : path}`;
   return `${ctx.publicUrl}${path}${u.search}`;
 }
 
-export function makePrincipal(pubkey: string, role: Principal["role"], via: Principal["via"], session?: SessionRecord): Principal {
+function makePrincipal(pubkey: string, role: Principal["role"], via: Principal["via"], session?: SessionRecord): Principal {
   return { pubkey, role, permissions: permissionsFor(role), via, session };
 }
 
@@ -54,15 +59,22 @@ export function authenticate(ctx: ApiContext): MiddlewareHandler<AdminEnv> {
     if (authz && /^nostr\s/i.test(authz)) {
       const ev = parseNostrAuthorization(authz);
       if (!ev) throw unauthorized("malformed NIP-98 authorization header", "invalid_auth");
-      let body: Uint8Array | undefined;
-      if (ev.tags.some((t) => t[0] === "payload") && c.req.raw.body) {
-        body = new Uint8Array(await c.req.raw.clone().arrayBuffer());
-      }
-      const r = verifyNip98(ev, { urls: [expectedAdminUrl(ctx, c.req.url)], method: c.req.method, body, nowSec: ctx.nowSec() });
+      // Everything but the payload hash first: the body is only buffered for a verified admin, so anonymous
+      // clients can't make the server read (and hash) arbitrarily large bodies.
+      const r = verifyNip98(ev, { urls: [expectedAdminUrl(ctx, c.req.url)], method: c.req.method, nowSec: ctx.nowSec(), skipPayload: true });
       if (!r.ok) throw unauthorized(r.reason, "invalid_auth");
-      if (ctx.usedAuthEvents.has(ev.id)) throw unauthorized("NIP-98 authorization already used", "replayed_auth");
-      ctx.usedAuthEvents.set(ev.id, true, 125_000);
-      c.set("principal", makePrincipal(ev.pubkey, await ctx.roles.resolve(ev.pubkey), "nip98"));
+      const role = await ctx.roles.resolve(ev.pubkey);
+      if (!role) throw forbidden("not an admin", "not_admin");
+      if (ev.tags.some((t) => t[0] === "payload")) {
+        const max = c.req.method === "POST" && /^(?:\/admin\/api)?\/events\/import$/.test(c.req.path) ? IMPORT_PAYLOAD_MAX : PAYLOAD_MAX;
+        const body = await readBodyCapped(c.req.raw.clone(), max);
+        if (!body) throw new HttpError(413, "request body too large", "too_large");
+        if (!payloadMatches(ev, body)) throw unauthorized("auth event payload mismatch", "invalid_auth");
+      }
+      // replay ids are only recorded for admins (a non-admin header grants nothing), so strangers can't flood the
+      // table; it lives in the database, so the same header is refused by every instance sharing it
+      if (!(await ctx.replay.consume(ev.id, AUTH_REPLAY_TTL_MS))) throw unauthorized("NIP-98 authorization already used", "replayed_auth");
+      c.set("principal", makePrincipal(ev.pubkey, role, "nip98"));
       return next();
     }
 

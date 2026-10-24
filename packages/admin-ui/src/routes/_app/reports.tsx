@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Ban, CheckCheck, Flag, MoreHorizontal, ShieldX, Trash2, X } from "lucide-react";
+import { AlertTriangle, Ban, CheckCheck, Flag, MoreHorizontal, ShieldX, Trash2, X } from "lucide-react";
 import type { ReportStatus, ReportView, ResolveReportRequest } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,14 +18,15 @@ import { SelectionBar } from "@/components/selection-bar";
 import { SwipeRow } from "@/components/swipe-row";
 import { PullToRefresh } from "@/components/pull-to-refresh";
 import { useConfirm } from "@/components/confirm";
-import { useReports, useResolveReports } from "@/queries/content";
+import { useReport, useReports, useResolveReports } from "@/queries/content";
 import { useCan } from "@/queries/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { displayName } from "@/lib/nostr";
 import { formatDate, formatNumber, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { mediaUrl } from "@/lib/api";
 
-interface ReportsSearch { status?: ReportStatus; type?: string }
+interface ReportsSearch { status?: ReportStatus; type?: string; id?: string }
 const STATUSES: ReportStatus[] = ["open", "resolved", "dismissed"];
 const TYPES = ["nudity", "malware", "profanity", "illegal", "spam", "impersonation", "other"];
 const TYPE_TONE: Record<string, Tone> = { illegal: "red", malware: "red", nudity: "amber", spam: "sky", impersonation: "violet", profanity: "amber" };
@@ -34,9 +35,16 @@ export const Route = createFileRoute("/_app/reports")({
   validateSearch: (s: Record<string, unknown>): ReportsSearch => ({
     status: STATUSES.includes(s.status as ReportStatus) ? (s.status as ReportStatus) : undefined,
     type: typeof s.type === "string" && s.type ? s.type : undefined,
+    id: typeof s.id === "string" && /^[0-9a-f]{64}$/i.test(s.id) ? s.id.toLowerCase() : undefined,
   }),
   component: ReportsPage,
 });
+
+/**
+ * `targetPubkey` is the reported content's author (the user a ban hits); `claimedPubkey` is set when the report's
+ * `p` tag names someone else — the reporter's claim, never banned.
+ */
+type Report = ReportView;
 
 type Action = ResolveReportRequest["action"];
 const ACTION_LABEL: Record<Action, string> = {
@@ -53,6 +61,7 @@ function ReportsPage() {
   const navigate = Route.useNavigate();
   const status = search.status ?? "open";
   const q = useReports(status, search.type);
+  const linked = useReport(search.id);
   const items = React.useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const total = q.data?.pages[0]?.total;
   const { one, bulk } = useResolveReports();
@@ -63,15 +72,18 @@ function ReportsPage() {
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   React.useEffect(() => setSelected(new Set()), [status, search.type]);
 
-  const resolve = async (ids: string[], action: Action, target?: ReportView) => {
+  const resolve = async (ids: string[], action: Action, target?: Report) => {
     let note: string | undefined;
     if (DESTRUCTIVE.includes(action)) {
       const who = target ? displayName(target.targetPubkey, target.targetProfile) : `${ids.length} report target(s)`;
+      const claimed = target?.claimedPubkey
+        ? ` ${displayName(target.claimedPubkey, target.claimedProfile)}, whom the report names, is not the author and won't be banned.`
+        : "";
       const r = await confirm({
         title: `${ACTION_LABEL[action]}?`,
         description:
           action === "ban-user" || action === "delete-and-ban"
-            ? `${who} will be banned${action === "delete-and-ban" ? " and the reported content deleted" : ""}.`
+            ? `${who} will be banned${action === "delete-and-ban" ? " and the reported content deleted" : ""}.${claimed}`
             : "The reported content will be permanently deleted.",
         destructive: true,
         confirmText: ACTION_LABEL[action],
@@ -118,6 +130,29 @@ function ReportsPage() {
           </label>
         )}
       </div>
+      {search.id && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-medium">Linked report</h3>
+            <Button size="sm" variant="ghost" onClick={() => navigate({ search: (p: ReportsSearch) => ({ ...p, id: undefined }) })}>
+              <X /> Close
+            </Button>
+          </div>
+          {linked.isLoading ? (
+            <ListSkeleton rows={1} />
+          ) : linked.isError ? (
+            <ErrorState error={linked.error} retry={() => linked.refetch()} />
+          ) : linked.data ? (
+            <ReportCard
+              r={linked.data}
+              canResolve={can("reports.resolve") && linked.data.status === "open"}
+              selected={false}
+              onSelect={() => {}}
+              onAction={(a) => resolve([linked.data!.id], a, linked.data)}
+            />
+          ) : null}
+        </div>
+      )}
       {mobile && canResolve && items.length > 0 && <p className="text-xs text-muted-foreground">Swipe right to dismiss, left to delete & ban.</p>}
 
       <PullToRefresh onRefresh={() => q.refetch()}>
@@ -171,7 +206,7 @@ function ReportsPage() {
   );
 }
 
-function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: ReportView; canResolve: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void }) {
+function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: Report; canResolve: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void }) {
   const mobile = useIsMobile();
   return (
     <div className={cn("space-y-3 rounded-xl border bg-card p-3 sm:p-4", selected && "border-primary/60 bg-primary/5")}>
@@ -191,10 +226,22 @@ function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: Report
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             <UserChip pubkey={r.reporter} profile={r.reporterProfile} size={22} className="max-w-48" />
             <span>reported</span>
-            <UserChip pubkey={r.targetPubkey} profile={r.targetProfile} size={22} className="max-w-48" />
+            {r.targetPubkey ? <UserChip pubkey={r.targetPubkey} profile={r.targetProfile} size={22} className="max-w-48" /> : <span>an unknown user</span>}
           </div>
         </div>
       </div>
+      {r.claimedPubkey && (
+        // the reporter's `p` tag points at someone who didn't post this content: show it, but bans go to the author
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-md bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span>The report names</span>
+          <UserChip pubkey={r.claimedPubkey} profile={r.claimedProfile} size={16} className="max-w-40" />
+          <span>
+            instead of the {r.targetEvent ? "content's author" : "media's uploader"}.{" "}
+            {r.targetPubkey ? `A ban applies to the ${r.targetEvent ? "author" : "uploader"} shown above.` : "The media has several uploaders: ban them from their user pages."}
+          </span>
+        </div>
+      )}
       {r.report.content && <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm italic">“{r.report.content}”</p>}
       {r.targetEvent ? (
         <div className="rounded-lg border p-3">
@@ -204,11 +251,12 @@ function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: Report
           <EventContent event={r.targetEvent} compact />
         </div>
       ) : r.targetEventId ? (
-        <p className="text-xs text-muted-foreground">Reported event {r.targetEventId.slice(0, 12)}… is no longer stored.</p>
+        <p className="text-xs text-muted-foreground">Reported event {r.targetEventId.slice(0, 12)}… is no longer stored, so its author can't be checked against the reported user.</p>
       ) : null}
       {r.targetBlob && (
-        <a href={`/${r.targetBlob}`} target="_blank" rel="noreferrer" className="block w-fit overflow-hidden rounded-lg border">
-          <img src={`/${r.targetBlob}`} alt="Reported media" className="max-h-48 max-w-full object-contain blur-md transition hover:blur-none" />
+        // admin media endpoint (session auth) — the public Blossom URL hides pending/blocked blobs, which reported media often is
+        <a href={mediaUrl({ sha256: r.targetBlob })} target="_blank" rel="noreferrer" className="block w-fit overflow-hidden rounded-lg border">
+          <img src={mediaUrl({ sha256: r.targetBlob })} alt="Reported media" className="max-h-48 max-w-full object-contain blur-md transition hover:blur-none" />
         </a>
       )}
       {r.resolution && (
@@ -227,29 +275,35 @@ function ReportCard({ r, canResolve, selected, onSelect, onAction }: { r: Report
               <Trash2 /> Delete
             </Button>
           )}
-          <Button size="sm" variant="destructive" onClick={() => onAction("delete-and-ban")}>
-            <Ban /> Delete & ban
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="ghost" aria-label="More">
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem variant="destructive" onSelect={() => onAction("ban-user")}>
-                <ShieldX /> Ban user only
-              </DropdownMenuItem>
-              {r.targetBlob && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => onAction("delete-media")}>
-                    <Trash2 /> Delete media
+          {r.targetPubkey && (
+            <Button size="sm" variant="destructive" onClick={() => onAction("delete-and-ban")}>
+              <Ban /> Delete & ban
+            </Button>
+          )}
+          {(r.targetPubkey || r.targetBlob) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" aria-label="More">
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {r.targetPubkey && (
+                  <DropdownMenuItem variant="destructive" onSelect={() => onAction("ban-user")}>
+                    <ShieldX /> Ban user only
                   </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                )}
+                {r.targetBlob && (
+                  <>
+                    {r.targetPubkey && <DropdownMenuSeparator />}
+                    <DropdownMenuItem variant="destructive" onSelect={() => onAction("delete-media")}>
+                      <Trash2 /> Delete media
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       )}
     </div>

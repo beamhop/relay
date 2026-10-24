@@ -168,8 +168,9 @@ export class SqlUserStore implements UserStore {
       params.push(q.allowed ? 1 : 0);
     }
     if (q.tag) {
-      conds.push("tags LIKE ? ESCAPE '\\'");
-      params.push(`%${escapeLike(JSON.stringify(q.tag))}%`);
+      // exact (case-sensitive) on both backends; sqlite LIKE would be case-insensitive
+      conds.push(this.db.dialect === "postgres" ? "strpos(tags, ?) > 0" : "instr(tags, ?) > 0");
+      params.push(JSON.stringify(q.tag));
     }
     const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
     const order =
@@ -202,6 +203,8 @@ export class SqlUserStore implements UserStore {
   }
 
   async delete(pubkey: string): Promise<void> {
+    // a batch being written may contain this pubkey and would re-insert the row right after the DELETE
+    while (this.flushing) await this.flushing;
     this.pending.delete(pubkey);
     await this.db.run("DELETE FROM users WHERE pubkey = ?", [pubkey]);
   }
@@ -242,7 +245,8 @@ export class SqlUserStore implements UserStore {
   }
 
   private async writeTouches(batch: Map<string, Touch>): Promise<void> {
-    const rows = [...batch].map(([pk, t]) => [pk, t.first, t.last, t.count]);
+    // sorted by key: concurrent upserts (several instances on one postgres) then lock rows in the same order
+    const rows = [...batch].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([pk, t]) => [pk, t.first, t.last, t.count]);
     const d = this.db.dialect;
     await this.db.tx((tx) =>
       insertRows(

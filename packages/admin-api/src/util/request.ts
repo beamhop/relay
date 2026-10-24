@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { z } from "zod";
 import { badRequest, isZodError, zodMessage } from "../errors";
+import { ipv6Groups } from "./ip";
 
 /** Parses a JSON body (empty body → `{}`) and validates it. */
 export async function readBody<S extends z.ZodType>(c: Context, schema: S): Promise<z.output<S>> {
@@ -33,33 +34,50 @@ const IP_HEADER_CANDIDATES = ["x-forwarded-for", "x-real-ip", "cf-connecting-ip"
 
 /**
  * Best-effort client IP.
- * - trustProxy: X-Forwarded-For (first hop) / X-Real-IP / CF-Connecting-IP
- * - otherwise from runtime bindings: `c.env.ip` (server adapter), Bun `server.requestIP`, @hono/node-server `incoming.socket`.
+ * - `c.env.ip`: set by the server adapter (already proxy-aware and normalized) — always preferred
+ * - trustProxy (standalone use): X-Forwarded-For (last hop — the address appended by the trusted proxy;
+ *   earlier entries are client-supplied and spoofable) / X-Real-IP / CF-Connecting-IP
+ * - otherwise Bun `server.requestIP`, @hono/node-server `incoming.socket`.
  */
 export function clientIp(c: Context, trustProxy: boolean): string | null {
+  const bound = (c.env as { ip?: unknown } | undefined)?.ip;
+  if (typeof bound === "string" && bound) return normalizeIp(bound);
   if (trustProxy) {
     for (const h of IP_HEADER_CANDIDATES) {
       const v = c.req.header(h);
-      if (v) return v.split(",")[0].trim() || null;
+      if (v) return normalizeIp(v.split(",").at(-1)!.trim()) || null;
     }
   }
   const env = c.env as Record<string, unknown> | undefined;
   if (env && typeof env === "object") {
-    if (typeof env.ip === "string") return env.ip;
     const server = (env.server ?? env) as { requestIP?: (r: Request) => { address: string } | null };
     if (typeof server.requestIP === "function") {
       try {
         const a = server.requestIP(c.req.raw);
-        if (a?.address) return a.address;
+        if (a?.address) return normalizeIp(a.address);
       } catch {
         /* ignore */
       }
     }
     const incoming = env.incoming as { socket?: { remoteAddress?: string } } | undefined;
-    if (incoming?.socket?.remoteAddress) return incoming.socket.remoteAddress;
+    if (incoming?.socket?.remoteAddress) return normalizeIp(incoming.socket.remoteAddress);
   }
   return null;
 }
 
-export const clampInt = (v: number | undefined, def: number, min: number, max: number) =>
-  v === undefined || !Number.isFinite(v) ? def : Math.max(min, Math.min(max, Math.floor(v)));
+/** IPv4-mapped IPv6 (`::ffff:1.2.3.4`) → plain IPv4, so both spellings share rate-limit keys. */
+const normalizeIp = (ip: string) => ip.replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i, "$1");
+
+/**
+ * Rate-limit key for a client IP: IPv4 as is, IPv6 aggregated to its /64 (one subscriber usually holds a
+ * whole /64, so per-address keys would hand out 2^64 buckets). Keep the full address for audit/display.
+ */
+export function rateKey(ip: string | null | undefined): string {
+  if (!ip) return "unknown";
+  const plain = normalizeIp(ip);
+  if (!plain.includes(":")) return plain;
+  const g = ipv6Groups(plain);
+  if (!g) return plain;
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return `${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`;
+  return `${g.slice(0, 4).map((x) => x.toString(16)).join(":")}::/64`;
+}

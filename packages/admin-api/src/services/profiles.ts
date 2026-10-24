@@ -3,7 +3,7 @@ import { LruCache } from "../util/lru";
 
 const FIELDS = ["name", "display_name", "picture", "about", "nip05", "banner", "lud16", "website"] as const;
 
-export function parseProfile(ev: NostrEvent | undefined): Profile | undefined {
+function parseProfile(ev: NostrEvent | undefined): Profile | undefined {
   if (!ev) return undefined;
   try {
     const raw = JSON.parse(ev.content) as Record<string, unknown>;

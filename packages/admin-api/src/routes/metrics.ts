@@ -12,7 +12,7 @@ const RangeQuery = z.object({
   step: z.coerce.number().int().min(1).max(86400 * 31).optional(),
 });
 
-export function defaultStep(rangeSec: number): number {
+function defaultStep(rangeSec: number): number {
   if (rangeSec <= 2 * 3600) return 60;
   if (rangeSec <= 24 * 3600) return 300;
   if (rangeSec <= 7 * 86400) return 3600;

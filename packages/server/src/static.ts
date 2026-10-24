@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { dirname, extname, join, normalize, resolve, sep } from "node:path";
+import { dirname, extname, join, normalize, posix, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { isBun } from "@beamhop/sdk";
@@ -90,6 +91,50 @@ export function createAssetSource(uiDir?: string): AssetSource {
   return { kind: "none", resolve: () => undefined };
 }
 
+/**
+ * CSP for the admin SPA document. Scripts: same-origin files plus the inline scripts of the built index.html
+ * (theme bootstrap + plugin import map), allowed by hash — so an injected inline script or a script URL on
+ * another origin never runs. Images/media/connections stay open: avatars and banners come from arbitrary hosts,
+ * NIP-46 signers and profile lookups talk to arbitrary relays, the world map fetches remote tiles.
+ */
+export function adminCsp(html: string): string {
+  const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(
+    (m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`,
+  );
+  return [
+    "default-src 'self'",
+    `script-src 'self' ${[...new Set(hashes)].join(" ")}`.trim(),
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https: http:",
+    "media-src 'self' data: blob: https: http:",
+    "font-src 'self' data:",
+    "connect-src 'self' https: http: wss: ws:",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+const cspCache = new Map<string, { key: string; csp: string }>();
+
+async function adminCspFor(file: string): Promise<string> {
+  let key = file;
+  try {
+    const st = statSync(file);
+    key = `${st.size}:${st.mtimeMs}`;
+  } catch {
+    /* embedded file: content never changes */
+  }
+  const hit = cspCache.get(file);
+  if (hit?.key === key) return hit.csp;
+  const csp = adminCsp(await new Response(fileBody(file)).text());
+  cspCache.set(file, { key, csp });
+  return csp;
+}
+
 const NO_CACHE = "no-cache";
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
@@ -118,6 +163,8 @@ export async function serveAdminAsset(source: AssetSource, subPath: string, req:
     return new Response("bad request", { status: 400 });
   }
   if (rel.split("/").includes("..")) return new Response("forbidden", { status: 403 });
+  // one spelling per file: `./index.html` (from `.%2F`), `a//b` etc. would otherwise dodge the per-file headers below
+  if (rel !== "" && posix.normalize(rel) !== rel) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
 
   if (source.kind === "none") {
     return new Response(placeholder("The admin UI has not been built yet."), { status: 200, headers: { "content-type": MIME[".html"], "cache-control": NO_CACHE } });
@@ -126,20 +173,30 @@ export async function serveAdminAsset(source: AssetSource, subPath: string, req:
   let file = rel === "" ? undefined : source.resolve(rel);
   let servedRel = rel;
   if (!file) {
-    // SPA fallback: extension-less paths (client routes) → index.html; missing assets → 404
-    const hasExt = extname(rel) !== "" && !rel.endsWith(".html");
-    if (hasExt) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
+    // SPA fallback: client routes (which may contain dots, e.g. /users/bob@example.com) → index.html;
+    // missing build assets → 404
+    const ext = extname(rel).toLowerCase();
+    const isAsset = rel.startsWith("assets/") || (ext !== "" && ext !== ".html" && ext in MIME);
+    if (isAsset) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
     file = source.resolve("index.html");
     servedRel = "index.html";
     if (!file) return new Response("admin ui missing index.html", { status: 500 });
   }
+  const contentType = mimeFor(servedRel);
+  const isHtml = contentType.startsWith("text/html");
   const headers: Record<string, string> = {
-    "content-type": mimeFor(servedRel),
-    "cache-control": cacheControlFor(servedRel),
+    "content-type": contentType,
+    // any HTML document (index.html under any spelling a case-insensitive filesystem accepts) is revalidated
+    "cache-control": isHtml ? NO_CACHE : cacheControlFor(servedRel),
     "x-content-type-options": "nosniff",
   };
   if (servedRel === "sw.js") headers["service-worker-allowed"] = "/admin/";
-  if (servedRel === "index.html") headers["x-frame-options"] = "DENY";
+  // headers follow the document type, not the request spelling: every HTML response gets the CSP and framing policy
+  if (isHtml) {
+    headers["x-frame-options"] = "DENY";
+    headers["content-security-policy"] = await adminCspFor(file);
+    headers["referrer-policy"] = "same-origin";
+  }
   if (req.method === "HEAD") return new Response(null, { headers });
   return new Response(fileBody(file), { headers });
 }

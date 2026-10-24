@@ -30,11 +30,6 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
-function itemCompare(a: Item, b: Item): number {
-  if (a.timestamp === b.timestamp) return compareBytes(a.id, b.id);
-  return a.timestamp < b.timestamp ? -1 : 1;
-}
-
 // ------------------------------------------------------------------ byte buffers
 
 class WriteBuffer {
@@ -140,56 +135,81 @@ export function fingerprintOf(ids: Iterable<Uint8Array>): Uint8Array {
 }
 
 function finalizeFingerprint(sum: bigint, n: number): Uint8Array {
+  return finalizeFingerprintBytes(bigToBytesLE(sum), n);
+}
+
+function finalizeFingerprintBytes(sumLE: Uint8Array, n: number): Uint8Array {
   const h = createHash("sha256");
-  h.update(bigToBytesLE(sum));
+  h.update(sumLE);
   h.update(encodeVarInt(n).unwrap());
   return new Uint8Array(h.digest()).subarray(0, FINGERPRINT_SIZE);
 }
 
 // ------------------------------------------------------------------ storage
 
-/** Sorted vector storage with prefix sums for O(1)-ish fingerprints. */
+const LIMBS = 8; // 256-bit sums as 8 little-endian uint32 limbs
+const HEX_ID = /^[0-9a-f]{64}$/;
+
+/**
+ * Sorted vector storage with prefix sums for O(1) fingerprints. Items are kept in flat typed arrays
+ * (8 bytes timestamp + 32 bytes id + 32 bytes prefix sum per item) rather than one object per item.
+ */
 export class NegentropyStorage {
-  private items: Item[] = [];
-  private sealed = false;
-  private prefix: bigint[] | null = null;
+  private pending: { timestamp: number; id: string }[] | null = [];
+  private n = 0;
+  private timestamps = new Float64Array(0);
+  private ids = new Uint8Array(0);
+  /** prefix[i] = sum of ids[0..i) mod 2^256, LIMBS uint32 per entry (n + 1 entries) */
+  private prefix = new Uint32Array(LIMBS);
 
   insert(timestamp: number, idHex: string): void {
-    if (this.sealed) throw new Error("already sealed");
-    const id = hexToBytes(idHex);
-    if (id.length !== ID_SIZE) throw new Error("bad id size");
-    this.items.push({ timestamp, id });
+    if (!this.pending) throw new Error("already sealed");
+    const id = idHex.toLowerCase();
+    if (!HEX_ID.test(id)) throw new Error("bad id size");
+    this.pending.push({ timestamp, id });
   }
 
   seal(): void {
-    if (this.sealed) throw new Error("already sealed");
-    this.sealed = true;
-    this.items.sort(itemCompare);
-    for (let i = 1; i < this.items.length; i++) {
-      if (itemCompare(this.items[i - 1], this.items[i]) === 0) throw new Error("duplicate item inserted");
+    const items = this.pending;
+    if (!items) throw new Error("already sealed");
+    this.pending = null;
+    // lowercase hex compares like the raw bytes
+    items.sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const n = items.length;
+    this.n = n;
+    this.timestamps = new Float64Array(n);
+    this.ids = new Uint8Array(n * ID_SIZE);
+    this.prefix = new Uint32Array((n + 1) * LIMBS);
+    for (let i = 0; i < n; i++) {
+      if (i > 0 && items[i - 1].timestamp === items[i].timestamp && items[i - 1].id === items[i].id) throw new Error("duplicate item inserted");
+      this.timestamps[i] = items[i].timestamp;
+      this.ids.set(hexToBytes(items[i].id), i * ID_SIZE);
+      // prefix[i + 1] = prefix[i] + id (mod 2^256), limb by limb with carry
+      const view = new DataView(this.ids.buffer, i * ID_SIZE, ID_SIZE);
+      let carry = 0;
+      for (let l = 0; l < LIMBS; l++) {
+        const v = this.prefix[i * LIMBS + l] + view.getUint32(l * 4, true) + carry;
+        this.prefix[(i + 1) * LIMBS + l] = v >>> 0;
+        carry = v > 0xffffffff ? 1 : 0;
+      }
     }
-    // prefix sums allow fingerprinting any range without iterating (costly bigint adds once)
-    const prefix: bigint[] = new Array(this.items.length + 1);
-    prefix[0] = 0n;
-    for (let i = 0; i < this.items.length; i++) prefix[i + 1] = (prefix[i] + bytesToBigLE(this.items[i].id)) % TWO_256;
-    this.prefix = prefix;
   }
 
   size(): number {
     this.check();
-    return this.items.length;
+    return this.n;
   }
 
   getItem(i: number): Item {
     this.check();
-    if (i >= this.items.length) throw new Error("out of range");
-    return this.items[i];
+    if (i >= this.n) throw new Error("out of range");
+    return { timestamp: this.timestamps[i], id: this.ids.subarray(i * ID_SIZE, (i + 1) * ID_SIZE) };
   }
 
   iterate(begin: number, end: number, cb: (item: Item, index: number) => boolean | void): void {
     this.check();
     this.checkBounds(begin, end);
-    for (let i = begin; i < end; i++) if (cb(this.items[i], i) === false) break;
+    for (let i = begin; i < end; i++) if (cb(this.getItem(i), i) === false) break;
   }
 
   findLowerBound(begin: number, end: number, bound: Item): number {
@@ -198,7 +218,7 @@ export class NegentropyStorage {
     let hi = end;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1;
-      if (itemCompare(this.items[mid], bound) < 0) lo = mid + 1;
+      if (this.compareAt(mid, bound) < 0) lo = mid + 1;
       else hi = mid;
     }
     return lo;
@@ -207,16 +227,30 @@ export class NegentropyStorage {
   fingerprint(begin: number, end: number): Uint8Array {
     this.check();
     this.checkBounds(begin, end);
-    const p = this.prefix!;
-    const sum = (((p[end] - p[begin]) % TWO_256) + TWO_256) % TWO_256;
-    return finalizeFingerprint(sum, end - begin);
+    // (prefix[end] - prefix[begin]) mod 2^256, little-endian bytes
+    const out = new Uint8Array(32);
+    const view = new DataView(out.buffer);
+    let borrow = 0;
+    for (let l = 0; l < LIMBS; l++) {
+      let v = this.prefix[end * LIMBS + l] - this.prefix[begin * LIMBS + l] - borrow;
+      borrow = v < 0 ? 1 : 0;
+      if (v < 0) v += 0x100000000;
+      view.setUint32(l * 4, v, true);
+    }
+    return finalizeFingerprintBytes(out, end - begin);
+  }
+
+  private compareAt(i: number, b: Item): number {
+    const t = this.timestamps[i];
+    if (t !== b.timestamp) return t < b.timestamp ? -1 : 1;
+    return compareBytes(this.ids.subarray(i * ID_SIZE, (i + 1) * ID_SIZE), b.id);
   }
 
   private check() {
-    if (!this.sealed) throw new Error("not sealed");
+    if (this.pending) throw new Error("not sealed");
   }
   private checkBounds(begin: number, end: number) {
-    if (begin > end || end > this.items.length) throw new Error("bad range");
+    if (begin > end || end > this.n) throw new Error("bad range");
   }
 }
 

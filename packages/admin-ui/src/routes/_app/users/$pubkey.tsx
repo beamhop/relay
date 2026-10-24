@@ -26,6 +26,8 @@ import { useCan, useMe } from "@/queries/auth";
 import { formatBytes, formatDate, formatNumber, timeAgo } from "@/lib/format";
 import { mediaUrl } from "@/lib/api";
 import { displayName, kindName, parsePubkey, toNpub } from "@/lib/nostr";
+import { safeUrl } from "@/lib/utils";
+import { useConfirm } from "@/components/confirm";
 
 export const Route = createFileRoute("/_app/users/$pubkey")({
   component: UserPage,
@@ -63,7 +65,7 @@ function UserView({ u }: { u: UserDetail }) {
       <Card className="overflow-hidden pt-0">
         <div
           className="h-28 bg-gradient-to-br from-primary/30 via-primary/10 to-transparent bg-cover bg-center sm:h-40"
-          style={u.profile?.banner ? { backgroundImage: `url(${JSON.stringify(u.profile.banner)})` } : undefined}
+          style={safeUrl(u.profile?.banner) ? { backgroundImage: `url(${JSON.stringify(safeUrl(u.profile?.banner))})` } : undefined}
         />
         <CardContent className="-mt-12 space-y-3 sm:-mt-14">
           <div className="flex flex-wrap items-end gap-3">
@@ -126,8 +128,8 @@ function UserView({ u }: { u: UserDetail }) {
             {u.profile?.nip05 && <p className="text-sm text-muted-foreground">{u.profile.nip05}</p>}
             <div className="flex min-w-0 items-center gap-1">
               <code className="truncate text-xs text-muted-foreground">{npub}</code>
-              <CopyButton value={npub} label="npub copied" />
-              <CopyButton value={u.pubkey} label="hex pubkey copied" size="icon-xs" />
+              <CopyButton value={npub} label="npub" />
+              <CopyButton value={u.pubkey} label="hex pubkey" size="icon-xs" />
             </div>
             {u.banReason && u.status === "banned" && <p className="text-sm text-destructive">Ban reason: {u.banReason}</p>}
             {u.profile?.about && <p className="line-clamp-4 max-w-2xl pt-1 text-sm whitespace-pre-wrap">{u.profile.about}</p>}
@@ -159,7 +161,8 @@ function UserView({ u }: { u: UserDetail }) {
           <TabsTrigger value="media">Media</TabsTrigger>
         </TabsList>
         <TabsContent value="manage" className="grid gap-4 pt-2 lg:grid-cols-2">
-          <EditCard u={u} />
+          {/* keyed so a save that completes after navigating to another user can't touch that user's form */}
+          <EditCard key={u.pubkey} u={u} />
           <div className="space-y-4">
             {can("admins.manage") && <RoleCard u={u} />}
             <InfoCard u={u} />
@@ -185,31 +188,46 @@ function Stat({ label, value, tone, title }: { label: string; value: React.React
   );
 }
 
+type EditFields = Pick<UserDetail, "notes" | "tags" | "allowed" | "denied" | "nip05Name" | "blossomQuota" | "rateLimit">;
+const formOf = (u: EditFields) => ({
+  notes: u.notes,
+  tags: u.tags,
+  allowed: u.allowed,
+  denied: u.denied,
+  nip05Name: u.nip05Name ?? "",
+  quotaMb: u.blossomQuota == null ? "" : String(Math.round(u.blossomQuota / 1024 / 1024)),
+  epm: u.rateLimit?.eventsPerMinute?.toString() ?? "",
+  rpm: u.rateLimit?.reqPerMinute?.toString() ?? "",
+});
+
 function EditCard({ u }: { u: UserDetail }) {
   const can = useCan();
   const { patch } = useBanFlow(u.pubkey);
   const editable = can("users.edit");
-  const init = React.useCallback(
-    () => ({
-      notes: u.notes,
-      tags: u.tags,
-      allowed: u.allowed,
-      denied: u.denied,
-      nip05Name: u.nip05Name ?? "",
-      quotaMb: u.blossomQuota == null ? "" : String(Math.round(u.blossomQuota / 1024 / 1024)),
-      epm: u.rateLimit?.eventsPerMinute?.toString() ?? "",
-      rpm: u.rateLimit?.reqPerMinute?.toString() ?? "",
-    }),
-    [u],
-  );
+  const init = React.useCallback(() => formOf(u), [u]);
   const [f, setF] = React.useState(init);
-  React.useEffect(() => setF(init()), [init]);
+  // refetches (mute/ban/role changes, window focus) must not wipe unsaved edits: only fields the
+  // admin hasn't touched follow the server; a different user resets the form entirely
+  const baseline = React.useRef({ pubkey: u.pubkey, values: f });
+  React.useEffect(() => {
+    const next = init();
+    const prev = baseline.current;
+    baseline.current = { pubkey: u.pubkey, values: next };
+    if (prev.pubkey !== u.pubkey) return setF(next);
+    setF((cur) => {
+      const merged = { ...cur };
+      for (const k of Object.keys(next) as (keyof typeof next)[]) {
+        if (JSON.stringify(cur[k]) === JSON.stringify(prev.values[k])) (merged as Record<string, unknown>)[k] = next[k];
+      }
+      return merged;
+    });
+  }, [init, u.pubkey]);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((s) => ({ ...s, [k]: v }));
   const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
 
   const save = () => {
     const body: UserPatch = {};
-    const o = init();
+    const o = baseline.current.values;
     if (f.notes !== o.notes) body.notes = f.notes;
     if (JSON.stringify(f.tags) !== JSON.stringify(o.tags)) body.tags = f.tags;
     if (f.allowed !== o.allowed) body.allowed = f.allowed;
@@ -221,9 +239,21 @@ function EditCard({ u }: { u: UserDetail }) {
       body.rateLimit = rl.eventsPerMinute === undefined && rl.reqPerMinute === undefined ? null : rl;
     }
     if (!Object.keys(body).length) return;
-    patch.mutate({ pubkey: u.pubkey, ...body });
+    patch.mutate(
+      { pubkey: u.pubkey, ...body },
+      {
+        // the server normalises values (trimmed lower-case names, whole MB, plain numbers): show what it
+        // stored and make that the new baseline, so the form isn't left dirty with the typed spelling
+        onSuccess: (updated) => {
+          if (updated.pubkey !== baseline.current.pubkey) return;
+          const next = formOf(updated);
+          baseline.current = { pubkey: u.pubkey, values: next };
+          setF(next);
+        },
+      },
+    );
   };
-  const dirty = JSON.stringify(f) !== JSON.stringify(init());
+  const dirty = JSON.stringify(f) !== JSON.stringify(baseline.current.values);
   const invalidNum = [f.quotaMb, f.epm, f.rpm].some((v) => v.trim() !== "" && !(Number(v) >= 0));
 
   return (
@@ -268,7 +298,7 @@ function EditCard({ u }: { u: UserDetail }) {
           {editable && (
             <div className="flex justify-end gap-2">
               {dirty && (
-                <Button type="button" variant="ghost" onClick={() => setF(init())}>
+                <Button type="button" variant="ghost" onClick={() => setF(baseline.current.values)}>
                   Reset
                 </Button>
               )}
@@ -340,7 +370,7 @@ function RoleCard({ u }: { u: UserDetail }) {
 function InfoCard({ u }: { u: UserDetail }) {
   const rows: [string, React.ReactNode][] = [
     ["Invited by", u.invitedBy ? <Link to="/users/$pubkey" params={{ pubkey: u.invitedBy }} className="font-mono text-primary hover:underline">{toNpub(u.invitedBy).slice(0, 16)}…</Link> : "—"],
-    ["Website", u.profile?.website ? <a href={u.profile.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">{u.profile.website}</a> : "—"],
+    ["Website", u.profile?.website ? (safeUrl(u.profile.website) ? <a href={safeUrl(u.profile.website)} target="_blank" rel="noreferrer noopener" className="text-primary hover:underline">{u.profile.website}</a> : u.profile.website) : "—"],
     ["Lightning", u.profile?.lud16 ?? "—"],
     ["First seen", formatDate(u.firstSeenAt)],
     ["Last seen", formatDate(u.lastSeenAt)],
@@ -368,13 +398,24 @@ function UserEvents({ pubkey }: { pubkey: string }) {
   const { data, isLoading, error, refetch } = useUserEvents(pubkey, 50);
   const can = useCan();
   const del = useDeleteEvents();
+  const confirm = useConfirm();
+  const deleteOne = async (id: string) => {
+    const r = await confirm({
+      title: "Delete this event?",
+      description: "Deleted events are removed from the relay database. This cannot be undone.",
+      destructive: true,
+      confirmText: "Delete",
+      input: { label: "Reason (optional)" },
+    });
+    if (r) del.mutate({ ids: [id], reason: r.input || undefined });
+  };
   if (isLoading) return <ListSkeleton rows={4} />;
   if (error) return <ErrorState error={error} retry={() => refetch()} />;
   if (!data?.length) return <EmptyState icon={FileText} title="No events" description="This user hasn't published anything stored on this relay." />;
   return (
     <div className="space-y-2">
       {data.map((e) => (
-        <EventCard key={e.id} event={e} compact onDelete={can("content.delete") ? () => del.mutate({ ids: [e.id] }) : undefined} />
+        <EventCard key={e.id} event={e} compact onDelete={can("content.delete") ? () => deleteOne(e.id) : undefined} />
       ))}
       <div className="flex justify-center pt-2">
         <Button variant="outline" asChild>

@@ -21,7 +21,7 @@ test("defaults, update merge, persistence, audit, bus + listeners", async () => 
   expect(settings.get().limits.maxLimit).toBe(500);
 
   const busEvents: string[] = [];
-  bus.on("settings.changed", (e) => busEvents.push(e.actor));
+  bus.on("settings.changed", (e) => void busEvents.push(e.actor));
   const seen: RuntimeSettings[] = [];
   settings.onChange((s) => seen.push(s));
 
@@ -55,8 +55,8 @@ test("invalid updates are rejected and do not change state", async () => {
   expect(await stores.kv.get("settings", "runtime")).toBeUndefined();
 });
 
-test("invalid stored settings fall back to defaults", async () => {
+test("invalid stored access settings fail closed", async () => {
   await stores.kv.set("settings", "runtime", { access: { mode: 42 } });
   const settings = await createSettingsService(stores, new EventBus());
-  expect(settings.get().access.mode).toBe("public");
+  expect(settings.get().access.mode).toBe("whitelist");
 });

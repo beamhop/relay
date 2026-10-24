@@ -1,5 +1,6 @@
 import type { ConnectionInfo, Filter, NostrEvent, ReadContext } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
+import { CONTROL_KINDS, GROUP_KIND } from "../nips/nip29/groups";
 
 /** Kinds only delivered to authenticated recipients (NIP-04 DMs, NIP-59 gift wraps). */
 export const GATED_KINDS: ReadonlySet<number> = new Set([4, 1059]);
@@ -20,11 +21,6 @@ export function onlyGatedKinds(f: Filter): boolean {
   return !!f.kinds && f.kinds.length > 0 && f.kinds.every((k) => GATED_KINDS.has(k));
 }
 
-/** Filter may match gated kinds. */
-export function mayMatchGated(f: Filter): boolean {
-  return !f.kinds || f.kinds.some((k) => GATED_KINDS.has(k));
-}
-
 function narrow(vals: readonly (string | number)[] | undefined, allowed: readonly (string | number)[]): any[] | null {
   const out = vals ? allowed.filter((v) => vals.includes(v)) : [...allowed];
   return out.length ? out : null;
@@ -32,8 +28,8 @@ function narrow(vals: readonly (string | number)[] | undefined, allowed: readonl
 
 /**
  * Sub-filters of `f` covering every stored event that might be hidden from `authed`
- * (DMs / gift wraps, private group content, hidden group metadata). Used by COUNT and
- * NEG-OPEN, which can't run per-event visibility checks over the full result set.
+ * (DMs / gift wraps, private group content, hidden group metadata and control events, group invite
+ * codes). Used by COUNT and NEG-OPEN, which can't run per-event visibility checks over the full result set.
  */
 export function restrictedSubFilters(ctx: RelayContext, f: Filter, authed: ReadonlySet<string>): Filter[] {
   const out: Filter[] = [];
@@ -46,6 +42,11 @@ export function restrictedSubFilters(ctx: RelayContext, f: Filter, authed: Reado
   const metaAuthors = narrow(f.authors, [ctx.key.pubkey]);
   const d = narrow(f["#d"], hiddenIds);
   if (metaKinds && metaAuthors && d) out.push({ ...f, kinds: metaKinds, authors: metaAuthors, "#d": d });
+  const controlKinds = narrow(f.kinds, CONTROL_KINDS);
+  const hiddenH = narrow(f["#h"], hiddenIds);
+  if (controlKinds && hiddenH) out.push({ ...f, kinds: controlKinds, "#h": hiddenH });
+  // invite codes: visible to few readers, so every candidate is checked
+  if (narrow(f.kinds, [GROUP_KIND.CREATE_INVITE])) out.push({ ...f, kinds: [GROUP_KIND.CREATE_INVITE] });
   return out;
 }
 

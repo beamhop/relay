@@ -113,8 +113,12 @@ export interface BulkResult { ok: number; failed: { pubkey: string; error: strin
 // ------------------------------------------------------------- invites & ip rules
 /** GET /invites → {items: Invite[]}; POST /invites {maxUses?, expiresAt?, note?, count?} → {items: Invite[]}; DELETE /invites/:code */
 export type InviteView = Invite & { url: string };
-/** GET /ip-rules → {items: IpRule[]}; POST /ip-rules IpRuleInput; DELETE /ip-rules/:cidr (url-encoded) */
-export type IpRuleInput = Omit<IpRule, "createdAt">;
+/**
+ * GET /ip-rules → {items: IpRule[]}; POST /ip-rules IpRuleInput; DELETE /ip-rules/:cidr (url-encoded).
+ * An allow rule exempts matching addresses from per-IP limits and overrides block rules; one wider than an IPv4 /16
+ * or IPv6 /48 is refused (400 `broad_allow_rule`) unless `confirmBroad: true` is sent.
+ */
+export type IpRuleInput = Omit<IpRule, "createdAt"> & { confirmBroad?: boolean };
 
 // ------------------------------------------------------------- content
 /** POST /events/query */
@@ -135,8 +139,12 @@ export interface ReportView {
   report: NostrEvent;
   reporter: string;
   reporterProfile?: Profile;
+  /** who bans apply to: the stored target event's author (or blob uploader), else the report's `p` tag */
   targetPubkey: string;
   targetProfile?: Profile;
+  /** the report's `p` tag when it names someone other than targetPubkey */
+  claimedPubkey?: string;
+  claimedProfile?: Profile;
   targetEventId?: string;
   targetEvent?: NostrEvent;
   targetBlob?: string;
@@ -146,7 +154,7 @@ export interface ReportView {
   /** count of open reports against same target */
   relatedCount: number;
 }
-/** GET /reports?status&type&limit&offset → Paged<ReportView> */
+/** GET /reports?status&type&target&limit&offset → Paged<ReportView>; a pubkey `target` matches ReportView.targetPubkey (the content's author), not the report's `p` tag */
 /** POST /reports/:id/resolve */
 export interface ResolveReportRequest { action: "dismiss" | "delete-event" | "ban-user" | "delete-and-ban" | "delete-media"; note?: string }
 /** POST /reports/bulk-resolve {ids: string[], action, note?} → BulkResult-like {ok, failed} */
@@ -179,7 +187,7 @@ export type AuditView = AuditEntry;
 
 // ------------------------------------------------------------- push notifications
 /** GET /push/vapid → {publicKey: string | null}; POST /push/subscribe {subscription: PushSubscriptionJSON, topics?: PushTopic[]}; POST /push/unsubscribe {endpoint} */
-export type PushTopic = "reports" | "alerts" | "users";
+export type PushTopic = "reports" | "alerts";
 
 // ------------------------------------------------------------- SSE  GET /stream?events=1&kinds=1,7
 /** Server-sent event names and payloads */

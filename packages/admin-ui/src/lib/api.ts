@@ -12,7 +12,7 @@ export class HttpError extends Error {
 
 export type QueryParams = Record<string, string | number | boolean | undefined | null>;
 
-export function qs(q?: QueryParams): string {
+function qs(q?: QueryParams): string {
   if (!q) return "";
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(q)) {
@@ -73,7 +73,7 @@ export async function rawRequest(method: string, path: string, opts: RequestOpti
   return res;
 }
 
-export async function request<T>(method: string, path: string, opts?: RequestOptions): Promise<T> {
+async function request<T>(method: string, path: string, opts?: RequestOptions): Promise<T> {
   const res = await rawRequest(method, path, opts);
   if (res.status === 204) return undefined as T;
   const text = await res.text();

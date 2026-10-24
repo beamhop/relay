@@ -28,8 +28,8 @@ The fastest way to start is to copy [`hello`](hello/src/index.ts), which uses ev
 | --- | --- |
 | A subfolder of `plugins.dir` (default `./plugins`, env `BEAMHOP_PLUGINS_DIR`) | `plugins/my-plugin/package.json` plus its entry |
 | A single file in `plugins.dir` | `plugins/my-plugin.ts` |
-| npm packages named `beamhop-plugin-*` or `@scope/beamhop-plugin-*` in `node_modules` | `bun add beamhop-plugin-foo` |
-| Packages listed in `plugins.packages` / `BEAMHOP_PLUGINS` | `"packages": ["my-private-plugin"]` |
+| Packages listed in `plugins.packages` / `BEAMHOP_PLUGINS` (relative paths resolve against the config file) | `bun add beamhop-plugin-foo`, then `"packages": ["beamhop-plugin-foo"]` |
+| Only with `plugins.autoDiscoverNpm: true` / `BEAMHOP_PLUGINS_AUTO_DISCOVER=true`: every npm package named `beamhop-plugin-*` or `@scope/beamhop-plugin-*` in `node_modules` (the working directory and its parents, but not your home directory or `/`). Off by default, since a dependency with such a name would run inside the relay | `bun add beamhop-plugin-foo` |
 
 For folders, the entry is resolved in this order:
 
@@ -37,11 +37,23 @@ For folders, the entry is resolved in this order:
 2. `main`
 3. `exports`
 4. `module`
-5. `index.ts`, `index.js` or `src/index.ts`
+5. `index.ts`, `index.js`, `index.mjs`, `src/index.ts`, `src/index.js` or `dist/index.js`
 
 Folders whose names start with `_` or `.` are ignored.
 
-**Plugins are disabled by default.** You can enable one in any of these ways:
+**Plugins are disabled by default.** "Disabled" means `setup()` never runs, so no hooks, routes or jobs are registered.
+Every discovered plugin module is still *imported* at boot to read its name, version and settings schema, so its
+top-level code runs. Only install plugins you trust, and keep side effects inside `setup()`.
+
+**Plugins are not sandboxed.** They run in-process with the server's privileges: full database access
+(`ctx.db`, including admin sessions and credentials), the key-value store (`ctx.kv`, where the generated relay
+key and VAPID keys live), `process.env` (every `BEAMHOP_*` secret) and the filesystem. A plugin's admin UI bundle
+runs in the admin panel's origin with the signed-in admin's session. `ctx.config` is a copy with the obvious
+secrets removed (relay key, S3 credentials, VAPID private key, database password, OTel headers) — that keeps
+them out of plugin logs and error reports; it is *not* an isolation boundary. Treat installing a plugin like
+installing any other server software.
+
+You can enable a plugin in any of these ways:
 
 - in **Admin → Plugins**, which persists the choice
 - by listing it in `plugins.enabled` / `BEAMHOP_PLUGINS_ENABLED`, which only sets the default
@@ -94,6 +106,7 @@ migrations: [{ id: "001_init", up: { sqlite: "CREATE TABLE plugin_x_…", postgr
 ```
 
 Migrations run on first enable as `db.migrate("plugin:<name>", migrations)` and are tracked per plugin.
+`beamhop migrate` applies the migrations of *enabled* plugins only (enabled in the panel, or via `plugins.enabled` / `BEAMHOP_PLUGINS_ENABLED`) found in `plugins.dir` or `plugins.packages`. Auto-discovered npm `beamhop-plugin-*` packages are not loaded. Disabled plugins get their migrations when they are first enabled.
 Prefix your table names with `plugin_<name>_`.
 
 ## Admin UI extensions

@@ -122,6 +122,6 @@ describe("s3 driver", () => {
 
   test("publicUrl", () => {
     const d = createS3Driver({ endpoint: "https://s3.test", bucket: "b", accessKeyId: "a", secretAccessKey: "s", publicUrl: "https://media.test/" });
-    expect(d.publicUrl!(sha, "png")).toBe(`https://media.test/${sha}`);
+    expect(d.publicUrl!(sha)).toBe(`https://media.test/${sha}`);
   });
 });

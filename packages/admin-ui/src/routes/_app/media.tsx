@@ -19,7 +19,8 @@ import { SwipeRow } from "@/components/swipe-row";
 import { PullToRefresh } from "@/components/pull-to-refresh";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/confirm";
-import { useMedia, useMediaActions, useMediaStats } from "@/queries/content";
+import { useMedia, useMediaActions, useMediaBlocklist, useMediaStats, useUnblockHash } from "@/queries/content";
+import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { useCan } from "@/queries/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { formatBytes, formatDate, formatNumber, timeAgo } from "@/lib/format";
@@ -29,7 +30,8 @@ import { cn } from "@/lib/utils";
 
 interface MediaSearch { status?: BlobStatus; type?: string; pubkey?: string }
 const STATUSES: BlobStatus[] = ["approved", "pending", "blocked"];
-const TYPES: [string, string][] = [["image/", "Images"], ["video/", "Videos"], ["audio/", "Audio"], ["application/", "Other"]];
+// the API matches `x/*` as a prefix and `x/y` exactly
+const TYPES: [string, string][] = [["image/*", "Images"], ["video/*", "Videos"], ["audio/*", "Audio"], ["application/*", "Documents"], ["text/*", "Text"]];
 
 export const Route = createFileRoute("/_app/media")({
   validateSearch: (s: Record<string, unknown>): MediaSearch => ({
@@ -61,7 +63,9 @@ function MediaPage() {
   const mobile = useIsMobile();
   const confirm = useConfirm();
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  const [open, setOpen] = React.useState<number | null>(null);
+  // tracked by hash, not index, so refetches/reordering can't swap the blob under an open lightbox
+  const [open, setOpen] = React.useState<string | null>(null);
+  const [blocklistOpen, setBlocklistOpen] = React.useState(false);
   const [pkDraft, setPkDraft] = React.useState(search.pubkey ?? "");
   React.useEffect(() => setSelected(new Set()), [search.status, search.type, search.pubkey]);
 
@@ -92,7 +96,18 @@ function MediaPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Media" description="Blossom blobs stored on this server" />
+      <PageHeader
+        title="Media"
+        description="Blossom blobs stored on this server"
+        actions={
+          mod && (
+            <Button variant="outline" size="sm" onClick={() => setBlocklistOpen(true)}>
+              <ShieldOff /> Blocked hashes
+            </Button>
+          )
+        }
+      />
+      <BlocklistDialog open={blocklistOpen} onOpenChange={setBlocklistOpen} />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatTile label="Blobs" value={stats.data ? formatNumber(stats.data.count) : undefined} />
         <StatTile label="Storage" value={stats.data ? formatBytes(stats.data.bytes) : undefined} />
@@ -172,9 +187,9 @@ function MediaPage() {
           <EmptyState icon={ImageIcon} title="No media" description="Nothing matches the current filters." />
         ) : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-            {items.map((b, i) => {
+            {items.map((b) => {
               const tile = (
-                <Tile b={b} selected={selected.has(b.sha256)} selectable={mod} selecting={selected.size > 0} onSelect={(on) => toggle(b.sha256, on)} onOpen={() => setOpen(i)} />
+                <Tile b={b} selected={selected.has(b.sha256)} selectable={mod} selecting={selected.size > 0} onSelect={(on) => toggle(b.sha256, on)} onOpen={() => setOpen(b.sha256)} />
               );
               return mobile && mod ? (
                 <SwipeRow
@@ -208,13 +223,46 @@ function MediaPage() {
 
       <Lightbox
         items={items}
-        index={open}
-        onIndex={setOpen}
+        openSha={open}
+        onOpen={setOpen}
         canModerate={mod}
         onStatus={(b, status) => setStatus.mutate({ sha256: b.sha256, status })}
         onDelete={doDelete}
       />
     </div>
+  );
+}
+
+/** Hashes refused on upload (from "delete + block"); unblocking lets the file be uploaded again. */
+function BlocklistDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const q = useMediaBlocklist(open);
+  const unblock = useUnblockHash();
+  return (
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange} title="Blocked hashes" description="These hashes are rejected when uploaded or mirrored." className="sm:max-w-2xl">
+      <div className="space-y-2 pb-4">
+        {q.isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : q.isError ? (
+          <ErrorState error={q.error} retry={() => q.refetch()} />
+        ) : !q.data?.length ? (
+          <EmptyState icon={ShieldOff} title="No blocked hashes" />
+        ) : (
+          q.data.map((b) => (
+            <div key={b.sha256} className="flex items-center gap-3 rounded-lg border p-2.5">
+              <div className="min-w-0 flex-1">
+                <code className="block truncate text-xs">{b.sha256}</code>
+                <span className="text-xs text-muted-foreground">
+                  {b.reason || "No reason"} · <span title={formatDate(b.createdAt)}>{timeAgo(b.createdAt)}</span>
+                </span>
+              </div>
+              <Button size="sm" variant="outline" disabled={unblock.isPending} onClick={() => unblock.mutate(b.sha256)}>
+                Unblock
+              </Button>
+            </div>
+          ))
+        )}
+      </div>
+    </ResponsiveDialog>
   );
 }
 
@@ -259,17 +307,22 @@ function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: Med
 }
 
 function Lightbox({
-  items, index, onIndex, canModerate, onStatus, onDelete,
+  items, openSha, onOpen, canModerate, onStatus, onDelete,
 }: {
   items: MediaItem[];
-  index: number | null;
-  onIndex: (i: number | null) => void;
+  openSha: string | null;
+  onOpen: (sha: string | null) => void;
   canModerate: boolean;
   onStatus: (b: MediaItem, s: BlobStatus) => void;
   onDelete: (b: MediaItem) => void;
 }) {
+  const found = openSha !== null ? items.findIndex((x) => x.sha256 === openSha) : -1;
+  const index = found >= 0 ? found : null;
   const b = index !== null ? items[index] : undefined;
-  const go = React.useCallback((d: number) => index !== null && onIndex(Math.max(0, Math.min(items.length - 1, index + d))), [index, items.length, onIndex]);
+  const go = React.useCallback(
+    (d: number) => index !== null && onOpen(items[Math.max(0, Math.min(items.length - 1, index + d))].sha256),
+    [index, items, onOpen],
+  );
   React.useEffect(() => {
     if (index === null) return;
     const h = (e: KeyboardEvent) => {
@@ -281,7 +334,7 @@ function Lightbox({
   }, [index, go]);
   const touch = React.useRef<number | null>(null);
   return (
-    <Dialog open={!!b} onOpenChange={(o) => !o && onIndex(null)}>
+    <Dialog open={!!b} onOpenChange={(o) => !o && onOpen(null)}>
       <DialogContent className="max-h-[95dvh] gap-3 overflow-y-auto p-3 sm:max-w-4xl sm:p-4">
         {b && (
           <>
@@ -327,7 +380,7 @@ function Lightbox({
               </span>
               <div className="flex min-w-0 items-center gap-1">
                 <code className="truncate text-xs text-muted-foreground">{b.sha256.slice(0, 16)}…</code>
-                <CopyButton value={b.sha256} label="Hash copied" size="icon-xs" />
+                <CopyButton value={b.sha256} label="Hash" size="icon-xs" />
               </div>
             </div>
             {b.owners.length > 0 && (

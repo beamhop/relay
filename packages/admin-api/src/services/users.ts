@@ -8,7 +8,14 @@ export interface Actor {
   role: AdminRole | null;
 }
 
-export function defaultUser(pubkey: string): UserRecord {
+const STAFF_PAGE = 1000;
+/** up to this many authors are rank-checked one by one; more load the staff set once */
+const FEW_AUTHORS = 20;
+
+/** Record fields that grant capabilities (limits, access): only an owner may change them on themselves. */
+const PRIVILEGED_FIELDS = ["rateLimit", "blossomQuota", "allowed", "denied", "role", "status"] as const;
+
+function defaultUser(pubkey: string): UserRecord {
   return {
     pubkey,
     status: "active",
@@ -48,18 +55,62 @@ export class UserService {
     return (await this.toViews([record]))[0];
   }
 
-  /** Throws 403 if the actor may not moderate (ban/mute/delete) the target. */
-  /** Editing user records (notes, tags, allow-list…): yourself, or users ranked below you. */
-  async assertCanEdit(actor: Actor, target: string): Promise<void> {
-    if (target !== actor.pubkey) await this.assertCanModerate(actor, target);
+  /**
+   * Editing user records (notes, tags, allow-list…): users ranked below you, or your own record —
+   * except fields that would raise your own limits or access (`patch`), which only owners may self-edit.
+   */
+  async assertCanEdit(actor: Actor, target: string, patch: Partial<UserRecord> = {}): Promise<void> {
+    if (target !== actor.pubkey) return this.assertCanModerate(actor, target);
+    if (actor.role !== "owner" && PRIVILEGED_FIELDS.some((f) => patch[f] !== undefined)) {
+      throw forbidden("cannot change your own limits or access");
+    }
   }
 
+  /** Throws 403 if the actor may not moderate (ban/mute/delete — and lift those) the target. */
   async assertCanModerate(actor: Actor, target: string): Promise<void> {
     if (target === actor.pubkey) throw forbidden("cannot moderate yourself");
     if (this.roles.isConfigOwner(target)) throw forbidden("cannot moderate a configured owner");
     const targetRole = (await this.deps.stores.users.get(target))?.role ?? null;
     if (targetRole && (!actor.role || ROLE_RANK[targetRole] >= ROLE_RANK[actor.role])) {
       throw forbidden(`cannot moderate a user with role ${targetRole}`);
+    }
+  }
+
+  /**
+   * Pubkeys whose events `actor` may not delete, with their role: configured owners and stored staff ranked at
+   * or above the actor (never the actor itself). One query per role instead of a lookup per author.
+   */
+  async protectedAuthors(actor: Actor): Promise<ReadonlyMap<string, AdminRole>> {
+    const out = new Map<string, AdminRole>();
+    if (actor.role === "owner") return out;
+    const rank = actor.role ? ROLE_RANK[actor.role] : 0;
+    for (const role of Object.keys(ROLE_RANK) as AdminRole[]) {
+      if (ROLE_RANK[role] < rank) continue;
+      for (let offset = 0; ; offset += STAFF_PAGE) {
+        const { items, total } = await this.deps.stores.users.list({ role, limit: STAFF_PAGE, offset });
+        for (const u of items) out.set(u.pubkey, role);
+        if (items.length < STAFF_PAGE || offset + items.length >= total) break;
+      }
+    }
+    for (const pk of this.roles.owners) out.set(pk, "owner");
+    out.delete(actor.pubkey);
+    return out;
+  }
+
+  /**
+   * Deleting events follows the moderation ranks: below owner you may delete your own events and those of
+   * non-staff or lower-ranked staff, never those of your peers or superiors. Pass `protectedSet` (from
+   * protectedAuthors) when checking many authors; a handful are resolved one by one.
+   */
+  async assertCanDeleteEventsOf(actor: Actor, authors: Iterable<string>, protectedSet?: ReadonlyMap<string, AdminRole>): Promise<void> {
+    if (actor.role === "owner") return;
+    const unique = [...new Set(authors)].filter((pk) => pk !== actor.pubkey);
+    if (!unique.length) return;
+    const rank = actor.role ? ROLE_RANK[actor.role] : 0;
+    const prot = protectedSet ?? (unique.length > FEW_AUTHORS ? await this.protectedAuthors(actor) : undefined);
+    for (const pk of unique) {
+      const role = prot ? (prot.get(pk) ?? null) : await this.roles.rankRole(pk);
+      if (role && ROLE_RANK[role] >= rank) throw forbidden(`cannot delete events of a user with role ${role}`, "forbidden_target");
     }
   }
 

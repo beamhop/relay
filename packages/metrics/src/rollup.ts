@@ -1,19 +1,19 @@
 import type { Db, GeoPoint, TimeRange } from "@beamhop/sdk";
 import type { GeoInfo } from "./geo";
 
-export const MINUTE = 60;
-export const HOUR = 3600;
-export const minuteOf = (sec: number) => Math.floor(sec / MINUTE) * MINUTE;
-export const hourOf = (sec: number) => Math.floor(sec / HOUR) * HOUR;
+const MINUTE = 60;
+const HOUR = 3600;
+const minuteOf = (sec: number) => Math.floor(sec / MINUTE) * MINUTE;
+const hourOf = (sec: number) => Math.floor(sec / HOUR) * HOUR;
 
 /** Built-in gauge series (averaged when re-bucketed); everything else is a counter (summed) unless registered via `gauge()`. */
-export const BUILTIN_GAUGES = ["connections", "subscriptions", "cpu", "memory", "heap", "loop_lag", "req_latency_p95"] as const;
+const BUILTIN_GAUGES = ["connections", "subscriptions", "cpu", "memory", "heap", "loop_lag", "req_latency_p95"] as const;
 
 interface GaugeAcc {
   sum: number;
   count: number;
 }
-export class MinuteAcc {
+class MinuteAcc {
   counters = new Map<string, number>();
   gauges = new Map<string, GaugeAcc>();
   constructor(readonly bucket: number) {}
@@ -52,13 +52,21 @@ export interface GeoAcc extends GeoInfo {
   connections: number;
   events: number;
 }
-export class HourAcc {
+class HourAcc {
   kinds = new Map<number, number>();
   pubkeys = new Map<string, PubkeyAcc>();
   rejections = new Map<string, RejectAcc>();
   geo = new Map<string, GeoAcc>();
   droppedPubkeys = 0;
-  constructor(readonly bucket: number, private maxPubkeys: number) {}
+  /**
+   * @param admitted pubkeys admitted in this hour bucket so far, shared by every accumulator of the bucket
+   *   (a flush closes the accumulator mid-hour) so `maxPubkeys` bounds the whole hour, not each flush
+   */
+  constructor(
+    readonly bucket: number,
+    private maxPubkeys: number,
+    private admitted: Set<string> = new Set(),
+  ) {}
 
   kind(k: number) {
     this.kinds.set(k, (this.kinds.get(k) ?? 0) + 1);
@@ -68,8 +76,10 @@ export class HourAcc {
     if (p) {
       p.events += events;
       p.rejected += rejected;
-    } else if (this.pubkeys.size < this.maxPubkeys) this.pubkeys.set(pk, { events, rejected });
-    else this.droppedPubkeys++;
+    } else if (this.admitted.has(pk) || this.admitted.size < this.maxPubkeys) {
+      this.admitted.add(pk);
+      this.pubkeys.set(pk, { events, rejected });
+    } else this.droppedPubkeys++;
   }
   rejection(code: string, reason: string, n = 1) {
     const key = code + "\u0000" + reason;
@@ -88,6 +98,10 @@ export class HourAcc {
   get empty() {
     return !this.kinds.size && !this.pubkeys.size && !this.rejections.size && !this.geo.size;
   }
+  /** Fresh accumulator for the same bucket that keeps counting toward this hour's pubkey cap. */
+  continuation(): HourAcc {
+    return new HourAcc(this.bucket, this.maxPubkeys, this.admitted);
+  }
   merge(o: HourAcc) {
     for (const [k, v] of o.kinds) this.kinds.set(k, (this.kinds.get(k) ?? 0) + v);
     for (const [k, v] of o.pubkeys) this.pubkey(k, v.events, v.rejected);
@@ -100,8 +114,36 @@ export class HourAcc {
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const CHUNK = 200;
 
+/**
+ * A batch the database rejects for its content (e.g. a value postgres can't store) would fail forever;
+ * such errors drop the batch instead of re-queuing it. Connection/lock errors are retried.
+ */
+function isPermanentDbError(err: unknown): boolean {
+  const code = String((err as { code?: unknown } | null)?.code ?? "");
+  if (/^(22|23|42)/.test(code)) return true; // postgres: data exception, integrity violation, syntax/undefined object
+  // generic SQLITE_ERROR also covers transient conditions (schema changing under a migration…): retried
+  return /^SQLITE_(CONSTRAINT|MISMATCH|TOOBIG|RANGE)/.test(code);
+}
+/** Even retryable failures stop being re-queued after this many consecutive attempts. */
+const MAX_FLUSH_ATTEMPTS = 10;
+
+/** Orders rows by their key columns so concurrent upserts (several instances) lock rows in the same order. */
+function sortByKeys(cols: string[], keys: string[], rows: unknown[][]): unknown[][] {
+  const idx = keys.map((k) => cols.indexOf(k));
+  return [...rows].sort((a, b) => {
+    for (const i of idx) {
+      const x = a[i] as string | number;
+      const y = b[i] as string | number;
+      if (x < y) return -1;
+      if (x > y) return 1;
+    }
+    return 0;
+  });
+}
+
 /** multi-row upsert in chunks (keys must be unique per call) */
 async function upsert(db: Db, table: string, cols: string[], keys: string[], update: string, rows: unknown[][]) {
+  rows = sortByKeys(cols, keys, rows);
   const one = `(${cols.map(() => "?").join(", ")})`;
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
@@ -123,10 +165,16 @@ export class Rollup {
   private inflightMinutes: MinuteAcc[] = [];
   private pendingHours: HourAcc[] = [];
   private flushChain: Promise<void> = Promise.resolve();
+  /** Consecutive failed flushes of re-queued data. */
+  private failedFlushes = 0;
   private lastTrimmedHour = 0;
   readonly gaugeNames = new Set<string>(BUILTIN_GAUGES);
 
-  constructor(private db: Db, nowSec: number, private opts: { maxPubkeysPerBucket: number; topPubkeysPerHour: number }) {
+  constructor(
+    private db: Db,
+    nowSec: number,
+    private opts: { maxPubkeysPerBucket: number; topPubkeysPerHour: number; onDropped?: (message: string) => void },
+  ) {
     this.current = new MinuteAcc(minuteOf(nowSec));
     this.hour = new HourAcc(hourOf(nowSec), opts.maxPubkeysPerBucket);
     this.lastTrimmedHour = hourOf(nowSec) - 2 * HOUR;
@@ -152,18 +200,31 @@ export class Rollup {
     this.current = new MinuteAcc(minuteOf(nowSec));
   }
 
-  /** Persist pending minutes and all hourly data in one transaction. Serialized. */
-  flush(): Promise<void> {
-    const run = this.flushChain.then(() => this.doFlush());
+  /**
+   * Persist pending minutes and all hourly data in one transaction. Serialized. Only scheduled flushes
+   * (`countFailure`, the default) spend the retry budget; read-path flushes can't push a batch into being dropped.
+   */
+  flush(opts: { countFailure?: boolean } = {}): Promise<void> {
+    const run = this.flushChain.then(() => this.doFlush(opts.countFailure ?? true));
     this.flushChain = run.catch(() => {});
     return run;
   }
 
-  private async doFlush() {
+  /**
+   * Flush before a read so it sees recent data. A transient failure is left to the scheduled flush to retry;
+   * a batch dropped here (permanent DB error) is reported, since nobody awaits this flush's error.
+   */
+  private flushForRead(): Promise<void> {
+    return this.flush({ countFailure: false }).catch((err) => {
+      if (String(err).includes("metrics batch dropped")) this.opts.onDropped?.(String(err));
+    });
+  }
+
+  private async doFlush(countFailure: boolean) {
     const minutes = mergeBy(this.pendingMinutes.splice(0), (a) => a.bucket, (a) => new MinuteAcc(a.bucket));
     if (!this.hour.empty) {
       this.pendingHours.push(this.hour);
-      this.hour = new HourAcc(this.hour.bucket, this.opts.maxPubkeysPerBucket);
+      this.hour = this.hour.continuation();
     }
     const hours = mergeBy(this.pendingHours.splice(0), (a) => a.bucket, (a) => new HourAcc(a.bucket, Number.MAX_SAFE_INTEGER));
     this.inflightMinutes = minutes;
@@ -204,7 +265,13 @@ export class Rollup {
           "connections = metrics_geo.connections + excluded.connections, events = metrics_geo.events + excluded.events", geo,
         );
       });
+      this.failedFlushes = 0;
     } catch (err) {
+      if (countFailure) this.failedFlushes++;
+      if (isPermanentDbError(err) || this.failedFlushes >= MAX_FLUSH_ATTEMPTS) {
+        this.failedFlushes = 0;
+        throw new Error(`metrics batch dropped (${minutes.length} minute / ${hours.length} hour buckets): ${String(err)}`);
+      }
       // keep data for the next attempt
       this.pendingMinutes.unshift(...minutes);
       this.pendingHours.unshift(...hours);
@@ -285,7 +352,7 @@ export class Rollup {
   }
 
   async kinds(range: TimeRange) {
-    await this.flush();
+    await this.flushForRead();
     const rows = await this.db.all<{ kind: unknown; count: unknown }>(
       "SELECT kind, SUM(count) AS count FROM metrics_kinds WHERE bucket >= ? AND bucket <= ? GROUP BY kind ORDER BY count DESC, kind",
       [hourOf(range.from), range.to],
@@ -294,7 +361,7 @@ export class Rollup {
   }
 
   async topPubkeys(range: TimeRange, limit = 20) {
-    await this.flush();
+    await this.flushForRead();
     const rows = await this.db.all<{ pubkey: string; events: unknown; rejected: unknown }>(
       `SELECT pubkey, SUM(events) AS events, SUM(rejected) AS rejected FROM metrics_pubkeys
        WHERE bucket >= ? AND bucket <= ? GROUP BY pubkey ORDER BY events DESC, rejected DESC, pubkey LIMIT ?`,
@@ -304,7 +371,7 @@ export class Rollup {
   }
 
   async rejections(range: TimeRange, limit = 100) {
-    await this.flush();
+    await this.flushForRead();
     const rows = await this.db.all<{ code: string; reason: string; count: unknown }>(
       `SELECT code, reason, SUM(count) AS count FROM metrics_rejections
        WHERE bucket >= ? AND bucket <= ? GROUP BY code, reason ORDER BY count DESC, code, reason LIMIT ?`,
@@ -314,7 +381,7 @@ export class Rollup {
   }
 
   async geo(range: TimeRange): Promise<GeoPoint[]> {
-    await this.flush();
+    await this.flushForRead();
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT country, MAX(country_name) AS country_name, city, MAX(lat) AS lat, MAX(lon) AS lon,
               SUM(connections) AS connections, SUM(events) AS events

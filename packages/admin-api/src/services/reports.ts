@@ -1,10 +1,10 @@
-import type { AdminApiDeps, Filter, NostrEvent, Paged, ReportStatus, ReportView, ResolveReportRequest } from "@beamhop/sdk";
+import type { AdminApiDeps, BlobRecord, Filter, NostrEvent, Paged, ReportStatus, ReportView, ResolveReportRequest } from "@beamhop/sdk";
 import { chunk, placeholders } from "../db";
 import { badRequest, notFound } from "../errors";
 import type { ProfileService } from "./profiles";
 import type { Actor, UserService } from "./users";
 
-export const REPORT_KIND = 1984;
+const REPORT_KIND = 1984;
 /** max number of recent reports considered for listing/filtering */
 const WINDOW = 5000;
 
@@ -22,12 +22,24 @@ export interface StatusRow {
   note: string | null;
 }
 
-export function parseReport(ev: NostrEvent): ParsedReport {
+function parseReport(ev: NostrEvent): ParsedReport {
   const p = ev.tags.find((t) => t[0] === "p" && t[1]);
   const e = ev.tags.find((t) => t[0] === "e" && t[1]);
   const x = ev.tags.find((t) => t[0] === "x" && t[1]);
   const type = (e?.[2] || x?.[2] || p?.[2] || "other").toLowerCase();
   return { targetPubkey: p?.[1] ?? "", targetEventId: e?.[1], targetBlob: x?.[1], type };
+}
+
+/**
+ * Who a report is about. The `p` tag is only the reporter's claim: when the reported event is stored its author is
+ * the subject (and for a stored blob, one of its uploaders), so a report pairing someone's content with another
+ * pubkey can't steer a ban onto that pubkey. Without stored content to check against, the `p` tag stands.
+ */
+function subjectOf(p: ParsedReport, eventAuthor?: string, blob?: BlobRecord): { pubkey: string; claimed?: string } {
+  let pubkey = p.targetPubkey;
+  if (eventAuthor) pubkey = eventAuthor;
+  else if (blob?.owners.length && !blob.owners.includes(pubkey)) pubkey = blob.owners.length === 1 ? blob.owners[0] : "";
+  return p.targetPubkey && p.targetPubkey !== pubkey ? { pubkey, claimed: p.targetPubkey } : { pubkey };
 }
 
 const targetKey = (r: ParsedReport) =>
@@ -66,19 +78,26 @@ export class ReportService {
     return this.deps.stores.events.query([{ kinds: [REPORT_KIND], limit: WINDOW }], { maxLimit: WINDOW });
   }
 
+  /**
+   * `target`: a reported event id or blob hash, or a pubkey matched against each report's subject — the view's
+   * `targetPubkey` (the stored content's author / uploader, else the `p` tag), not the `p` tag alone.
+   */
   async list(q: { status?: ReportStatus; type?: string; target?: string; limit: number; offset: number }): Promise<Paged<ReportView>> {
     const events = await this.recent();
     const statuses = await this.statuses(events.map((e) => e.id));
-    const filtered = events.filter((ev) => {
+    let filtered = events.filter((ev) => {
       const st = statuses.get(ev.id)?.status ?? "open";
       if (q.status && st !== q.status) return false;
-      if (q.type || q.target) {
-        const p = parseReport(ev);
-        if (q.type && p.type !== q.type) return false;
-        if (q.target && p.targetPubkey !== q.target && p.targetEventId !== q.target && p.targetBlob !== q.target) return false;
-      }
-      return true;
+      return !q.type || parseReport(ev).type === q.type;
     });
+    if (q.target) {
+      const t = q.target;
+      const about = /^[0-9a-f]{64}$/.test(t) ? await this.aboutPubkey(filtered, t) : new Set<string>();
+      filtered = filtered.filter((ev) => {
+        const p = parseReport(ev);
+        return p.targetEventId === t || p.targetBlob === t || about.has(ev.id);
+      });
+    }
     const page = filtered.slice(q.offset, q.offset + q.limit);
     return { items: await this.views(page, statuses), total: filtered.length };
   }
@@ -112,18 +131,23 @@ export class ReportService {
     if (targetIds.length) {
       for (const ev of await this.deps.stores.events.query([{ ids: targetIds }], { maxLimit: targetIds.length })) targets.set(ev.id, ev);
     }
-    const profiles = await this.profiles.getMany([...events.map((e) => e.pubkey), ...parsed.map((p) => p.targetPubkey)]);
+    const blobs = await this.blobs(parsed.map((p) => p.targetBlob));
+    const subjects = parsed.map((p) =>
+      subjectOf(p, p.targetEventId ? targets.get(p.targetEventId)?.pubkey : undefined, p.targetBlob ? blobs.get(p.targetBlob) : undefined),
+    );
+    const profiles = await this.profiles.getMany([...events.map((e) => e.pubkey), ...subjects.flatMap((s) => [s.pubkey, s.claimed ?? ""])]);
     const related = await this.relatedCounts(parsed);
     return events.map((ev, i) => {
       const p = parsed[i];
+      const s = subjects[i];
       const st = statuses.get(ev.id);
       const view: ReportView = {
         id: ev.id,
         report: ev,
         reporter: ev.pubkey,
         reporterProfile: profiles.get(ev.pubkey),
-        targetPubkey: p.targetPubkey,
-        targetProfile: profiles.get(p.targetPubkey),
+        targetPubkey: s.pubkey,
+        targetProfile: profiles.get(s.pubkey),
         targetEventId: p.targetEventId,
         targetEvent: p.targetEventId ? targets.get(p.targetEventId) : undefined,
         targetBlob: p.targetBlob,
@@ -131,9 +155,55 @@ export class ReportService {
         status: st?.status ?? "open",
         relatedCount: related.get(targetKey(p)) ?? 0,
       };
+      if (s.claimed) {
+        view.claimedPubkey = s.claimed;
+        view.claimedProfile = profiles.get(s.claimed);
+      }
       if (st) view.resolution = { action: st.action, by: st.by, at: st.at, ...(st.note ? { note: st.note } : {}) };
       return view;
     });
+  }
+
+  /**
+   * Ids of the reports (among `reports`, at most the listing window) whose subject is `pubkey`, decided like subjectOf
+   * with bounded lookups: an ids+author query for the reported events by `pubkey`; an ids query for the other reported
+   * events whose report could still point at `pubkey` through its `p` tag or a blob (a stored event by someone else
+   * overrides both); and the reported blobs not settled by a stored event.
+   */
+  private async aboutPubkey(reports: NostrEvent[], pubkey: string): Promise<Set<string>> {
+    const parsed = reports.map((ev) => ({ ev, p: parseReport(ev) }));
+    const stored = async (ids: string[], authors?: string[]) => {
+      const out = new Map<string, string>();
+      for (const part of chunk([...new Set(ids)])) {
+        const filter: Filter = { ids: part, limit: part.length, ...(authors ? { authors } : {}) };
+        for (const ev of await this.deps.stores.events.query([filter], { maxLimit: part.length })) out.set(ev.id, ev.pubkey);
+      }
+      return out;
+    };
+    const authors = await stored(parsed.flatMap(({ p }) => (p.targetEventId ? [p.targetEventId] : [])), [pubkey]);
+    const unsettled = parsed.filter(({ p }) => p.targetEventId && !authors.has(p.targetEventId) && (p.targetPubkey === pubkey || p.targetBlob));
+    for (const [id, author] of await stored(unsettled.map(({ p }) => p.targetEventId!))) authors.set(id, author);
+    const blobs = await this.blobs(
+      parsed.filter(({ p }) => p.targetBlob && !(p.targetEventId && authors.has(p.targetEventId))).map(({ p }) => p.targetBlob),
+    );
+    const out = new Set<string>();
+    for (const { ev, p } of parsed) {
+      // a reported event not looked up can't make `pubkey` the subject, whether stored or not
+      const author = p.targetEventId ? authors.get(p.targetEventId) : undefined;
+      if (subjectOf(p, author, p.targetBlob ? blobs.get(p.targetBlob) : undefined).pubkey === pubkey) out.add(ev.id);
+    }
+    return out;
+  }
+
+  /** Stored records of reported blobs (for their uploaders); empty when Blossom is off. */
+  private async blobs(hashes: (string | undefined)[]): Promise<Map<string, BlobRecord>> {
+    const out = new Map<string, BlobRecord>();
+    const blossom = this.deps.blossom;
+    if (!blossom) return out;
+    const unique = [...new Set(hashes)].filter((h): h is string => !!h && /^[0-9a-f]{64}$/.test(h));
+    // a filtered listing may look up a whole window's worth: keep the lookups in flight bounded
+    for (const part of chunk(unique, 100)) for (const b of await Promise.all(part.map((h) => blossom.get(h)))) if (b) out.set(b.sha256, b);
+    return out;
   }
 
   /** count of open reports per target key */
@@ -172,8 +242,16 @@ export class ReportService {
     const wantsDelete = req.action === "delete-event" || req.action === "delete-and-ban";
     const wantsBan = req.action === "ban-user" || req.action === "delete-and-ban";
     if (wantsDelete && !p.targetEventId) throw badRequest("report has no target event");
-    if (wantsBan && !p.targetPubkey) throw badRequest("report has no target pubkey");
-    if (wantsBan) await this.users.assertCanModerate(actor, p.targetPubkey);
+    const target = (wantsDelete || wantsBan) && p.targetEventId ? await this.deps.stores.events.getById(p.targetEventId) : undefined;
+    let subject: { pubkey: string; claimed?: string } | undefined;
+    if (wantsBan) {
+      // the ban (and its rank check) goes to the reported content's author, never to a `p` pubkey that doesn't match it
+      const blob = !target && p.targetBlob ? (await this.blobs([p.targetBlob])).get(p.targetBlob) : undefined;
+      subject = subjectOf(p, target?.pubkey, blob);
+      if (!subject.pubkey) throw badRequest("report has no target pubkey");
+      await this.users.assertCanModerate(actor, subject.pubkey);
+    }
+    if (wantsDelete && target) await this.users.assertCanDeleteEventsOf(actor, [target.pubkey]);
     if (req.action === "delete-media") {
       if (!p.targetBlob) throw badRequest("report has no target blob");
       if (!this.deps.blossom) throw notFound("blossom disabled", "blossom_disabled");
@@ -183,10 +261,11 @@ export class ReportService {
       effects.deletedEvents = await this.deps.stores.events.deleteByIds([p.targetEventId]);
       this.deps.bus.emit("event.deleted", { ids: [p.targetEventId], actor: actor.pubkey, reason: req.note ?? `report ${id}` });
     }
-    if (wantsBan) {
-      const r = await this.users.ban(p.targetPubkey, { reason: req.note ?? `report ${id}`, disconnect: true }, actor.pubkey);
-      effects.banned = p.targetPubkey;
+    if (subject) {
+      const r = await this.users.ban(subject.pubkey, { reason: req.note ?? `report ${id}`, disconnect: true }, actor.pubkey);
+      effects.banned = subject.pubkey;
       effects.disconnected = r.disconnected;
+      if (subject.claimed) effects.claimedPubkey = subject.claimed;
     }
     if (req.action === "delete-media" && p.targetBlob && this.deps.blossom) {
       await this.deps.blossom.delete(p.targetBlob, actor.pubkey, { block: true });

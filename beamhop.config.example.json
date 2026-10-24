@@ -4,7 +4,8 @@
     "port": 3334,
     "publicUrl": "https://relay.example.com",
     "trustProxy": true,
-    "metricsToken": "change-me",
+    "trustedProxies": ["127.0.0.1/32", "::1/128"],
+    "metricsToken": "REPLACE-WITH-A-LONG-RANDOM-TOKEN",
     "prometheus": true
   },
   "database": {

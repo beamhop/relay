@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { EventView, Filter, ImportResult, NostrEvent } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
-import { badRequest, notFound } from "../errors";
+import { badRequest, forbidden, notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
 import { FiltersSchema, isConstrained, parseFiltersParam } from "../util/filters";
 import { isNostrEventShape, isValidSignedEvent } from "../util/nip98";
@@ -14,6 +14,16 @@ const EXPORT_CAP = 1_000_000;
 const EXPORT_PAGE = 1000;
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_IMPORT_ERRORS = 100;
+/** max ids reported in the `event.deleted` bus event of a delete */
+const AFFECTED_CAP = 10_000;
+/** filter deletes below owner resolve matches page by page within this budget, then report `truncated` */
+const DELETE_MAX_PAGES = 10;
+const DELETE_BUDGET_MS = 10_000;
+/**
+ * max full events loaded for a single second when more than a page shares one created_at (export and
+ * filter delete); the store can't page within a second, so beyond this export warns and delete reports `truncated`
+ */
+const SAME_SECOND_CAP = 10_000;
 
 const QuerySchema = z.object({ filters: FiltersSchema, limit: z.number().int().min(1).optional() });
 const DeleteOne = z.object({ reason: z.string().max(1000).optional() });
@@ -98,28 +108,44 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       while (remaining > 0 && total < EXPORT_CAP) {
         const page = Math.min(EXPORT_PAGE, remaining, EXPORT_CAP - total);
         const batch = await stores.events.query([{ ...f, limit: page, ...(until !== undefined ? { until } : {}) }], { maxLimit: page });
-        let fresh = 0;
+        // `progressed`: the page held events not already yielded at the page boundary (independent of
+        // cross-filter dedupe, which may legitimately skip a whole page)
+        let progressed = false;
         for (const ev of batch) {
           if (ev.created_at === boundaryTs && boundary.has(ev.id)) continue;
+          progressed = true;
           if (seen) {
             if (seen.has(ev.id)) continue;
             seen.add(ev.id);
           }
-          fresh++;
           total++;
           remaining--;
           yield ev;
           if (remaining <= 0 || total >= EXPORT_CAP) break;
         }
-        if (batch.length < page) break;
+        if (batch.length < page || remaining <= 0 || total >= EXPORT_CAP) break;
         const last = batch[batch.length - 1].created_at;
         if (last !== boundaryTs) {
           boundary.clear();
           boundaryTs = last;
         }
         for (const ev of batch) if (ev.created_at === last) boundary.add(ev.id);
-        if (fresh === 0) {
-          // more than a page of events share one timestamp; step past it
+        if (!progressed) {
+          // more than a page of events share one timestamp: fetch that whole second, then step past it
+          const cap = Math.min(SAME_SECOND_CAP, boundary.size + Math.min(remaining, EXPORT_CAP - total));
+          const all = await stores.events.query([{ ...f, since: last, until: last, limit: cap }], { maxLimit: cap });
+          if (all.length >= cap && cap === SAME_SECOND_CAP) ctx.logger.warn("export: more events share one second than can be loaded; some were skipped", { created_at: last, cap });
+          for (const ev of all) {
+            if (boundary.has(ev.id)) continue;
+            if (seen) {
+              if (seen.has(ev.id)) continue;
+              seen.add(ev.id);
+            }
+            total++;
+            remaining--;
+            yield ev;
+            if (remaining <= 0 || total >= EXPORT_CAP) break;
+          }
           until = last - 1;
           boundary.clear();
           boundaryTs = -1;
@@ -199,20 +225,106 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
 
   app.post("/events/delete", requirePermission("content.delete"), async (c) => {
     const body = await readBody(c, DeleteMany);
-    const actor = principalOf(c).pubkey;
+    const actor = principalOf(c);
     let deleted = 0;
+    let truncated = false;
     const ids = (body.ids ?? []).map((id) => parseEventId(id));
-    if (ids.length) deleted += await stores.events.deleteByIds(ids);
-    const affected = [...ids];
-    if (body.filters?.length) {
-      if (!body.filters.every(isConstrained)) throw badRequest("every filter must constrain at least one field");
-      const found = await stores.events.query(body.filters.map((f) => ({ ...f, limit: undefined })), { maxLimit: 10_000 });
-      affected.push(...found.map((e) => e.id));
-      deleted += await stores.events.deleteByFilter(body.filters);
+    const filters = body.filters ?? [];
+    if (!filters.every(isConstrained)) throw badRequest("every filter must constrain at least one field");
+    // every rank check runs before anything is deleted, so a refused request deletes nothing
+    if (ids.length && actor.role !== "owner") {
+      await ctx.users.assertCanDeleteEventsOf(actor, (await stores.events.query([{ ids }], { maxLimit: ids.length })).map((e) => e.pubkey));
     }
-    if (affected.length) bus.emit("event.deleted", { ids: affected, actor, reason: body.reason });
+    /** filters the store deletes directly (owner, or naming only deletable authors) */
+    const direct: Filter[] = [];
+    /** ids resolved from the other filters (below owner) */
+    const matched: string[] = [];
+    if (actor.role === "owner") direct.push(...filters);
+    else if (filters.length) {
+      // below owner a filter could match a superior's events: filters naming only deletable authors go
+      // straight to the store (expired events included); others are resolved page by page, rank-checked
+      // against the staff set and deleted by id. Past the page/time budget `truncated` asks to repeat.
+      const prot = await ctx.users.protectedAuthors(actor);
+      const started = performance.now();
+      let pages = 0;
+      for (const f of filters) {
+        if (f.authors?.length) {
+          const denied = f.authors.find((a) => prot.has(a));
+          if (denied) throw forbidden(`cannot delete events of a user with role ${prot.get(denied)}`, "forbidden_target");
+          direct.push(f);
+          continue;
+        }
+        const seen = new Set<string>();
+        /** seen ids per created_at, to size the same-second fetch */
+        const seenAt = new Map<number, number>();
+        let remaining = f.limit ?? Number.POSITIVE_INFINITY;
+        let until = f.until;
+        while (remaining > 0) {
+          if (pages >= DELETE_MAX_PAGES || performance.now() - started > DELETE_BUDGET_MS) {
+            truncated = true;
+            break;
+          }
+          pages++;
+          const cap = Math.min(remaining, AFFECTED_CAP);
+          const page = await stores.events.query([{ ...f, until, limit: cap }], { maxLimit: AFFECTED_CAP });
+          let fresh = 0;
+          const take = (e: { id: string; pubkey: string; created_at: number }) => {
+            if (fresh >= remaining || seen.has(e.id)) return;
+            seen.add(e.id);
+            seenAt.set(e.created_at, (seenAt.get(e.created_at) ?? 0) + 1);
+            fresh++;
+            const role = prot.get(e.pubkey);
+            if (role) throw forbidden(`cannot delete events of a user with role ${role}`, "forbidden_target");
+            matched.push(e.id);
+          };
+          page.forEach(take);
+          if (page.length < cap) {
+            remaining -= fresh;
+            break;
+          }
+          // nothing is deleted yet, so page backwards
+          const oldest = page[page.length - 1].created_at;
+          if (fresh) {
+            remaining -= fresh;
+            until = oldest;
+            continue;
+          }
+          // a whole page shares one created_at (bot floods often do): take that entire second, then step past it
+          pages++;
+          const secondCap = Math.min(SAME_SECOND_CAP, (seenAt.get(oldest) ?? 0) + remaining);
+          const second = await stores.events.query([{ ...f, since: oldest, until: oldest, limit: secondCap }], { maxLimit: secondCap });
+          second.forEach(take);
+          remaining -= fresh;
+          if (remaining <= 0) break;
+          if (second.length >= secondCap) {
+            // more of this second may remain than can be loaded at once: delete what we have, ask to repeat
+            truncated = true;
+            break;
+          }
+          until = oldest - 1;
+        }
+      }
+    }
+
+    const affected = [...ids];
+    if (ids.length) deleted += await stores.events.deleteByIds(ids);
+    if (direct.length) {
+      // one query per filter so each keeps its own `limit` — the same rows deleteByFilter removes
+      // (newest first); without limit it's capped, so the emitted id list may be partial for huge deletes
+      for (const f of direct) {
+        const found = await stores.events.query([{ ...f, limit: Math.min(f.limit ?? AFFECTED_CAP, AFFECTED_CAP) }], { maxLimit: AFFECTED_CAP });
+        affected.push(...found.map((e) => e.id));
+      }
+      deleted += await stores.events.deleteByFilter(direct);
+    }
+    const unique = [...new Set(matched)];
+    if (unique.length) {
+      deleted += await stores.events.deleteByIds(unique);
+      affected.push(...unique);
+    }
+    if (affected.length) bus.emit("event.deleted", { ids: [...new Set(affected)].slice(0, AFFECTED_CAP), actor: actor.pubkey, reason: body.reason });
     await ctx.audit(c, "event.delete", null, { ids: ids.slice(0, 100), filters: body.filters, deleted, reason: body.reason });
-    return c.json({ deleted });
+    return c.json(truncated ? { deleted, truncated } : { deleted });
   });
 
   app.get("/events/:id", requirePermission("content.view"), async (c) => {
@@ -226,6 +338,7 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
     const { reason } = await readBody(c, DeleteOne);
     const ev = await stores.events.getById(id);
     if (!ev) throw notFound("event not found");
+    await ctx.users.assertCanDeleteEventsOf(principalOf(c), [ev.pubkey]);
     const deleted = await stores.events.deleteByIds([id]);
     bus.emit("event.deleted", { ids: [id], actor: principalOf(c).pubkey, reason });
     await ctx.audit(c, "event.delete", id, { kind: ev.kind, pubkey: ev.pubkey, reason });

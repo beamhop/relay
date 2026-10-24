@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
 import { nip19 } from "nostr-tools";
-import { Braces, Copy, ExternalLink, Flag, Heart, MoreHorizontal, Repeat2, Trash2, User } from "lucide-react";
+import { Braces, Copy, Flag, Heart, MoreHorizontal, Repeat2, Trash2, User } from "lucide-react";
 import type { NostrEvent, Profile } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,7 +9,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
+import { cn, safeUrl } from "@/lib/utils";
 import { formatDate, timeAgo } from "@/lib/format";
 import { displayName, getTag, getTags, shortHex } from "@/lib/nostr";
 import { usePluginRegistry } from "@/plugins/registry";
@@ -128,7 +128,7 @@ const URL_RE = /(https?:\/\/[^\s<>"]+)/g;
 const IMG_RE = /\.(png|jpe?g|gif|webp|avif|svg)(\?.*)?$/i;
 const VID_RE = /\.(mp4|webm|mov|m4v)(\?.*)?$/i;
 
-export function RichText({ text, compact, media = true }: { text: string; compact?: boolean; media?: boolean }) {
+function RichText({ text, compact, media = true }: { text: string; compact?: boolean; media?: boolean }) {
   const [expanded, setExpanded] = React.useState(false);
   const limit = compact ? 280 : 900;
   const long = text.length > limit;
@@ -249,7 +249,7 @@ export function EventContent({ event, compact }: { event: NostrEvent; compact?: 
       const image = getTag(tags, "image");
       return (
         <div className="overflow-hidden rounded-lg border">
-          {image && <img src={image} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-36 w-full object-cover" />}
+          {safeUrl(image) && <img src={safeUrl(image)} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-36 w-full object-cover" />}
           <div className="space-y-1 p-3">
             <p className="font-semibold">{title || "Untitled article"}</p>
             <p className="line-clamp-3 text-sm text-muted-foreground">{summary || content.slice(0, 300)}</p>
@@ -292,13 +292,5 @@ function TagsSummary({ tags }: { tags: string[][] }) {
         </Badge>
       ))}
     </div>
-  );
-}
-
-export function ExternalNjump({ id }: { id: string }) {
-  return (
-    <a href={`https://njump.me/${nip19.noteEncode(id)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-      njump <ExternalLink className="size-3" />
-    </a>
   );
 }

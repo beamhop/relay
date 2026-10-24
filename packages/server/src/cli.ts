@@ -20,12 +20,13 @@ Commands:
   admin add <npub|hex> [--role owner|admin|moderator|viewer]
                                  grant an admin role (default: admin)
   admin remove <npub|hex>        revoke an admin role
-  admin password <npub|hex>      set a password login for an admin (reads stdin / prompts)
+  admin password <npub|hex>      set a password login for an admin (reads stdin / prompts); signs them out
+                                 everywhere. --reset-2fa also removes two-factor authentication
   user ban <npub|hex> [--reason text]
   user unban <npub|hex>
   export [--filter '<json>']     write events as JSONL to stdout
   import [--skip-verify]         read events as JSONL from stdin
-  migrate                        run all database migrations and exit
+  migrate                        run core/admin/blossom migrations and those of enabled local plugins, then exit
 
 Options:
   -c, --config <path>            config file (default ./beamhop.config.json, env BEAMHOP_CONFIG)
@@ -38,7 +39,7 @@ Options:
       --plugins-dir <path>       local plugins folder (env BEAMHOP_PLUGINS_DIR)
       --owner <npub|hex>         owner pubkey (repeatable; env BEAMHOP_OWNERS)
       --log-level <level>        debug|info|warn|error (env BEAMHOP_LOG_LEVEL)
-      --trust-proxy              trust X-Forwarded-For (env BEAMHOP_TRUST_PROXY)
+      --trust-proxy              trust the proxy's client-IP header (server.proxyIpHeader; env BEAMHOP_TRUST_PROXY)
       --runtime <bun|node>       force the HTTP adapter (default: current runtime)
   -v, --version                  print version
   -h, --help                     show this help
@@ -62,6 +63,7 @@ const options = {
   reason: { type: "string" },
   filter: { type: "string" },
   force: { type: "boolean" },
+  "reset-2fa": { type: "boolean" },
   "skip-verify": { type: "boolean" },
   version: { type: "boolean", short: "v" },
   help: { type: "boolean", short: "h" },
@@ -167,6 +169,7 @@ function cmdInit(v: Values) {
   if (existsSync(path) && !v.force) throw new Error(`${path} already exists (use --force to overwrite)`);
   const owners = (v.owner ?? []).map(toHexPubkey);
   const port = v.port ? Number(v.port) : 3334;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`--port must be an integer between 1 and 65535 (got "${v.port}")`);
   const cfg = {
     server: { host: v.host ?? "0.0.0.0", port, publicUrl: v["public-url"] ?? `http://localhost:${port}`, trustProxy: !!v["trust-proxy"] },
     database: { driver: v.db ?? "sqlite", sqlitePath: v["sqlite-path"] ?? "./data/beamhop.db", ...(v["database-url"] ? { postgresUrl: v["database-url"] } : {}) },
@@ -221,13 +224,20 @@ async function cmdAdmin(v: Values, args: string[]) {
       if (!user?.role && !config.admin.owners.includes(pubkey)) console.warn(`warning: ${npub(pubkey)} has no admin role yet — run \`beamhop admin add ${target}\``);
       const now = Math.floor(Date.now() / 1000);
       const db = bh.stores.db;
-      const r = await db.run("UPDATE admin_credentials SET password_hash = ?, updated_at = ? WHERE pubkey = ?", [hash, now, pubkey]);
-      if (!r.changes) await db.run("INSERT INTO admin_credentials (pubkey, password_hash, totp_secret, updated_at) VALUES (?, ?, NULL, ?)", [pubkey, hash, now]);
-      await bh.stores.audit.record({ actor: "cli", action: "admin.password", target: pubkey, details: {}, ip: null });
+      // password_set_at also retires trusted-device cookies issued before this reset
+      const r = await db.run("UPDATE admin_credentials SET password_hash = ?, updated_at = ?, password_set_at = ? WHERE pubkey = ?", [hash, now, now, pubkey]);
+      if (!r.changes)
+        await db.run("INSERT INTO admin_credentials (pubkey, password_hash, totp_secret, updated_at, password_set_at) VALUES (?, ?, NULL, ?, ?)", [pubkey, hash, now, now]);
+      // a reset is how a compromised or locked-out account is recovered: end every session (running servers
+      // re-read sessions within seconds) and drop the push devices they registered
+      await db.run("DELETE FROM admin_sessions WHERE pubkey = ?", [pubkey]);
+      await db.run("DELETE FROM admin_push_subscriptions WHERE pubkey = ?", [pubkey]);
+      if (v["reset-2fa"]) await db.run("UPDATE admin_credentials SET totp_secret = NULL, totp_last_step = NULL WHERE pubkey = ?", [pubkey]);
+      await bh.stores.audit.record({ actor: "cli", action: "admin.password", target: pubkey, details: { reset2fa: !!v["reset-2fa"] }, ip: null });
     } finally {
       await bh.stop();
     }
-    console.log(`password set for ${npub(pubkey)}`);
+    console.log(`password set for ${npub(pubkey)}; signed out everywhere${v["reset-2fa"] ? "; two-factor authentication removed" : ""}`);
   } else throw new Error(`unknown admin command: ${sub}`);
 }
 
@@ -269,8 +279,16 @@ async function cmdExport(v: Values) {
         total += fresh.length;
         if (!process.stdout.write(fresh.map((e) => JSON.stringify(e) + "\n").join(""))) await new Promise((r) => process.stdout.once("drain", r));
       }
-      if (page.length < want || !fresh.length) break;
+      if (page.length < want) break;
       const last = page[page.length - 1].created_at;
+      if (!fresh.length) {
+        // a whole page shares one created_at: the store can't page within a second, so move on — loudly
+        console.error(`warning: more than ${PAGE} events share created_at ${last}; some of them were not exported`);
+        if (last <= 0) break;
+        until = last - 1;
+        seen = new Set();
+        continue;
+      }
       if (last !== until) seen = new Set();
       for (const e of page) if (e.created_at === last) seen.add(e.id);
       until = last;
@@ -281,7 +299,7 @@ async function cmdExport(v: Values) {
 
 async function cmdImport(v: Values) {
   const { config } = load(v);
-  const counts = { saved: 0, duplicate: 0, invalid: 0, other: 0 };
+  const counts = { saved: 0, duplicate: 0, invalid: 0, other: 0, failed: 0 };
   await withStores(config, async (stores) => {
     const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
     let n = 0;
@@ -293,28 +311,56 @@ async function cmdImport(v: Values) {
       try {
         ev = JSON.parse(s);
         if (Array.isArray(ev)) ev = (ev as unknown[]).find((x) => x && typeof x === "object") as NostrEvent; // ["EVENT", {...}]
-        if (!v["skip-verify"] && !verifyEvent(ev as never)) throw new Error("bad signature");
+        // shape is checked even with --skip-verify so junk lines can't reach (and abort) the store
+        if (!isEventShape(ev)) throw new Error("not an event");
+        if (!v["skip-verify"] && !verifyEvent({ ...ev } as never)) throw new Error("bad signature");
       } catch {
         counts.invalid++;
         continue;
       }
-      const r = await stores.events.save(ev);
-      if (r.status === "saved" || r.status === "replaced") counts.saved++;
-      else if (r.status === "duplicate") counts.duplicate++;
-      else counts.other++;
+      try {
+        const r = await stores.events.save(ev);
+        if (r.status === "saved" || r.status === "replaced") counts.saved++;
+        else if (r.status === "duplicate") counts.duplicate++;
+        else counts.other++;
+      } catch (err) {
+        counts.failed++;
+        if (counts.failed <= 10) console.error(`line ${n}: save failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
       if (n % 5000 === 0) console.error(`… ${n} lines`);
     }
     await stores.audit.record({ actor: "cli", action: "content.import", target: null, details: counts, ip: null });
   });
-  console.error(`imported: ${counts.saved} saved, ${counts.duplicate} duplicates, ${counts.invalid} invalid, ${counts.other} skipped`);
+  console.error(`imported: ${counts.saved} saved, ${counts.duplicate} duplicates, ${counts.invalid} invalid, ${counts.other} skipped, ${counts.failed} failed`);
 }
 
 async function cmdMigrate(v: Values) {
-  const { config } = load(v);
+  const { config, extras } = load(v);
   const { createBeamhop } = await import("./app");
-  const bh = await createBeamhop(config, { autoDiscoverNpm: false });
-  await bh.stop();
-  console.log(`migrations applied (${config.database.driver === "sqlite" ? config.database.sqlitePath : "postgres"})`);
+  // core/admin/blossom migrations run during composition; plugin migrations need the plugin manager. Only
+  // enabled plugins from the plugins dir / plugins.packages are migrated: npm auto-discovery would import (run)
+  // every beamhop-plugin-* package in node_modules just to look at it. `extras` carries plugins enabled via
+  // config / BEAMHOP_PLUGINS_ENABLED, so those count as enabled here just as they do at start.
+  const bh = await createBeamhop(config, { autoDiscoverNpm: false, extras });
+  let plugins = 0;
+  try {
+    plugins = await bh.plugins.migrate();
+  } finally {
+    await bh.stop();
+  }
+  const db = config.database.driver === "sqlite" ? config.database.sqlitePath : "postgres";
+  console.log(`migrations up to date (${db}; checked ${plugins} enabled plugin(s) with migrations)`);
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX128 = /^[0-9a-f]{128}$/;
+function isEventShape(e: unknown): e is NostrEvent {
+  const ev = e as NostrEvent;
+  return (
+    !!ev && typeof ev === "object" && typeof ev.id === "string" && HEX64.test(ev.id) && typeof ev.pubkey === "string" && HEX64.test(ev.pubkey) &&
+    typeof ev.sig === "string" && HEX128.test(ev.sig) && Number.isInteger(ev.kind) && ev.kind >= 0 && Number.isInteger(ev.created_at) &&
+    typeof ev.content === "string" && Array.isArray(ev.tags) && ev.tags.every((t) => Array.isArray(t) && t.every((x) => typeof x === "string"))
+  );
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {

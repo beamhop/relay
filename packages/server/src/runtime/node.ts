@@ -4,7 +4,7 @@ import { getRequestListener } from "@hono/node-server";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Beamhop } from "../app";
 import { makeEnv } from "../app";
-import { clientIp, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, proxyMatcher, type RunningServer, type ServeOptions } from "./common";
 
 const PING_INTERVAL_MS = 30_000;
 const header = (req: IncomingMessage) => (n: string) => {
@@ -17,11 +17,13 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
   const { config, relay, settings, logger } = beamhop;
   const log = logger.child("http");
   const trustProxy = config.server.trustProxy;
+  const proxyIpHeader = config.server.proxyIpHeader;
+  const trustedProxies = proxyMatcher(config.server.trustedProxies);
 
   const listener = getRequestListener(
     (req, env) => {
       const incoming = (env as { incoming: IncomingMessage }).incoming;
-      const ip = clientIp(incoming.socket.remoteAddress, header(incoming), trustProxy);
+      const ip = clientIp(incoming.socket.remoteAddress, header(incoming), trustProxy, proxyIpHeader, trustedProxies);
       return beamhop.fetch(req, makeEnv(ip, env as unknown as Record<string, unknown>));
     },
     {
@@ -32,7 +34,9 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
     },
   );
   const server = createServer(listener);
-  server.requestTimeout = 0; // large uploads
+  // slowloris: headers must arrive within 30s; a whole request (incl. a large upload body) within 30 min
+  server.headersTimeout = 30_000;
+  server.requestTimeout = 30 * 60_000;
   server.keepAliveTimeout = 65_000;
 
   const wss = new WebSocketServer({
@@ -52,7 +56,7 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
       socket.destroy();
       return;
     }
-    const ip = clientIp(req.socket.remoteAddress, header(req), trustProxy);
+    const ip = clientIp(req.socket.remoteAddress, header(req), trustProxy, proxyIpHeader, trustedProxies);
     wss.handleUpgrade(req, socket, head, (ws) => {
       alive.set(ws, true);
       ws.on("pong", () => alive.set(ws, true));

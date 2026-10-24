@@ -9,11 +9,12 @@ import { authenticate } from "./middleware/auth";
 import { CredentialService } from "./services/credentials";
 import { ProfileService } from "./services/profiles";
 import { PushService } from "./services/push";
+import { ReplayGuard } from "./services/replay";
 import { ReportService } from "./services/reports";
 import { RoleService } from "./services/roles";
 import { SessionService } from "./services/sessions";
 import { UserService } from "./services/users";
-import { ExpiringMap } from "./util/lru";
+import { PasswordHasher } from "./util/password";
 import { clientIp } from "./util/request";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerUserRoutes } from "./routes/users";
@@ -36,6 +37,7 @@ import { createNip86Handler } from "./routes/nip86";
 export type { AdminApiOptions, AdminEnv, Principal } from "./context";
 export { ADMIN_MIGRATIONS } from "./db";
 export { hashPassword, verifyPassword } from "./util/password";
+export type { ScryptParams } from "./util/password";
 
 /** default JSON body limit for everything except /events/import */
 const BODY_LIMIT = 1024 * 1024;
@@ -54,6 +56,9 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
   const push = new PushService(deps, roles, nowSec);
   if (opts.pushSender) push.sender = opts.pushSender;
   await push.init();
+  const sessions = new SessionService(deps.stores.db, nowMs);
+  // a session that simply expired takes the push devices it registered with it, like a logout does
+  sessions.onExpired = (id) => (id ? push.unsubscribeSession(id) : push.pruneEndedSessions());
 
   const auditAs: ApiContext["auditAs"] = async (actor, ip, action, target, details = {}) => {
     const at = nowSec();
@@ -75,15 +80,15 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
     publicOrigin: url.origin,
     rpID: url.hostname,
     secureCookies: url.protocol === "https:",
-    sessions: new SessionService(deps.stores.db, nowSec),
+    sessions,
     roles,
     profiles,
     users,
     reports,
     push,
     credentials: new CredentialService(deps.stores.db, nowSec),
-    challenges: new ExpiringMap<true>(10_000, nowMs),
-    usedAuthEvents: new ExpiringMap<true>(100_000, nowMs),
+    passwords: new PasswordHasher({ params: opts.scryptParams }),
+    replay: new ReplayGuard(deps.stores.db, nowMs),
     onReport(fn) {
       reportListeners.add(fn);
       return () => {
@@ -149,7 +154,8 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
       throw new HttpError(413, "request body too large", "too_large");
     },
   });
-  app.use("*", (c, next) => (c.req.path.endsWith("/events/import") ? next() : limiter(c, next)));
+  // only the import route itself gets the larger cap (it enforces its own); a suffix match would also cover plugin proxy paths
+  app.use("*", (c, next) => (c.req.method === "POST" && /^(?:\/admin\/api)?\/events\/import$/.test(c.req.path) ? next() : limiter(c, next)));
   app.use("*", authenticate(ctx));
 
   registerAuthRoutes(app, ctx);

@@ -37,7 +37,7 @@ interface MmdbReader {
   get(ip: string): CityRecord | null;
 }
 
-export const disabledGeo: GeoLookup = { enabled: false, lookup: () => undefined };
+const disabledGeo: GeoLookup = { enabled: false, lookup: () => undefined };
 
 /** Opens the mmdb; returns a disabled lookup (and logs) if the path is unset or unreadable. */
 export async function openGeoIp(path: string | undefined, logger?: Logger, cacheSize = 10_000): Promise<GeoLookup> {

@@ -18,7 +18,7 @@ export function useCan() {
   return (p: Permission | undefined) => !p || !!data?.permissions.includes(p);
 }
 
-export const systemQuery = queryOptions({
+const systemQuery = queryOptions({
   queryKey: ["system"],
   queryFn: () => api.get<SystemInfo>("/system"),
   staleTime: 5 * 60_000,

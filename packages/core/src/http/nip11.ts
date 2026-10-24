@@ -26,10 +26,11 @@ export function buildNip11(ctx: RelayContext): Record<string, unknown> {
       auth_required: access.authForRead || access.mode === "auth-required",
       payment_required: false,
       restricted_writes: access.mode !== "public" || access.authForWrite,
-      created_at_lower_limit: limits.createdAtLowerSec,
       created_at_upper_limit: limits.createdAtUpperSec,
     },
   };
+  // 0 disables the lower bound; advertising 0 would tell clients nothing in the past is accepted
+  if (limits.createdAtLowerSec > 0) (doc.limitation as Record<string, unknown>).created_at_lower_limit = limits.createdAtLowerSec;
   if (info.pubkey) doc.pubkey = info.pubkey;
   if (info.contact) doc.contact = info.contact;
   if (info.icon) doc.icon = info.icon;

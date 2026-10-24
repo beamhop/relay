@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { BusEvents } from "@beamhop/sdk";
 import { finalizeEvent } from "nostr-tools/pure";
 import { createRelay } from "../src";
-import { FakeSocket, keypair, now, setup, sign, tick } from "./fakes";
+import { eventually, FakeSocket, keypair, now, setup, sign, tick } from "./fakes";
 
 describe("EVENT", () => {
   test("accepts a valid event, stores it and emits bus events", async () => {
     const { connect, stores, bus } = await setup();
     const accepted: BusEvents["event.accepted"][] = [];
-    bus.on("event.accepted", (e) => accepted.push(e));
+    bus.on("event.accepted", (e) => void accepted.push(e));
     const c = connect();
     const kp = keypair();
     const ev = sign(kp);
@@ -248,7 +248,7 @@ describe("EVENT", () => {
       },
     });
     const alerts: unknown[] = [];
-    bus.on("alert", (a) => alerts.push(a));
+    bus.on("alert", (a) => void alerts.push(a));
     const c = connect();
     const kp = keypair();
     expect((await c.publish(sign(kp, { content: "a BADWORD here" })))[3]).toMatch(/^blocked:/);
@@ -266,7 +266,7 @@ describe("EVENT", () => {
   test("reports emit report.created; auto-ban after threshold of member reports", async () => {
     const { connect, stores, bus } = await setup({ settings: { moderation: { autoBanReportThreshold: 2 } } });
     const reports: unknown[] = [];
-    bus.on("report.created", (r) => reports.push(r));
+    bus.on("report.created", (r) => void reports.push(r));
     const c = connect();
     const target = keypair();
     const r1 = keypair();
@@ -275,9 +275,10 @@ describe("EVENT", () => {
     await stores.users.upsert(r2.pk, { allowed: true });
     await c.publish(sign(r1, { kind: 1984, tags: [["p", target.pk, "spam"]] }));
     expect(reports.length).toBe(1);
+    await tick(20); // the auto-ban check runs after the OK
     expect((await stores.users.get(target.pk))?.status).not.toBe("banned");
     await c.publish(sign(r2, { kind: 1984, tags: [["p", target.pk, "spam"]] }));
-    expect((await stores.users.get(target.pk))?.status).toBe("banned");
+    await eventually(async () => (await stores.users.get(target.pk))?.status === "banned");
     expect((await c.publish(sign(target)))[3]).toMatch(/^blocked:/);
   });
 

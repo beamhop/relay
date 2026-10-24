@@ -69,7 +69,7 @@ export async function setup(o: { config?: Record<string, unknown>; relay?: Relay
   const proc = fakeProcess();
   const relay = o.relay ?? fakeRelay();
   const alerts: unknown[] = [];
-  bus.on("alert", (a) => alerts.push(a));
+  bus.on("alert", (a) => void alerts.push(a));
   const metrics = await createMetricsService(
     {
       config: ConfigSchema.parse(o.config ?? {}),
