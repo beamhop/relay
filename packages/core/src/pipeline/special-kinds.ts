@@ -95,10 +95,16 @@ async function applyVanish(ctx: RelayContext, event: NostrEvent) {
       await ctx.stores.kv.set(VANISH_KV_NAMESPACE, pk, until);
     }
   }
-  const n = await ctx.stores.events.deleteByFilter([
-    { authors: [pk], until },
-    { kinds: [1059], "#p": [pk], until },
-  ]);
+  // everything from the pubkey up to the request, plus gift wraps addressed to it. The wraps are tombstoned
+  // (they're signed by throwaway keys, so the author-based vanish check can't stop a re-broadcast).
+  let n = await ctx.stores.events.deleteByPubkey(pk, until);
+  for (;;) {
+    const wraps = await ctx.stores.events.query([{ kinds: [1059], "#p": [pk], limit: 1000 }], { maxLimit: 1000 });
+    if (!wraps.length) break;
+    const removed = await ctx.stores.events.deleteByIds(wraps.map((w) => w.id), { tombstone: event.id });
+    n += removed;
+    if (removed === 0) break;
+  }
   ctx.bus.emit("event.deleted", { ids: [], actor: pk, reason: `NIP-62 request to vanish (${n} events)` });
   ctx.logger.info("request to vanish processed", { pubkey: pk, deleted: n });
 }

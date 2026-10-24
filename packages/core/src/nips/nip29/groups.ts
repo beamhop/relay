@@ -38,6 +38,13 @@ const UNTRUSTED_SOURCES: ReadonlySet<EventSource> = new Set(["ws", "sync", "plug
 export const MIN_INVITE_CODE_LENGTH = 6;
 /** Failed invite-code join attempts (closed groups), per group and per client address, per minute. */
 export const INVITE_ATTEMPTS_PER_MINUTE = { group: 60, ip: 10 };
+/** `previous` may also reference any event stored on this relay within this many seconds (cheap bounded lookup). */
+const PREVIOUS_RECENT_SEC = 24 * 3600;
+const PREVIOUS_RECENT_LIMIT = 500;
+/** NIP-29 late publication: group events older than this are rejected (relay-signed events are exempt). */
+const LATE_PUBLICATION_SEC = 3600;
+/** Standard 39000 flags; a 9002 carries the full metadata set, so an absent flag means off. */
+const FLAG_TAGS = ["private", "closed", "restricted", "hidden"] as const;
 
 export const DEFAULT_ROLES: Record<string, string> = {
   admin: "Full control over the group",
@@ -182,20 +189,27 @@ export class GroupsService {
     }
     const h = [...hs][0];
     if (isGroupKind && untrusted && event.created_at < nowSec() - GROUP_CONTROL_MAX_AGE_SEC) {
-      return { reject: "invalid: group control events must be recent (created_at is too old)" };
+      return { reject: "invalid: group control events must be recent (late publication)" };
     }
     const g = this.groups.get(h);
+    // NIP-29 late publication (relay-signed events are exempt); a hidden group answers as if it didn't exist
+    const late = event.pubkey !== this.ctx.key.pubkey && event.created_at < nowSec() - LATE_PUBLICATION_SEC;
+    const lateReject = { reject: "invalid: group event created_at is too old (late publication)" };
     let decision: GroupWriteDecision;
-    if (k === GROUP_KIND.CREATE_GROUP) decision = this.onCreate(event, h, g, actor);
-    else if (!g || (g.deleting && !actor.isStaff)) return enabled ? { reject: NOT_FOUND } : undefined;
-    else if (k === GROUP_KIND.JOIN_REQUEST) decision = this.onJoin(event, g, actor);
+    if (k === GROUP_KIND.CREATE_GROUP) {
+      if (late) return lateReject;
+      decision = this.onCreate(event, h, g, actor);
+    } else if (!g || (g.deleting && !actor.isStaff)) return enabled ? { reject: NOT_FOUND } : undefined;
+    else if (late) return g.hidden && !g.members.has(event.pubkey) && !actor.isStaff ? { reject: NOT_FOUND } : lateReject;
+    else if (k === GROUP_KIND.JOIN_REQUEST) decision = await this.onJoin(event, g, actor);
     else if (k === GROUP_KIND.LEAVE_REQUEST) decision = this.onLeave(event, g);
     else if (k >= 9000 && k <= 9020) decision = this.onModeration(event, g, actor);
     else {
-      // regular group content
+      // regular group content — only `restricted` limits writing to members (private limits reading, closed limits joining)
       const member = g.members.has(event.pubkey);
       if (!member && !actor.isStaff && g.hidden) return { reject: NOT_FOUND }; // don't confirm a hidden group exists
-      if (!member && (g.private || g.closed || g.restricted) && !actor.isStaff) return { reject: "restricted: not a member of this group" };
+      if (g.restricted && !member && !actor.isStaff) return { reject: "restricted: not a member of this group" };
+      if (g.supportedKinds && !g.supportedKinds.includes(k)) return { reject: `restricted: kind ${k} is not supported by this group` };
       return this.checkPrevious(event, g);
     }
     // A control event changes state at most once, even if it is deleted and sent again later. The claim
@@ -219,14 +233,23 @@ export class GroupsService {
     return decision;
   }
 
-  /** NIP-29 timeline references: every `previous` id prefix must match one of the group's recent events. */
+  /**
+   * NIP-29 timeline references: every `previous` id prefix must match an event this relay has — one of the
+   * group's recent events or anything stored recently (bounded queries, no prefix index needed).
+   */
   private async checkPrevious(event: NostrEvent, g: GroupState): Promise<GroupWriteDecision> {
     const prev = event.tags.filter((t) => t[0] === "previous").flatMap((t) => t.slice(1)).filter(Boolean);
     if (!prev.length) return undefined;
     if (prev.some((p) => !/^[0-9a-f]{8,64}$/.test(p))) return { reject: "invalid: malformed previous tag" };
-    const recent = await this.ctx.stores.events.query([{ "#h": [g.id], limit: PREVIOUS_WINDOW }], { maxLimit: PREVIOUS_WINDOW });
+    const recent = await this.ctx.stores.events.query(
+      [
+        { "#h": [g.id], limit: PREVIOUS_WINDOW },
+        { since: nowSec() - PREVIOUS_RECENT_SEC, limit: PREVIOUS_RECENT_LIMIT },
+      ],
+      { maxLimit: PREVIOUS_RECENT_LIMIT },
+    );
     const ok = prev.every((p) => recent.some((ev) => ev.id.startsWith(p)));
-    return ok ? undefined : { reject: "invalid: previous tag references an event not in this group's recent history" };
+    return ok ? undefined : { reject: "invalid: previous tag references an event not found on this relay" };
   }
 
   // ------------------------------------------------------------ handlers
@@ -241,11 +264,13 @@ export class GroupsService {
       creation === "anyone" ||
       (creation === "members" && (actor.isRelayMember || s.access.mode === "public"));
     if (!allowed) return { reject: "restricted: you are not allowed to create groups on this relay" };
+    if (hasSubgroupTags(event.tags)) return { reject: "invalid: subgroups are not supported" };
     const g: GroupState = {
       id,
-      name: getTag(event, "name") ?? id,
-      about: getTag(event, "about") ?? "",
-      picture: getTag(event, "picture") ?? "",
+      name: id,
+      about: "",
+      picture: "",
+      banner: "",
       private: false,
       closed: false,
       restricted: false,
@@ -257,7 +282,7 @@ export class GroupsService {
       invites: new Set(),
       lastMetaAt: 0,
     };
-    applyFlags(g, event.tags);
+    applyMetadata(g, event.tags);
     return {
       commit: async () => {
         if (this.groups.has(id)) throw new GroupConflict("duplicate: group already exists");
@@ -277,7 +302,7 @@ export class GroupsService {
     };
   }
 
-  private onJoin(event: NostrEvent, g: GroupState, actor: GroupActor): GroupWriteDecision {
+  private async onJoin(event: NostrEvent, g: GroupState, actor: GroupActor): Promise<GroupWriteDecision> {
     if (g.members.has(event.pubkey)) return { reject: "duplicate: already a member of this group" };
     const code = getTag(event, "code");
     let hash: string | undefined;
@@ -292,18 +317,21 @@ export class GroupsService {
         return { reject: g.hidden ? NOT_FOUND : "rate-limited: too many invite code attempts, try again later" };
       }
       const h = hashCode(code);
-      if (!g.invites.has(h)) {
+      if (g.invites.has(h)) hash = h;
+      else {
+        // a wrong code counts against the guessing limits; the request is then handled like one without a code
         this.ctx.rate.charge(groupKey, L.group, 1);
         if (ipKey) this.ctx.rate.charge(ipKey, L.ip, 1);
-        return { reject: g.hidden ? NOT_FOUND : "restricted: invalid invite code" };
       }
-      hash = h;
     } else if (code && g.invites.has(hashCode(code))) {
       hash = hashCode(code); // open groups need no code: a valid one is used up, an unknown one is ignored
     }
     if (g.closed && !hash) {
       if (g.hidden) return { reject: NOT_FOUND };
-      return {}; // stored as a pending join request for admins to act on
+      // NIP-29: MUST reject when the user isn't added; keep the request stored (and fan it out) for admins to act on.
+      const res = await this.ctx.stores.events.save(event);
+      if (res.status === "saved") this.ctx.broadcast(event);
+      return { reject: "restricted: join request pending admin approval" };
     }
     return {
       commit: async () => {
@@ -389,14 +417,10 @@ export class GroupsService {
         };
       }
       case GROUP_KIND.EDIT_METADATA:
+        if (hasSubgroupTags(event.tags)) return { reject: "invalid: subgroups are not supported" };
         return {
           commit: async () => {
-            for (const t of event.tags) {
-              if (t[0] === "name" && t[1] !== undefined) g.name = t[1];
-              else if (t[0] === "about" && t[1] !== undefined) g.about = t[1];
-              else if (t[0] === "picture" && t[1] !== undefined) g.picture = t[1];
-            }
-            applyFlags(g, event.tags);
+            applyMetadata(g, event.tags);
             await this.repo.saveGroup(g);
           },
           after: () => this.publishMetadata(g, [GROUP_KIND.METADATA]),
@@ -454,9 +478,9 @@ export class GroupsService {
   /** (Re)generates relay-signed metadata events 39000-39003 for a group. */
   async publishMetadata(g: GroupState, kinds: readonly number[]): Promise<void> {
     if (g.lastMetaAt === 0) {
-      // not persisted: recover from the newest stored metadata so new events don't come out "stale" after a restart
-      const [latest] = await this.ctx.stores.events.query([{ kinds: METADATA_KINDS, authors: [this.ctx.key.pubkey], "#d": [g.id], limit: 1 }]);
-      if (latest) g.lastMetaAt = Math.max(g.lastMetaAt, latest.created_at);
+      // after a restart: continue strictly after the stored 39000-39003 so replacements never tie
+      const stored = await this.ctx.stores.events.query([{ kinds: METADATA_KINDS, authors: [this.ctx.key.pubkey], "#d": [g.id], limit: METADATA_KINDS.length }]);
+      for (const ev of stored) g.lastMetaAt = Math.max(g.lastMetaAt, ev.created_at);
     }
     const created_at = Math.max(nowSec(), g.lastMetaAt + 1);
     g.lastMetaAt = created_at;
@@ -467,9 +491,9 @@ export class GroupsService {
         tags.push(["name", g.name]);
         if (g.about) tags.push(["about", g.about]);
         if (g.picture) tags.push(["picture", g.picture]);
-        tags.push([g.private ? "private" : "public"], [g.closed ? "closed" : "open"]);
-        if (g.restricted) tags.push(["restricted"]);
-        if (g.hidden) tags.push(["hidden"]);
+        if (g.banner) tags.push(["banner", g.banner]);
+        for (const f of FLAG_TAGS) if (g[f]) tags.push([f]);
+        if (g.supportedKinds) tags.push(["supported_kinds", ...g.supportedKinds.map(String)]);
       } else if (kind === GROUP_KIND.ADMINS) {
         content = `admins of ${g.id}`;
         for (const [pk, roles] of g.members) if (roles.length) tags.push(["p", pk, ...roles]);
@@ -538,17 +562,21 @@ export class GroupDuplicate extends Error {}
 
 const NOT_FOUND = "invalid: group not found";
 
-function applyFlags(g: GroupState, tags: string[][]) {
-  for (const t of tags) {
-    switch (t[0]) {
-      case "private": g.private = true; break;
-      case "public": g.private = false; break;
-      case "closed": g.closed = true; break;
-      case "open": g.closed = false; break;
-      case "restricted": g.restricted = true; break;
-      case "unrestricted": g.restricted = false; break;
-      case "hidden": g.hidden = true; break;
-      case "visible": g.hidden = false; break;
-    }
-  }
+const hasSubgroupTags = (tags: string[][]) => tags.some((t) => t[0] === "parent" || t[0] === "child");
+
+/**
+ * Applies a full NIP-29 metadata set (9007 / 9002): every field is taken from the tags, absent ones are
+ * cleared (name falls back to the group id) and absent flags are off. The legacy non-standard
+ * `public`/`open`/`unrestricted`/`visible` tags are still accepted — they just mean "off".
+ */
+function applyMetadata(g: GroupState, tags: string[][]) {
+  const tag = (name: string) => tags.find((t) => t[0] === name);
+  const has = (name: string) => tags.some((t) => t[0] === name);
+  g.name = tag("name")?.[1] || g.id;
+  g.about = tag("about")?.[1] ?? "";
+  g.picture = tag("picture")?.[1] ?? "";
+  g.banner = tag("banner")?.[1] ?? "";
+  for (const f of FLAG_TAGS) g[f] = has(f);
+  const kinds = tag("supported_kinds");
+  g.supportedKinds = kinds ? [...new Set(kinds.slice(1).map(Number).filter((n) => Number.isInteger(n) && n >= 0))] : undefined;
 }

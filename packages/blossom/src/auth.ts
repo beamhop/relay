@@ -18,8 +18,11 @@ export class AuthError extends Error {
   }
 }
 
-/** Allowed clock skew for `created_at` (seconds). */
-const CREATED_AT_SKEW = 60;
+/**
+ * BUD-11 requires `created_at` to be in the past. A small tolerance (seconds) absorbs client clock drift so tokens
+ * signed "now" by a slightly-fast clock aren't rejected.
+ */
+const CREATED_AT_SKEW = 30;
 /**
  * Upload/delete tokens may not be valid for longer than this (seconds from now). Upload tokens are reusable
  * bearer tokens until they expire (an `x`-bound one can only re-upload the same blob, which is idempotent; a

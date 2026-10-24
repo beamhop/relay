@@ -23,7 +23,8 @@ export function buildNip11(ctx: RelayContext): Record<string, unknown> {
       max_event_tags: limits.maxEventTags,
       max_content_length: limits.maxContentLength,
       min_pow_difficulty: limits.minPowDifficulty,
-      auth_required: access.authForRead || access.mode === "auth-required",
+      // NIP-11: auth is required before *any* action, i.e. for both reading and writing
+      auth_required: access.mode === "auth-required" || (access.authForRead && access.authForWrite),
       payment_required: false,
       restricted_writes: access.mode !== "public" || access.authForWrite,
       created_at_upper_limit: limits.createdAtUpperSec,

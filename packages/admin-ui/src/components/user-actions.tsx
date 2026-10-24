@@ -6,7 +6,7 @@ import { usePluginRegistry } from "@/plugins/registry";
 import { displayName } from "@/lib/nostr";
 import type { Profile } from "@beamhop/sdk/admin-contract";
 
-/** Ban/unban flows with confirmation dialogs shared by the users list and detail pages. */
+/** Ban/unban/delete flows with confirmation dialogs shared by the users list and detail pages. */
 export function useBanFlow(scope?: string) {
   const confirm = useConfirm();
   const actions = useUserActions(scope);
@@ -33,7 +33,18 @@ export function useBanFlow(scope?: string) {
     });
     return true;
   };
-  return { ...actions, banWithConfirm: ban, confirm };
+  const remove = async (pubkey: string, profile?: Profile) => {
+    const r = await confirm({
+      title: `Delete ${displayName(pubkey, profile)}?`,
+      description: "Removes the user along with all their events and uploaded media. This can't be undone. They are not banned and can connect again.",
+      destructive: true,
+      confirmText: "Delete user",
+    });
+    if (!r) return false;
+    await actions.remove.mutateAsync(pubkey);
+    return true;
+  };
+  return { ...actions, banWithConfirm: ban, deleteWithConfirm: remove, confirm };
 }
 
 /** Plugin-provided user actions, rendered inside a DropdownMenuContent. */

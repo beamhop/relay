@@ -9,7 +9,7 @@ Bun is the primary runtime; everything must also run on Node ≥ 22 (via `bun bu
 | `sdk` | **Contracts only** (+ tiny runtime: EventBus, HookRegistry, logger, zod config schemas). Everyone depends on it. |
 | `storage` | `createStores(config) → Stores`: SQL `Db` abstraction (bun:sqlite / better-sqlite3 / postgres), EventStore (FTS for NIP-50), users, invites, ip rules, kv, audit, `createSettingsService`. |
 | `core` | `createRelay(deps) → RelayEngine`: NIP-01 protocol, validation pipeline, subscriptions/fan-out, NIP-09/11/13/40/42/45/50/62/70/77/29/05/17-59, rate limits, moderation policies, retention jobs. |
-| `blossom` | `createBlossom(deps) → BlossomService`: BUD-01/02/04/06, FS & S3 blob drivers, EXIF strip, thumbnails (sharp, optional), quotas, moderation status. |
+| `blossom` | `createBlossom(deps) → BlossomService`: BUD-01/02/04/06/08/11/12, FS & S3 blob drivers, opt-in EXIF strip, thumbnails (sharp, optional), quotas, moderation status. |
 | `metrics` | `createMetrics(deps) → MetricsService`: bus collectors, rollups in DB, live snapshot, GeoIP, OpenTelemetry export, process stats. |
 | `admin-api` | `createAdminApi(deps) → AdminApi`: REST at `/admin/api` per `sdk/src/admin-contract.ts`, auth (NIP-98 / password / passkeys), RBAC, audit, SSE, web push, NIP-86. |
 | `admin-ui` | React + shadcn/ui + TanStack Router/Query + MapLibre PWA. Built with Vite to `packages/admin-ui/dist`, served at `/admin`. |

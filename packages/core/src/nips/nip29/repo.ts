@@ -59,6 +59,12 @@ ALTER TABLE core_group_invites ALTER COLUMN created_at TYPE BIGINT;
 ALTER TABLE core_group_applied ALTER COLUMN created_at TYPE BIGINT;`,
     },
   },
+  {
+    id: "002_group_banner_kinds",
+    up: `
+ALTER TABLE core_groups ADD COLUMN banner TEXT NOT NULL DEFAULT '';
+ALTER TABLE core_groups ADD COLUMN supported_kinds TEXT;`,
+  },
 ];
 
 /**
@@ -72,6 +78,9 @@ export interface GroupState {
   name: string;
   about: string;
   picture: string;
+  banner: string;
+  /** NIP-29 `supported_kinds`; undefined = all kinds, [] = none (e.g. AV-only) */
+  supportedKinds?: number[];
   private: boolean;
   closed: boolean;
   restricted: boolean;
@@ -84,7 +93,7 @@ export interface GroupState {
   roles: Map<string, string>;
   /** hashed invite codes ("sha256:<hex>") */
   invites: Set<string>;
-  /** created_at of the last relay-signed metadata batch (kept strictly increasing) */
+  /** created_at of the last relay-signed metadata batch (kept strictly increasing; 0 = not yet loaded from the event store) */
   lastMetaAt: number;
   /** being deleted: hidden from everyone until its events are purged (in memory only) */
   deleting?: boolean;
@@ -95,6 +104,8 @@ interface GroupRow {
   name: string;
   about: string;
   picture: string;
+  banner: string | null;
+  supported_kinds: string | null;
   is_private: number;
   is_closed: number;
   is_restricted: number;
@@ -125,6 +136,8 @@ export class GroupRepo {
         name: r.name,
         about: r.about,
         picture: r.picture,
+        banner: r.banner ?? "",
+        supportedKinds: r.supported_kinds == null ? undefined : safeArray(r.supported_kinds).map(Number),
         private: !!Number(r.is_private),
         closed: !!Number(r.is_closed),
         restricted: !!Number(r.is_restricted),
@@ -145,11 +158,11 @@ export class GroupRepo {
 
   async saveGroup(g: GroupState): Promise<void> {
     await this.db.run(
-      `INSERT INTO core_groups (id, name, about, picture, is_private, is_closed, is_restricted, is_hidden, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO core_groups (id, name, about, picture, banner, supported_kinds, is_private, is_closed, is_restricted, is_hidden, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET name = excluded.name, about = excluded.about, picture = excluded.picture,
-         is_private = excluded.is_private, is_closed = excluded.is_closed, is_restricted = excluded.is_restricted, is_hidden = excluded.is_hidden`,
-      [g.id, g.name, g.about, g.picture, g.private ? 1 : 0, g.closed ? 1 : 0, g.restricted ? 1 : 0, g.hidden ? 1 : 0, g.createdAt, g.createdBy],
+         banner = excluded.banner, supported_kinds = excluded.supported_kinds, is_private = excluded.is_private, is_closed = excluded.is_closed, is_restricted = excluded.is_restricted, is_hidden = excluded.is_hidden`,
+      [g.id, g.name, g.about, g.picture, g.banner, g.supportedKinds ? JSON.stringify(g.supportedKinds.map(String)) : null, g.private ? 1 : 0, g.closed ? 1 : 0, g.restricted ? 1 : 0, g.hidden ? 1 : 0, g.createdAt, g.createdBy],
     );
   }
 

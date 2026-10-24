@@ -248,8 +248,9 @@ describe("NIP-29", () => {
 
     const guesser = connect("7.7.7.7");
     const wrong = sign(keypair(), { kind: 9021, tags: h("club", [["code", "guess-0"]]) });
-    expect((await guesser.publish(wrong))[3]).toMatch(/^restricted: invalid invite code/);
-    expect(await stores.events.getById(wrong.id)).toBeUndefined();
+    expect((await guesser.publish(wrong))[3]).toMatch(/^restricted: join request pending admin approval/);
+    // handled like a request without a code: kept as a pending join request for admins (NIP-29)
+    expect(await stores.events.getById(wrong.id)).toBeDefined();
     let limited = false;
     for (let i = 1; i < 15 && !limited; i++) {
       const res = await guesser.publish(sign(keypair(), { kind: 9021, tags: h("club", [["code", `guess-${i}`]]) }));

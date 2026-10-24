@@ -8,7 +8,7 @@ import type { Connection } from "../protocol/connection";
 import { codeOf, withPrefix } from "../util/reasons";
 import { checkAccess, checkProtected } from "./access";
 import { checkPow } from "./pow";
-import { KIND_AUTH, KIND_VANISH, prepareSpecial } from "./special-kinds";
+import { KIND_AUTH, KIND_DELETION, KIND_VANISH, prepareSpecial, vanishTargetsUs } from "./special-kinds";
 
 export interface WriteOptions {
   conn?: Connection;
@@ -63,7 +63,8 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   const bytes = opts.bytes ?? Buffer.byteLength(JSON.stringify(event));
   if (bytes > L.maxEventBytes) return reject(`invalid: event is too large (max ${L.maxEventBytes} bytes)`, "too-large");
   if (event.tags.length > L.maxEventTags) return reject(`invalid: too many tags (max ${L.maxEventTags})`, "too-large");
-  if (event.content.length > L.maxContentLength) return reject(`invalid: content is too long (max ${L.maxContentLength})`, "too-large");
+  // NIP-11 max_content_length counts unicode characters (code points), not UTF-16 units
+  if (event.content.length > L.maxContentLength && codePoints(event.content) > L.maxContentLength) return reject(`invalid: content is too long (max ${L.maxContentLength})`, "too-large");
 
   // ---- id / signature
   if (!ctx.verifier.verify(event)) return reject("invalid: bad event id or signature");
@@ -76,21 +77,27 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   const exp = expirationOf(event);
   if (exp !== undefined && exp <= now) return reject("invalid: event has expired");
 
+  // NIP-62: a request to vanish addressed to us is honoured regardless of the user's status, access mode,
+  // PoW or content policies ("MUST also follow the request to vanish regardless of the user's status").
+  const vanish = event.kind === KIND_VANISH && vanishTargetsUs(ctx, event);
+  // NIP-09: users can still delete their own events while banned or muted.
+  const selfCleanup = vanish || event.kind === KIND_DELETION;
+
   // ---- NIP-13
-  if (external) {
+  if (external && !vanish) {
     const pow = checkPow(event, L.minPowDifficulty);
     if (pow) return reject(pow);
   }
 
   // ---- bans / deny list / vanish / mute
   const user = await ctx.users.get(event.pubkey);
-  if (user?.denied) return reject("blocked: pubkey is not allowed on this relay");
-  if (user?.status === "banned") return reject(`blocked: pubkey is banned${user.banReason ? ` (${user.banReason})` : ""}`);
+  if (user?.denied && !selfCleanup) return reject("blocked: pubkey is not allowed on this relay");
+  if (user?.status === "banned" && !selfCleanup) return reject(`blocked: pubkey is banned${user.banReason ? ` (${user.banReason})` : ""}`);
   const vanishedAt = ctx.vanished.get(event.pubkey);
   if (vanishedAt !== undefined && event.kind !== KIND_VANISH && event.created_at <= vanishedAt) return reject("blocked: pubkey has requested to vanish from this relay");
-  if (user?.status === "muted") return shadow("pubkey muted");
+  if (user?.status === "muted" && !selfCleanup) return shadow("pubkey muted");
 
-  if (external && conn) {
+  if (external && conn && !vanish) {
     // ---- access mode, NIP-70
     const denied = (await checkAccess(ctx, event, user, conn)) ?? checkProtected(event, conn);
     if (denied) return reject(denied);
@@ -104,7 +111,7 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
 
   // ---- plugin write hooks
   const wctx: WriteContext = { conn, source };
-  const hook = await ctx.hooks.runWrite(event, wctx);
+  const hook = vanish ? { event, result: "accept" as const, reason: undefined } : await ctx.hooks.runWrite(event, wctx);
   if (hook.event !== event) {
     const v = validateEventShape(hook.event);
     if ("reason" in v || !ctx.verifier.verify(v.event)) return reject("error: plugin replaced the event with an invalid one");
@@ -203,4 +210,10 @@ function rateOk(ctx: RelayContext, event: NostrEvent, user: UserRecord | undefin
   if (!ctx.rate.take(key, override ?? def)) return false;
   if (override !== undefined) return true;
   return ctx.rate.take(`ev:ip:${conn.ipKey}`, def * IP_RATE_FACTOR);
+}
+
+function codePoints(s: string): number {
+  let n = 0;
+  for (const _ of s) n++;
+  return n;
 }

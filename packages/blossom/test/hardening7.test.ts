@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { typeOfUnrecognized } from "../src/mime";
-import { authHeader, createHarness, newUser, type Harness } from "./fakes";
+import { authHeader, createHarness, newUser, type Harness, xOf } from "./fakes";
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -14,7 +14,7 @@ const upload = (body: Uint8Array, type?: string) =>
   h!.request("/upload", {
     method: "PUT",
     body: body as BodyInit,
-    headers: { authorization: authHeader(alice.sk, "upload", { server: ["cdn.example.com"] }), ...(type ? { "content-type": type } : {}) },
+    headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(body)] }), ...(type ? { "content-type": type } : {}) },
   });
 
 describe("declared Content-Type of unrecognised bytes", () => {

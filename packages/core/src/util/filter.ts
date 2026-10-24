@@ -3,6 +3,8 @@ import type { Filter, NostrEvent } from "@beamhop/sdk";
 // Tokenization mirrors @beamhop/storage parseSearch so live delivery and stored queries agree.
 const EXTENSION_TOKEN = /^[a-zA-Z_-]+:[^/\s]/;
 const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
+/** Tag values longer than this aren't indexed by the store, so live matching ignores them too. */
+export const MAX_MATCHED_TAG_VALUE = 1024;
 
 /** NIP-50 search terms: quoted phrases kept whole, `key:value` extensions (language:en, …) dropped. */
 function searchTerms(search: string): string[] {
@@ -17,7 +19,7 @@ function searchTerms(search: string): string[] {
 }
 
 /** Small NIP-50 matcher used for live delivery: every term / phrase must occur (case-insensitive). */
-function matchSearch(search: string, event: NostrEvent): boolean {
+export function matchSearch(search: string, event: NostrEvent): boolean {
   const terms = searchTerms(search);
   if (!terms.length) return true;
   const content = event.content.toLowerCase();
@@ -38,7 +40,7 @@ export function matchFilter(filter: Filter, event: NostrEvent): boolean {
     const name = key.slice(1);
     let ok = false;
     for (const t of event.tags) {
-      if (t[0] === name && t[1] !== undefined && values.includes(t[1])) {
+      if (t[0] === name && t[1] !== undefined && t[1].length <= MAX_MATCHED_TAG_VALUE && values.includes(t[1])) {
         ok = true;
         break;
       }

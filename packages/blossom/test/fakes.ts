@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -156,6 +157,9 @@ export function authHeader(
   const b64 = Buffer.from(JSON.stringify(ev)).toString("base64url");
   return `Nostr ${b64}`;
 }
+
+/** sha256 of bytes, synchronously (for upload `x` tags, required by BUD-11). */
+export const xOf = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
 export const sha256 = async (data: Uint8Array) =>
   Buffer.from(await crypto.subtle.digest("SHA-256", data as BufferSource)).toString("hex");

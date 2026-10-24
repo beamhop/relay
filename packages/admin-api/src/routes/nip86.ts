@@ -77,7 +77,16 @@ export function createNip86Handler(ctx: ApiContext) {
   };
 
   const methods: Record<string, Method> = {
-    supportedmethods: { permission: null, run: async () => Object.keys(methods) },
+    // the other methods, limited to what the caller's role may actually call
+    supportedmethods: {
+      permission: null,
+      async run(_params, caller) {
+        const perms = permissionsFor(caller.role);
+        return Object.entries(methods)
+          .filter(([name, m]) => name !== "supportedmethods" && (!m.permission || perms.has(m.permission)))
+          .map(([name]) => name);
+      },
+    },
 
     banpubkey: {
       permission: "users.ban",
@@ -86,7 +95,10 @@ export function createNip86Handler(ctx: ApiContext) {
         const reason = str(params, 1, "reason", true);
         await assertCan("moderate", caller, pk);
         const r = await ctx.users.ban(pk, { reason: reason || undefined, disconnect: true }, caller.pubkey);
-        await audit(caller, "user.ban", pk, { reason, disconnected: r.disconnected });
+        // NIP-86: banning also removes the pubkey from the allow list
+        const unallowed = r.user.allowed;
+        if (unallowed) await ctx.users.update(pk, { allowed: false }, caller.pubkey);
+        await audit(caller, "user.ban", pk, { reason, disconnected: r.disconnected, ...(unallowed ? { unallowed } : {}) });
         return true;
       },
     },
@@ -95,7 +107,8 @@ export function createNip86Handler(ctx: ApiContext) {
       async run(params, caller) {
         const pk = pubkeyParam(params);
         await assertCan("moderate", caller, pk);
-        await ctx.users.setStatus(pk, "active", caller.pubkey);
+        // only lift a ban; a muted user stays muted (and is not added to the allow list)
+        if ((await stores.users.get(pk))?.status === "banned") await ctx.users.setStatus(pk, "active", caller.pubkey);
         await audit(caller, "user.unban", pk, { reason: str(params, 1, "reason", true) });
         return true;
       },
@@ -113,9 +126,15 @@ export function createNip86Handler(ctx: ApiContext) {
         const pk = pubkeyParam(params);
         const reason = str(params, 1, "reason", true);
         await assertCan("edit", caller, pk, { allowed: true });
+        // NIP-86: allowing also removes the pubkey from the ban list (which needs ban rights)
+        const unbanned = (await stores.users.get(pk))?.status === "banned";
+        if (unbanned) {
+          if (!permissionsFor(caller.role).has("users.ban")) throw new RpcError("forbidden: pubkey is banned; unbanning requires permission users.ban");
+          await assertCan("moderate", caller, pk);
+        }
         // the reason goes to the audit log; it must not overwrite the operator's notes on the user
-        await ctx.users.update(pk, { allowed: true }, caller.pubkey);
-        await audit(caller, "user.allow", pk, { reason });
+        await ctx.users.update(pk, { allowed: true, ...(unbanned ? { status: "active", banReason: null } : {}) }, caller.pubkey);
+        await audit(caller, "user.allow", pk, { reason, ...(unbanned ? { unbanned } : {}) });
         return true;
       },
     },
@@ -193,6 +212,17 @@ export function createNip86Handler(ctx: ApiContext) {
         return true;
       },
     },
+    unbanevent: {
+      permission: "content.delete",
+      async run(params, caller) {
+        const id = eventIdParam(params);
+        // lifts the write block only; the deleted event is not restored and is not added to any allow list
+        await stores.db.run("DELETE FROM admin_banned_events WHERE id = ?", [id]);
+        bannedEvents.delete(id);
+        await audit(caller, "event.unban", id, { reason: str(params, 1, "reason", true) });
+        return true;
+      },
+    },
     listbannedevents: {
       permission: "content.view",
       async run() {
@@ -235,6 +265,10 @@ export function createNip86Handler(ctx: ApiContext) {
       permission: "settings.view",
       run: async () => settings.get().moderation.kindAllowlist,
     },
+    listdisallowedkinds: {
+      permission: "settings.view",
+      run: async () => settings.get().moderation.kindBlocklist,
+    },
     blockip: {
       permission: "ip.manage",
       async run(params, caller) {
@@ -272,11 +306,19 @@ export function createNip86Handler(ctx: ApiContext) {
     return [base, `${base}/`, ws, `${ws}/`];
   })();
 
+  // browser-based management clients call this cross-origin; auth is the NIP-98 header, not cookies
+  const CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Max-Age": "86400",
+  };
   const reply = (body: { result: unknown; error?: string }, status = 200) =>
     // NIP-86 clients are browser apps on other origins; auth is a header (NIP-98), never a cookie
-    new Response(JSON.stringify(body), { status, headers: { "Content-Type": CONTENT_TYPE, "Access-Control-Allow-Origin": "*" } });
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": CONTENT_TYPE, ...CORS } });
 
   return async function nip86(req: Request): Promise<Response> {
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     if (req.method !== "POST") return reply({ result: null, error: "method not allowed" }, 405);
     // stops reading as soon as the cap is exceeded (Content-Length may be absent with chunked bodies)
     const buf = await readBodyCapped(req, MAX_BODY);

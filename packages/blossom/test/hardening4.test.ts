@@ -5,7 +5,7 @@ import { createFsDriver, createS3Driver, optionsFromConfig, stripJpegMetadata } 
 import { exifOrientation, pngHasPrivateText } from "../src/exif";
 import { readLimited } from "../src/http";
 import { pinnedFetch } from "../src/mirror";
-import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness } from "./fakes";
+import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness, xOf } from "./fakes";
 
 let h: Harness;
 afterEach(() => h?.cleanup());
@@ -13,7 +13,7 @@ const alice = newUser();
 const bob = newUser();
 
 const upload = (body: Uint8Array, sk = alice.sk, headers: Record<string, string> = {}) =>
-  h.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(sk, "upload"), ...headers } });
+  h.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(sk, "upload", { x: [xOf(body)] }), ...headers } });
 /** distinct blobs that no stripping pass rewrites (stripped PNG variants would all collapse to one hash) */
 const pdf = (n: number) => new TextEncoder().encode(`%PDF-1.4\n% ${n}\n%%EOF\n`);
 const allowPdf = () => h.deps.settings.update({ blossom: { allowedMimeTypes: ["application/pdf", "image/*"] } } as never, "test");
@@ -63,7 +63,7 @@ describe("mirror client never throws inside socket callbacks", () => {
 describe("plugin upload hooks run outside the blob/owner locks", () => {
   test("a hook acting on the blob being uploaded doesn't deadlock, and the slots are released", async () => {
     h = await createHarness({ useSharp: false, maxConcurrentUploads: 1, maxQueuedUploads: 0 });
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     const x = await sha256(PNG_1x1);
     let calls = 0;
     h.deps.hooks.onBlobUpload(async (info) => {
@@ -80,16 +80,16 @@ describe("plugin upload hooks run outside the blob/owner locks", () => {
     expect((await h.svc.get(x))?.owners.sort()).toEqual([alice.pubkey, bob.pubkey].sort());
     // the single ingest slot is free again: no 503
     await allowPdf();
-    expect((await upload(pdf(9), bob.sk)).status).toBe(200);
+    expect((await upload(pdf(9), bob.sk)).status).toBe(201);
   });
 
   test("a hook deleting the blob mid-upload: the upload stores it afresh", async () => {
     h = await createHarness({ useSharp: false });
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     const x = await sha256(PNG_1x1);
     h.deps.hooks.onBlobUpload(async (info) => (await h.svc.delete(info.sha256, "plugin"), undefined), "test");
     const res = await Promise.race([upload(PNG_1x1, bob.sk), new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 2000))]);
-    expect((res as Response).status).toBe(200);
+    expect((res as Response).status).toBe(201);
     expect((await h.svc.get(x))?.owners).toEqual([bob.pubkey]);
   });
 });
@@ -117,7 +117,7 @@ describe("owner lock covers only quota → insert", () => {
     await allowPdf();
     const bodies = [1, 2, 3].map(pdf);
     const results = await Promise.all(bodies.map((b) => upload(b)));
-    expect(results.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(results.map((r) => r.status)).toEqual([201, 201, 201]);
     expect(peak).toBeGreaterThan(1);
 
     // quota: 2 more blobs of this size fit, 3 parallel uploads → exactly 2 succeed, the loser's bytes are removed
@@ -125,7 +125,7 @@ describe("owner lock covers only quota → insert", () => {
     await h.deps.stores.users.upsert(alice.pubkey, { blossomQuota: used + 2 * pdf(4).length });
     const more = [4, 5, 6].map(pdf);
     const statuses = (await Promise.all(more.map((b) => upload(b)))).map((r) => r.status).sort();
-    expect(statuses).toEqual([200, 200, 413]);
+    expect(statuses).toEqual([201, 201, 413]);
     for (const b of more) {
       const x = await sha256(b);
       const row = await h.svc.get(x);
@@ -195,7 +195,7 @@ describe("S3 with AWS semantics (403 for missing keys without s3:ListBucket)", (
     const body = new TextEncoder().encode("%PDF-1.4\n%%EOF\n");
     const x = await sha256(body);
     const up = await h.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(alice.sk, "upload", { x: [x] }), "content-type": "application/pdf" } });
-    expect(up.status).toBe(200);
+    expect(up.status).toBe(201);
     expect(s3.objects.has(x)).toBe(false);
     const own = await h.request(`/${x}`, { headers: { authorization: authHeader(alice.sk, "get", { x: [x] }) } });
     expect(own.status).toBe(200);
@@ -213,6 +213,7 @@ describe("S3 with AWS semantics (403 for missing keys without s3:ListBucket)", (
 describe("HEIC/HEIF with metadata that can't be stripped", () => {
   test("is refused with an actionable 415", async () => {
     h = await createHarness({ useSharp: false });
+    await h.deps.settings.update({ blossom: { stripExif: true } } as never, "test");
     const box = (type: string, payload: number[]) => {
       const len = 8 + payload.length;
       return [(len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255, ...[...type].map((c) => c.charCodeAt(0)), ...payload];
@@ -231,15 +232,15 @@ describe("delete tokens", () => {
     await allowPdf();
     const a = pdf(1);
     const b = pdf(2);
-    expect((await upload(a)).status).toBe(200);
-    expect((await upload(b)).status).toBe(200);
+    expect((await upload(a)).status).toBe(201);
+    expect((await upload(b)).status).toBe(201);
     const [xa, xb] = [await sha256(a), await sha256(b)];
     const token = authHeader(alice.sk, "delete", { x: [xa, xb] });
     const del = (x: string) => h.request(`/${x}`, { method: "DELETE", headers: { authorization: token } });
     expect((await del(xa)).status).toBe(200);
     expect((await del(xb)).status).toBe(200);
     expect((await del(xa)).status).toBe(404); // lost-response retry
-    expect((await upload(a)).status).toBe(200);
+    expect((await upload(a)).status).toBe(201);
     expect((await del(xa)).status).toBe(401); // replay against the re-uploaded blob
   });
 });
@@ -285,7 +286,7 @@ describe("downloads", () => {
     h = await createHarness({ useSharp: false });
     await h.deps.settings.update({ blossom: { allowedMimeTypes: ["application/pdf"] } } as never, "test");
     const body = new TextEncoder().encode("%PDF-1.4\n%%EOF\n");
-    const up = await h.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(alice.sk, "upload"), "content-type": "application/pdf" } });
+    const up = await h.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(body)] }), "content-type": "application/pdf" } });
     const x = (await up.json()).sha256;
     const res = await h.request(`/${x}`);
     const cd = res.headers.get("content-disposition");

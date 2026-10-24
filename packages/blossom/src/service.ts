@@ -4,7 +4,7 @@ import { domainsFromPublicUrl } from "./auth";
 import { createBlobDriver, type BlobDriver } from "./driver";
 import { BlossomError, sha256Hex, type ReadLimits } from "./http";
 import { createImageProcessor, type ImageProcessor } from "./image";
-import { extFromMime, isMimeAllowed, normalizeMime, topLevelType, typeOfUnrecognized } from "./mime";
+import { DEFAULT_MIME, extFromMime, isMimeAllowed, normalizeMime, topLevelType, typeOfUnrecognized } from "./mime";
 import { BlobRepo, type BlobRow } from "./repo";
 import { ByteBudget, ExpiringSet, ipBucket, KeyedConcurrency, Semaphore, WindowLimiter } from "./limits";
 import { isPrivateAddress } from "./mirror";
@@ -62,8 +62,10 @@ export interface IngestInput {
   sha256: string;
   pubkey: string;
   declaredType?: string | null;
+  /** trust `declaredType` over sniffing when it is a specific, valid mime (BUD-04 mirror origin Content-Type) */
+  preferDeclaredType?: boolean;
   ip?: string;
-  /** apply EXIF stripping (when enabled in settings) */
+  /** apply EXIF stripping (when enabled in settings; off by default since it deviates from BUD-02) */
   strip: boolean;
 }
 
@@ -218,7 +220,7 @@ export class BlossomCore {
     return `${this.baseUrl}/${sha256}.${extFromMime(type)}`;
   }
   thumbnailUrl(sha256: string) {
-    return `${this.baseUrl}/${sha256}.thumb.webp`;
+    return `${this.baseUrl}/thumb/${sha256}.webp`;
   }
 
   descriptor(row: BlobRow, uploaded = row.createdAt, extra: string[][] = []): BlobDescriptor {
@@ -315,14 +317,17 @@ export class BlossomCore {
 
   // ------------------------------------------------------------ ingest pipeline
 
-  async detectType(data: Uint8Array, declared?: string | null): Promise<string> {
+  async sniffType(data: Uint8Array): Promise<string | undefined> {
     try {
-      const ft = await fileTypeFromBuffer(data);
-      if (ft?.mime) return ft.mime;
+      return (await fileTypeFromBuffer(data))?.mime;
     } catch {
-      /* fall back to sniffing text */
+      return undefined;
     }
-    return typeOfUnrecognized(data, normalizeMime(declared));
+  }
+
+  /** Sniffed type, else (unrecognised bytes) a declared text type only when the bytes are text. */
+  async detectType(data: Uint8Array, declared?: string | null): Promise<string> {
+    return (await this.sniffType(data)) ?? typeOfUnrecognized(data, normalizeMime(declared));
   }
 
   /**
@@ -336,7 +341,19 @@ export class BlossomCore {
     // early quota check below has to wait for the strip: it counts the stored size and is skipped for a blob the
     // uploader already owns, and both depend on the stripped bytes.
     if (await this.isRefused(originalSha)) throw new BlossomError(403, "blob is blocked on this server");
-    const type = await this.detectType(input.data, input.declaredType);
+    let type: string;
+    const declared = input.preferDeclaredType ? normalizeMime(input.declaredType) : undefined;
+    if (declared && declared !== DEFAULT_MIME) {
+      // the declared type must not be a way around the allowlist: bytes recognised as something else have to be
+      // allowed too, and unrecognised bytes keep a declared type only when it's text and they are text
+      const sniffed = await this.sniffType(input.data);
+      if (sniffed) {
+        type = declared;
+        if (sniffed !== type) this.assertAllowedType(sniffed);
+      } else type = typeOfUnrecognized(input.data, declared);
+    } else {
+      type = await this.detectType(input.data, input.declaredType);
+    }
     this.assertAllowedType(type);
 
     let data = input.data;

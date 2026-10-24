@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createBlossomService, createS3Driver, optionsFromConfig } from "../src";
-import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness } from "./fakes";
+import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness, xOf } from "./fakes";
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -11,7 +11,7 @@ afterEach(async () => {
 const alice = newUser();
 const pdf = (n: number) => new TextEncoder().encode(`%PDF-1.4\n% ${n}\n%%EOF\n`);
 const upload = (body: Uint8Array, sk = alice.sk) =>
-  h!.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(sk, "upload", { server: ["cdn.example.com"] }) } });
+  h!.request("/upload", { method: "PUT", body: body as BodyInit, headers: { authorization: authHeader(sk, "upload", { x: [xOf(body)] }) } });
 
 describe("a block that lands while upload hooks run", () => {
   test("admin blocks the blob while a slow hook is in flight: upload refused, nothing served", async () => {
@@ -66,7 +66,7 @@ describe("hooks only see uploads that pass the cheap checks", () => {
   test("a blob moderated to 'blocked' is refused before hooks", async () => {
     h = await createHarness({ useSharp: false });
     const x = await sha256(PNG_1x1);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     await h.svc.setStatus(x, "blocked", "admin");
     let calls = 0;
     h.deps.hooks.onBlobUpload(async () => {
@@ -136,7 +136,7 @@ describe("S3 moves that are denied", () => {
     const driver = createS3Driver({ endpoint: "https://s3.test", bucket: "bucket", accessKeyId: "a", secretAccessKey: "s", publicUrl: "https://cdn.test", fetch: s.fetchFn });
     h = await createHarness({ useSharp: false, driver });
     const x = await sha256(PNG_1x1);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     await expect(h.svc.setStatus(x, "blocked", "admin")).rejects.toThrow();
     expect((await h.svc.get(x))?.status).toBe("approved");
   });
@@ -146,7 +146,7 @@ describe("used delete tokens survive a restart", () => {
   test("replaying a used delete token after a restart and re-upload is refused", async () => {
     h = await createHarness({ useSharp: false });
     const x = await sha256(PNG_1x1);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     const token = authHeader(alice.sk, "delete", { x: [x] });
     expect((await h.request(`/${x}`, { method: "DELETE", headers: { authorization: token } })).status).toBe(200);
     expect(Object.keys(await h.deps.stores.kv.list("blossom-used-delete-tokens")).length).toBe(1);
@@ -154,7 +154,7 @@ describe("used delete tokens survive a restart", () => {
     // "restart": a fresh service (empty in-memory caches) over the same stores
     const svc2 = await createBlossomService(h.deps as never, { useSharp: false });
     const req = (path: string, init?: RequestInit) => svc2.app.fetch(new Request(`https://cdn.example.com${path}`, init));
-    expect((await req("/upload", { method: "PUT", body: PNG_1x1 as BodyInit, headers: { authorization: authHeader(alice.sk, "upload", { server: ["cdn.example.com"] }) } })).status).toBe(200);
+    expect((await req("/upload", { method: "PUT", body: PNG_1x1 as BodyInit, headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(PNG_1x1)] }) } })).status).toBe(201);
     expect((await req(`/${x}`, { method: "DELETE", headers: { authorization: token } })).status).toBe(401);
     expect((await req(`/${x}`)).status).toBe(200);
   });

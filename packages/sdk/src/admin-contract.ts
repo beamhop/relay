@@ -94,13 +94,15 @@ export interface UserListQuery { search?: string; status?: UserStatus; role?: Ad
 export interface UserPatch { notes?: string; tags?: string[]; rateLimit?: RateLimitOverride | null; blossomQuota?: number | null; nip05Name?: string | null; allowed?: boolean; denied?: boolean }
 /** POST /users/:pubkey/ban */
 export interface BanRequest { reason?: string; deleteEvents?: boolean; deleteMedia?: boolean; disconnect?: boolean }
+/** DELETE /users/:pubkey  (users.delete) — removes the record, events and media; not a ban → DeleteUserResult */
+export interface DeleteUserResult { deletedEvents: number; deletedMedia: number; disconnected: number }
 /** POST /users/:pubkey/unban ; POST /users/:pubkey/mute ; POST /users/:pubkey/unmute */
 /** PUT /users/:pubkey/role  (admins.manage) */
 export interface RoleRequest { role: AdminRole | null }
 /** POST /users/bulk */
 export interface BulkUserRequest {
   pubkeys: string[];
-  action: "ban" | "unban" | "mute" | "unmute" | "allow" | "disallow" | "deny" | "undeny" | "delete-events" | "add-tag" | "remove-tag";
+  action: "ban" | "unban" | "mute" | "unmute" | "allow" | "disallow" | "deny" | "undeny" | "delete-events" | "delete" | "add-tag" | "remove-tag";
   reason?: string;
   tag?: string;
 }

@@ -30,13 +30,16 @@ export interface EventStore {
   getById(id: string): Promise<NostrEvent | undefined>;
   /** For NIP-77: returns (created_at,id) pairs ordered asc. */
   queryIdsForSync(filter: Filter): Promise<{ id: string; created_at: number }[]>;
-  /** Applies a NIP-09 deletion request (kind 5) — only deletes events of the same pubkey; records tombstones. */
+  /**
+   * Applies a NIP-09 deletion request (kind 5) — deletes events of the same pubkey, plus (NIP-59)
+   * kind 1059 gift wraps p-tagged to the deleter; records tombstones.
+   */
   applyDeletion(deletion: NostrEvent): Promise<number>;
-  /** Admin deletion, no ownership check. */
-  deleteByIds(ids: string[]): Promise<number>;
+  /** Admin deletion, no ownership check. With `tombstone` (a reason / deletion id) the ids can't be re-published. */
+  deleteByIds(ids: string[], opts?: { tombstone?: string }): Promise<number>;
   deleteByFilter(filters: Filter[]): Promise<number>;
-  /** NIP-62 / admin purge of everything by pubkey. */
-  deleteByPubkey(pubkey: string): Promise<number>;
+  /** NIP-62 / admin purge of everything by pubkey (optionally only events with created_at <= until). */
+  deleteByPubkey(pubkey: string, until?: number): Promise<number>;
   /** NIP-40: delete events whose expiration tag < now. */
   purgeExpired(now: number): Promise<number>;
   stats(): Promise<EventStoreStats>;

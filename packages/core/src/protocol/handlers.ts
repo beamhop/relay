@@ -7,7 +7,7 @@ import { processEvent } from "../pipeline/write";
 import { isVisibleTo, onlyGatedKinds, restrictedSubFilters } from "../subscriptions/visibility";
 import { filterWeight } from "../util/filter";
 import { withPrefix } from "../util/reasons";
-import { type Connection, SOFT_BUFFER_LIMIT, type Subscription } from "./connection";
+import { type Connection, type NegSession, SOFT_BUFFER_LIMIT, type Subscription } from "./connection";
 import { eventSize, isSearchFilter, REQ_BURST, SEARCH_MAX_LIMIT, SEARCH_MS_PER_MINUTE, SEARCH_PER_MINUTE } from "./read-limits";
 import { nowSec } from "@beamhop/sdk";
 
@@ -610,14 +610,16 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
   const L = ctx.s().limits;
   let filters = input;
 
+  // NIP-01: a REQ with an existing id replaces the old subscription, even if the new one is refused
+  const existing = conn.subs.get(subId);
+  if (existing) cancelSub(ctx, existing);
+
   const denied = authReadDenied(ctx, conn);
   if (denied) return conn.closedSub(subId, denied);
   const rate = await readRate(ctx, conn);
   if (rate === "limited") return conn.closedSub(subId, "rate-limited: too many requests");
 
-  const existing = conn.subs.get(subId);
-  if (existing) cancelSub(ctx, existing);
-  else if (conn.subs.size >= L.maxSubscriptions) return conn.closedSub(subId, `rate-limited: too many subscriptions (max ${L.maxSubscriptions})`);
+  if (conn.subs.size >= L.maxSubscriptions) return conn.closedSub(subId, `rate-limited: too many subscriptions (max ${L.maxSubscriptions})`);
 
   // NIP-04/59 privacy: filters that can only match DMs/gift wraps need auth
   if (conn.authedPubkeys.size === 0) {
@@ -872,8 +874,14 @@ export function dropAllNegSessions(ctx: RelayContext, conn: Connection): void {
   for (const id of [...conn.negSessions.keys()]) dropNegSession(ctx, conn, id);
 }
 
-function dropStaleNegSessions(ctx: RelayContext, conn: Connection, now = Date.now()) {
-  for (const [id, s] of conn.negSessions) if (now - s.openedAt > NEG_SESSION_TTL_MS) dropNegSession(ctx, conn, id);
+/** Sessions idle longer than this are closed (NIP-77 lets relays time out inactive sessions). */
+export const NEG_IDLE_TIMEOUT_MS = 60_000;
+
+const negSessionExpired = (s: NegSession, now: number) => now - s.openedAt > NEG_SESSION_TTL_MS || now - s.lastActiveAt > NEG_IDLE_TIMEOUT_MS;
+
+/** Ends this connection's sessions that are too old or idle, telling the client (NEG-ERR). */
+function expireNegSessions(ctx: RelayContext, conn: Connection, now = Date.now()): void {
+  for (const [id, s] of conn.negSessions) if (negSessionExpired(s, now)) negError(ctx, conn, id, "closed: negentropy session timed out");
 }
 
 /**
@@ -881,17 +889,19 @@ function dropStaleNegSessions(ctx: RelayContext, conn: Connection, now = Date.no
  * exhausted, so idle sessions (clients that never send NEG-CLOSE) can't hold the budget.
  */
 export function sweepNegSessions(ctx: RelayContext, now = Date.now()): void {
-  for (const conn of ctx.conns.values()) if (conn.negSessions.size) dropStaleNegSessions(ctx, conn, now);
+  for (const conn of ctx.conns.values()) if (conn.negSessions.size) expireNegSessions(ctx, conn, now);
 }
+
 
 export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: string, filter: Filter, message: string): Promise<void> {
   const negErr = (reason: string) => negError(ctx, conn, subId, reason);
+  // NIP-77: opening an existing id closes the old session first, even if the new one is refused
+  dropNegSession(ctx, conn, subId);
+  expireNegSessions(ctx, conn);
   const denied = authReadDenied(ctx, conn);
   if (denied) return negErr(denied);
   if (conn.authedPubkeys.size === 0 && onlyGatedKinds(filter)) return negErr("auth-required: authentication is required to sync direct messages");
   if ((await readRate(ctx, conn)) === "limited") return negErr("rate-limited: too many requests");
-  dropNegSession(ctx, conn, subId);
-  dropStaleNegSessions(ctx, conn);
   if (conn.negSessions.size + conn.negOpening >= MAX_NEG_SESSIONS_PER_CONN) {
     return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
   }
@@ -970,9 +980,11 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
     return negErr(`invalid: ${(err as Error).message}`);
   }
   // re-check after the awaits above (no awaits from the budget check on, so the accounting can't race)
+  if (conn.closed) return;
   dropNegSession(ctx, conn, subId);
   if (conn.negSessions.size >= MAX_NEG_SESSIONS_PER_CONN) return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
-  conn.negSessions.set(subId, { neg, openedAt: Date.now(), items: items.length });
+  const now = Date.now();
+  conn.negSessions.set(subId, { neg, openedAt: now, lastActiveAt: now, items: items.length });
   ctx.neg.items += items.length;
   conn.send(["NEG-MSG", subId, out ?? ""]);
 }
@@ -981,12 +993,13 @@ export function handleNegMsg(ctx: RelayContext, conn: Connection, subId: string,
   const negErr = (reason: string) => negError(ctx, conn, subId, reason);
   const session = conn.negSessions.get(subId);
   if (!session) return negErr("closed: no such negentropy session");
-  if (Date.now() - session.openedAt > NEG_SESSION_TTL_MS) return negErr("closed: negentropy session expired");
+  if (negSessionExpired(session, Date.now())) return negErr("closed: negentropy session timed out");
   // reconciling costs CPU proportional to the (highly compressible) message size
   const cost = Math.max(1, message.length);
   if (!ctx.rate.take(`neg:conn:${conn.id}`, NEG_MSG_HEX_PER_MINUTE, cost) || !ctx.rate.take(`neg:ip:${conn.ipKey}`, NEG_MSG_HEX_PER_MINUTE * IP_RATE_FACTOR, cost)) {
     return negErr("rate-limited: too much negentropy traffic, slow down");
   }
+  session.lastActiveAt = Date.now();
   try {
     const out = session.neg.reconcile(message).output;
     conn.send(["NEG-MSG", subId, out ?? ""]);

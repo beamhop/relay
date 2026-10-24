@@ -83,6 +83,10 @@ function UsersPage() {
       return n;
     });
   const allSelected = items.length > 0 && items.every((u) => selected.has(u.pubkey));
+  const selectedStatuses = new Set(items.filter((u) => selected.has(u.pubkey)).map((u) => u.status));
+  const anyBanned = selectedStatuses.has("banned");
+  const anyMuted = selectedStatuses.has("muted");
+  const anyActive = selectedStatuses.has("active");
 
   const runBulk = async (action: BulkUserRequest["action"], destructive = false) => {
     const pubkeys = [...selected];
@@ -94,7 +98,8 @@ function UsersPage() {
       tag = r.input.trim();
     } else if (destructive) {
       const r = await flow.confirm({
-        title: action === "delete-events" ? `Delete all events of ${pubkeys.length} user(s)?` : `${action[0].toUpperCase()}${action.slice(1)} ${pubkeys.length} user(s)?`,
+        title: action === "delete-events" ? `Delete all events of ${pubkeys.length} user(s)?` : action === "delete" ? `Delete ${pubkeys.length} user(s)?` : `${action[0].toUpperCase()}${action.slice(1)} ${pubkeys.length} user(s)?`,
+        description: action === "delete" ? "Removes the users along with all their events and uploaded media. This can't be undone." : undefined,
         destructive: true,
         confirmText: "Confirm",
         input: action === "ban" ? { label: "Reason (optional)" } : undefined,
@@ -237,9 +242,9 @@ function UsersPage() {
       <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
         {can("users.ban") && (
           <>
-            <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => runBulk("ban", true)}><Ban /> Ban</Button>
-            <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("unban")}><CheckCircle2 /> Unban</Button>
-            <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("mute")}><VolumeX /> Mute</Button>
+            {(anyActive || anyMuted) && <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => runBulk("ban", true)}><Ban /> Ban</Button>}
+            {anyBanned && <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("unban")}><CheckCircle2 /> Unban</Button>}
+            {anyActive && <Button size="sm" variant="ghost" className="rounded-full" onClick={() => runBulk("mute")}><VolumeX /> Mute</Button>}
           </>
         )}
         {can("users.edit") && (
@@ -252,7 +257,7 @@ function UsersPage() {
               <DropdownMenuItem onSelect={() => runBulk("disallow")}>Remove from allow-list</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => runBulk("deny", true)}><UserX /> Deny</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => runBulk("undeny")}>Remove from deny-list</DropdownMenuItem>
-              {can("users.ban") && <DropdownMenuItem onSelect={() => runBulk("unmute")}>Unmute</DropdownMenuItem>}
+              {can("users.ban") && anyMuted && <DropdownMenuItem onSelect={() => runBulk("unmute")}>Unmute</DropdownMenuItem>}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => runBulk("add-tag")}><Tag /> Add tag…</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => runBulk("remove-tag")}>Remove tag…</DropdownMenuItem>
@@ -260,6 +265,12 @@ function UsersPage() {
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem variant="destructive" onSelect={() => runBulk("delete-events", true)}><Trash2 /> Delete events</DropdownMenuItem>
+                </>
+              )}
+              {can("users.delete") && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onSelect={() => runBulk("delete", true)}><Trash2 /> Delete users</DropdownMenuItem>
                 </>
               )}
             </DropdownMenuContent>
@@ -366,6 +377,11 @@ function RowMenu({ u, flow }: { u: UserView; flow: ReturnType<typeof useBanFlow>
               </DropdownMenuItem>
             )}
           </>
+        )}
+        {can("users.delete") && u.role !== "owner" && (
+          <DropdownMenuItem variant="destructive" onSelect={() => flow.deleteWithConfirm(u.pubkey, u.profile)}>
+            Delete…
+          </DropdownMenuItem>
         )}
         <PluginUserActionItems pubkey={u.pubkey} />
       </DropdownMenuContent>

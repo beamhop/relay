@@ -253,7 +253,11 @@ export const RuntimeSettingsSchema = z.object({
       allowedMimeTypes: z.array(z.string()).default(["image/*", "video/*", "audio/*", "application/pdf"]),
       /** who may upload */
       uploadAccess: z.enum(["anyone", "members", "admins"]).default("members"),
-      stripExif: z.boolean().default(true),
+      /**
+       * strip EXIF/XMP metadata from uploaded images. Off by default: BUD-02 says servers MUST NOT modify blobs, and
+       * stripping changes the stored hash (the descriptor's `ox` tag carries the original).
+       */
+      stripExif: z.boolean().default(false),
       thumbnails: z.boolean().default(true),
       /** require admin approval before blobs are publicly served */
       requireApproval: z.boolean().default(false),

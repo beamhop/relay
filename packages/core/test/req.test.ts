@@ -56,6 +56,27 @@ describe("REQ", () => {
     expect((await c.req("one", { kinds: [2] })).end[0]).toBe("EOSE"); // replacing an existing sub is fine
   });
 
+  test("a refused REQ replaces (closes) the existing subscription with the same id", async () => {
+    const { connect } = await setup();
+    const writer = connect();
+    const reader = connect();
+    const kp = keypair();
+    await reader.req("s", { kinds: [1] });
+    reader.send(["REQ", "s", { kinds: [1059] }]);
+    expect(((await reader.socket.waitFor((m) => m[0] === "CLOSED" && m[1] === "s"))[2] as string)).toMatch(/^auth-required:/);
+    await writer.publish(sign(kp));
+    await tick();
+    expect(reader.socket.of("EVENT").length).toBe(0);
+  });
+
+  test("too-long subscription ids are refused with CLOSED", async () => {
+    const { connect } = await setup();
+    const c = connect();
+    const id = "x".repeat(100);
+    c.send(["REQ", id, {}]);
+    expect(((await c.socket.waitFor((m) => m[0] === "CLOSED" && m[1] === id))[2] as string)).toMatch(/^invalid: subscription id/);
+  });
+
   test("authForRead requires AUTH", async () => {
     const { connect } = await setup({ settings: { access: { authForRead: true } } });
     const c = connect();
@@ -162,6 +183,22 @@ describe("gift wrap / DM privacy", () => {
     await tick();
     expect(eveConn.socket.of("EVENT").length).toBe(0);
     expect(anon.socket.of("EVENT").filter((m) => (m[2] as NostrEvent).kind === 1059).length).toBe(0);
+  });
+
+  test("ephemeral gift wraps (21059) are only delivered to authed recipients", async () => {
+    const { connect } = await setup();
+    const bob = keypair();
+    const w = connect();
+    const anon = connect();
+    await anon.req("a", { kinds: [1, 21059] });
+    const bobConn = connect();
+    await bobConn.auth(bob);
+    await bobConn.req("b", { kinds: [21059], "#p": [bob.pk] });
+    const wrap = sign(keypair(), { kind: 21059, tags: [["p", bob.pk]] });
+    await w.publish(wrap);
+    await bobConn.socket.waitFor((m) => m[0] === "EVENT" && (m[2] as NostrEvent).id === wrap.id);
+    await tick();
+    expect(anon.socket.of("EVENT").length).toBe(0);
   });
 
   test("kind 4 visible to author and recipient", async () => {
@@ -273,6 +310,20 @@ describe("NIP-77 through the relay", () => {
     expect(neg.reconcile(resp[2] as string).need).toEqual([pub.id]);
     c.send(["NEG-OPEN", "n3", { search: "x" }, new Negentropy(local).initiate()]);
     expect(((await c.socket.waitFor((m) => m[0] === "NEG-ERR" && m[1] === "n3"))[2] as string)).toMatch(/^unsupported:/);
+  });
+
+  test("a refused NEG-OPEN still closes the old session with that id", async () => {
+    const { connect } = await setup();
+    const c = connect();
+    const local = new NegentropyStorage();
+    local.seal();
+    c.send(["NEG-OPEN", "n", { kinds: [1] }, new Negentropy(local).initiate()]);
+    await c.socket.waitFor((m) => m[0] === "NEG-MSG" && m[1] === "n");
+    c.send(["NEG-OPEN", "n", { kinds: [4] }, new Negentropy(local).initiate()]);
+    expect(((await c.socket.waitFor((m) => m[0] === "NEG-ERR" && m[1] === "n"))[2] as string)).toMatch(/^auth-required:/);
+    const from = c.socket.sent.length;
+    c.send(["NEG-MSG", "n", new Negentropy(local).initiate()]);
+    expect(((await c.socket.waitFor((m) => m[0] === "NEG-ERR" && m[1] === "n", 2000, from))[2] as string)).toMatch(/^closed:/);
   });
 
   test("NEG-MSG for unknown session → NEG-ERR", async () => {

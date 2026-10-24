@@ -8,8 +8,8 @@ const alice = newUser();
 const bob = newUser();
 const PDF = new TextEncoder().encode("%PDF-1.4\n%%EOF\n");
 
-const upload = (data: Uint8Array, u = alice) =>
-  h.request("/upload", { method: "PUT", body: data as BodyInit, headers: { authorization: authHeader(u.sk, "upload") } });
+const upload = async (data: Uint8Array, u = alice) =>
+  h.request("/upload", { method: "PUT", body: data as BodyInit, headers: { authorization: authHeader(u.sk, "upload", { x: [await sha256(data)] }) } });
 
 describe("admin service methods", () => {
   test("list / get / usage / stats / deleteByPubkey / delete", async () => {
@@ -55,23 +55,28 @@ describe("admin service methods", () => {
 });
 
 describe("thumbnails (sharp)", () => {
-  test("generated for images and served at /<sha>.thumb.webp", async () => {
+  test("generated for images and served at /thumb/<sha>.webp (never at a blob hash URL)", async () => {
     const sharp = (await loadSharp()) as unknown as ((...a: unknown[]) => any) | undefined;
     if (!sharp) return;
     h = await createHarness();
     const img = new Uint8Array(await sharp({ create: { width: 800, height: 400, channels: 3, background: "#0a0" } }).png().toBuffer());
     const desc = await (await upload(img)).json();
-    expect(desc.nip94).toContainEqual(["thumb", `https://cdn.example.com/${desc.sha256}.thumb.webp`]);
+    expect(desc.nip94).toContainEqual(["thumb", `https://cdn.example.com/thumb/${desc.sha256}.webp`]);
+    const res = await h.request(`/thumb/${desc.sha256}.webp`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/webp");
+    const meta = await sharp(new Uint8Array(await res.arrayBuffer())).metadata();
+    expect(meta.width).toBe(320);
+    expect((await h.request(`/thumb/${desc.sha256}.webp`, { method: "HEAD" })).status).toBe(200);
+    expect((await h.svc.get(desc.sha256))!.thumbnailUrl).toBe(`https://cdn.example.com/thumb/${desc.sha256}.webp`);
+    // BUD-01: hash URLs always return the blob itself, whatever the extension or query
     for (const path of [`/${desc.sha256}.thumb.webp`, `/${desc.sha256}?thumb=1`]) {
-      const res = await h.request(path);
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type")).toBe("image/webp");
-      const meta = await sharp(new Uint8Array(await res.arrayBuffer())).metadata();
-      expect(meta.width).toBe(320);
+      const blob = await h.request(path);
+      expect(blob.headers.get("content-type")).toBe("image/png");
+      expect(new Uint8Array(await blob.arrayBuffer())).toEqual(img);
     }
-    expect((await h.svc.get(desc.sha256))!.thumbnailUrl).toBeDefined();
     const pdf = await (await upload(PDF)).json();
-    expect((await h.request(`/${pdf.sha256}.thumb.webp`)).status).toBe(404);
+    expect((await h.request(`/thumb/${pdf.sha256}.webp`)).status).toBe(404);
   });
 });
 

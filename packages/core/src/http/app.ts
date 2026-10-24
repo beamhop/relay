@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import * as nip19 from "nostr-tools/nip19";
 import type { RelayContext } from "../context";
 import { toWsUrl } from "../util/url";
 import { buildNip11 } from "./nip11";
@@ -39,7 +40,8 @@ export function createHttp(ctx: RelayContext): Hono {
     if (!s.nip05.enabled) return c.json({ error: "NIP-05 disabled" }, 404, CORS);
     const name = (c.req.query("name") ?? "").toLowerCase();
     const names: Record<string, string> = {};
-    if (s.info.pubkey && (name === "" || name === "_")) names._ = s.info.pubkey;
+    const ownerPk = hexPubkey(s.info.pubkey);
+    if (ownerPk && (name === "" || name === "_")) names._ = ownerPk;
     if (name && name !== "_" && NIP05_NAME.test(name)) {
       const u = await ctx.stores.users.getByNip05(name);
       if (u && u.status !== "banned" && !u.denied) names[name] = u.pubkey;
@@ -112,4 +114,20 @@ async function readCapped(req: Request, max: number): Promise<Uint8Array | null>
     off += ch.byteLength;
   }
   return out;
+}
+
+/** NIP-05 keys must be lowercase hex; accept an operator-entered npub or uppercase hex. */
+function hexPubkey(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  const t = v.trim();
+  if (/^[0-9a-fA-F]{64}$/.test(t)) return t.toLowerCase();
+  if (t.startsWith("npub1")) {
+    try {
+      const d = nip19.decode(t);
+      if (d.type === "npub") return d.data;
+    } catch {
+      /* invalid */
+    }
+  }
+  return undefined;
 }

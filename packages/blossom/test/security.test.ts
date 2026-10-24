@@ -4,7 +4,7 @@ import { hasMetadataMarker } from "../src/image";
 import { isInlineSafe } from "../src/mime";
 import { fetchRemote, isPrivateAddress, parseIpv6 } from "../src/mirror";
 import type { BlobDriver } from "../src/driver";
-import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness } from "./fakes";
+import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness, xOf } from "./fakes";
 
 let h: Harness;
 const alice = newUser();
@@ -19,7 +19,7 @@ const HEIC_WITH_EXIF = new Uint8Array([
 
 function upload(data: Uint8Array, opts: { user?: typeof alice; type?: string } = {}) {
   const u = opts.user ?? alice;
-  return h.request("/upload", { method: "PUT", body: data as BodyInit, headers: { authorization: authHeader(u.sk, "upload"), "content-type": opts.type ?? "application/octet-stream" } });
+  return h.request("/upload", { method: "PUT", body: data as BodyInit, headers: { authorization: authHeader(u.sk, "upload", { x: [xOf(data)] }), "content-type": opts.type ?? "application/octet-stream" } });
 }
 
 afterEach(() => h?.cleanup());
@@ -98,7 +98,7 @@ describe("serving user content safely", () => {
 
   test("SVG is served with nosniff, a sandbox CSP and as a download", async () => {
     const res = await upload(SVG, { type: "image/svg+xml" });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     const { sha256: hash, type } = await res.json();
     expect(type).toBe("image/svg+xml");
     const get = await h.request(`/${hash}.svg`);
@@ -215,7 +215,7 @@ describe("ingest races", () => {
     const up = upload(PNG_1x1, { user: bob });
     const [d, u] = await Promise.all([del, up]);
     expect(d.status).toBe(200);
-    expect(u.status).toBe(200);
+    expect(u.status).toBe(201);
     expect((await h.request(`/${hash}`)).status).toBe(200);
     expect(await h.svc.driver.has(hash)).toBe(true);
   });
@@ -224,6 +224,6 @@ describe("ingest races", () => {
     await h.deps.settings.update({ blossom: { defaultQuotaBytes: 150, allowedMimeTypes: [] } }, "test");
     const blobs = [1, 2, 3].map((n) => new Uint8Array(100).fill(n));
     const res = await Promise.all(blobs.map((b) => upload(b)));
-    expect(res.map((r) => r.status).sort()).toEqual([200, 413, 413]);
+    expect(res.map((r) => r.status).sort()).toEqual([201, 413, 413]);
   });
 });

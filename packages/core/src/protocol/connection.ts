@@ -25,6 +25,8 @@ export interface Subscription {
 export interface NegSession {
   neg: Negentropy;
   openedAt: number;
+  /** last NEG-OPEN / NEG-MSG (idle sessions are closed) */
+  lastActiveAt: number;
   /** items held (counted against the relay-wide negentropy budget) */
   items: number;
 }

@@ -1,6 +1,6 @@
 # @beamhop/blossom
 
-Blossom media server (BUD-01/02/04/06, BUD-11 auth) for beamhop.
+Blossom media server (BUD-01/02/04/06/08/11/12) for beamhop.
 
 ```ts
 import { createBlossom, createBlobDriver } from "@beamhop/blossom";
@@ -35,19 +35,21 @@ another just wrote). Used delete tokens are also kept in kv until they expire, s
 ## Routes
 | Route | Notes |
 |---|---|
-| `GET/HEAD /<sha256>[.ext]` | Public for `approved` blobs. `pending` only for owners/staff, `blocked` only for staff (auth `t=get`), otherwise 404. Range (single), ETag, 304, immutable cache. Always `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox` (audio/video: `default-src 'none'; media-src 'self'`, since browsers won't play a sandboxed media document); anything but images/video/audio/plain text/PDF (e.g. SVG, HTML) is sent with `Content-Disposition: attachment`. S3 with `publicUrl` → `307` redirect (inline-safe types only). A malformed or expired token is treated like no token (404 / public listing). |
-| `GET /<sha256>.thumb.webp` or `GET /<sha256>?thumb=1` | 320px WebP thumbnail (only when sharp is available). |
-| `PUT /upload` | Auth `t=upload` scoped with an `x` tag (must match the uploaded bytes) or a `server` tag naming this server; unscoped tokens are rejected. Upload/delete tokens may not expire more than 24 h ahead; upload tokens are reusable until they expire. Rate limited per IP and pubkey (`429`). |
-| `HEAD /upload` | BUD-06 preflight using `X-SHA-256`, `X-Content-Length` (required, else 411), `X-Content-Type`. |
+| `GET/HEAD /<sha256>[.ext]` | Any extension (case-insensitive) returns the blob itself. Public for `approved` blobs. `pending` only for owners/staff, `blocked` only for staff (auth `t=get`), otherwise 404. Range (single), ETag, 304, immutable cache. Always `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox` (inline-safe audio/video: `default-src 'none'; media-src 'self'`, since browsers won't play a sandboxed media document); anything but images/video/audio/plain text/PDF (e.g. SVG, HTML, XML) is sent with `Content-Disposition: attachment`. S3 with `publicUrl` → `307` redirect (inline-safe types only). A malformed or expired token is treated like no token (404 / public listing). |
+| `GET/HEAD /thumb/<sha256>.webp` | 320px WebP thumbnail (only when sharp is available), same visibility rules as the blob. Advertised as the nip94 `thumb` tag. Kept outside `/<sha256>` so a hash URL never returns other bytes. |
+| `PUT /upload` | Auth `t=upload` with an `x` tag matching the uploaded bytes (and `X-SHA-256` when sent), per BUD-11. Upload/delete tokens may not expire more than 24 h ahead; upload tokens are reusable until they expire. Rate limited per IP and pubkey (`429`). `201` when newly stored, `200` when it already existed. |
+| `HEAD /upload` | BUD-06 preflight. `X-SHA-256` required (else 400) with a matching auth `x` tag; `X-Content-Length` required (else 411); `X-Content-Type` optional. |
 | `GET /list/<pubkey>` | `since`, `until`, `limit`, `cursor`. Unapproved blobs are only listed for the owner or staff (auth `t=list`). |
-| `DELETE /<sha256>` | Auth `t=delete` with matching `x` tag; each delete token works once per blob it names (a replay against a re-uploaded blob gets `401`; a retry for a blob that is already gone gets `404`). Removes the requester's ownership. Data is deleted when no owners remain. |
-| `PUT /mirror` | Auth `t=upload` with `x` tag(s). SSRF-checked (public addresses only, ports 80/443 by default via `blossom.limits.mirrorPorts` / `BEAMHOP_BLOSSOM_MIRROR_PORTS`, every redirect re-checked, DNS pinned), size/time/quota limited, upstream errors are not echoed. Stored byte-identical, so EXIF is **not** stripped. |
+| `DELETE /<sha256>` | Auth `t=delete` with matching `x` tag; each delete token works once per blob it names (a replay against a re-uploaded blob gets `401`; a retry for a blob that is already gone gets `404`). Removes the requester's ownership. Data is deleted when no owners remain; a blob a moderator blocked is added to the blocklist then, so re-uploading it is refused. |
+| `PUT /mirror` | Auth `t=upload` with `x` tag(s). SSRF-checked (public addresses only, ports 80/443 by default via `blossom.limits.mirrorPorts` / `BEAMHOP_BLOSSOM_MIRROR_PORTS`, every redirect re-checked, DNS pinned), size/time/quota limited (refused before downloading when `Content-Length` doesn't fit), upstream errors are not echoed. Stored byte-identical, so EXIF is **not** stripped. The origin's `Content-Type` is used when valid (sniffed otherwise; unrecognised bytes keep it only for text). `201` when newly stored, `200` when it already existed. |
 
 Errors use status codes plus an `X-Reason` header. Every route sets CORS headers itself. No app-wide middleware is
 registered, so mounting at `/` doesn't affect other routes.
 
-## EXIF stripping changes the hash
-When `settings.blossom.stripExif` is enabled, JPEG/PNG/WebP uploads have their metadata removed **before** they are
+## EXIF stripping changes the hash (opt-in, deviates from BUD-02)
+`settings.blossom.stripExif` is **off by default**: BUD-02 says the server MUST NOT modify uploaded blobs, so by default
+uploads are stored byte-identical. Enabling it is a deliberate deviation from the spec for operators who prefer privacy
+over hash stability. When enabled, JPEG/PNG/WebP uploads have their metadata removed **before** they are
 stored. The descriptor returned by `PUT /upload` therefore describes the *stored* blob: its `sha256`, `size` and `url`
 may differ from what the client uploaded. In that case `nip94` contains `["ox", <original sha256>]`. An auth `x` tag
 (or `X-SHA-256` header) is checked against the hash of the bytes the client sent.

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createImageProcessor, stripJpegMetadata, stripPngMetadata, stripWebpMetadata } from "../src";
 import { blobCsp } from "../src/mime";
-import { PNG_1x1, authHeader, createHarness, jpegWithExif, newUser, sha256, type Harness } from "./fakes";
+import { PNG_1x1, authHeader, createHarness, jpegWithExif, newUser, sha256, type Harness, xOf } from "./fakes";
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -16,7 +16,7 @@ const upload = (body: Uint8Array, sk = alice.sk, type?: string) =>
   h!.request("/upload", {
     method: "PUT",
     body: body as BodyInit,
-    headers: { authorization: authHeader(sk, "upload", { server: ["cdn.example.com"] }), ...(type ? { "content-type": type } : {}) },
+    headers: { authorization: authHeader(sk, "upload", { x: [xOf(body)] }), ...(type ? { "content-type": type } : {}) },
   });
 // delete tokens are single-use: vary the expiration so two deletes in the same second get different event ids
 let tokens = 0;
@@ -140,7 +140,7 @@ describe("moderation survives the owner deleting and re-uploading", () => {
   test("a blocked blob's hash goes on the blocklist when its last owner deletes it", async () => {
     h = await createHarness({ useSharp: false });
     const x = await sha256(PNG_1x1);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await upload(PNG_1x1, bob.sk)).status).toBe(200);
     await h.svc.setStatus(x, "blocked", "admin");
     // another owner remains: the blocked row is all that's needed
@@ -159,12 +159,13 @@ describe("moderation survives the owner deleting and re-uploading", () => {
     expect(preflight.status).toBe(403);
     // lifting it is the admin's call
     expect(await h.svc.unblock(x, "admin")).toBe(true);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await h.svc.get(x))?.status).toBe("approved");
   });
 
   test("a blocked stripped upload stays blocked for the original EXIF-carrying bytes", async () => {
     h = await createHarness({ useSharp: false });
+    await h.deps.settings.update({ blossom: { stripExif: true } } as never, "test");
     const { withExif, withoutExif } = jpegWithExif();
     const desc = await (await upload(withExif)).json();
     expect(desc.sha256).toBe(await sha256(withoutExif));
@@ -177,18 +178,18 @@ describe("moderation survives the owner deleting and re-uploading", () => {
   test("a pending blob deleted by its owner comes back pending, not auto-approved", async () => {
     h = await createHarness({ useSharp: false });
     const x = await sha256(PNG_1x1);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     await h.svc.setStatus(x, "pending", "admin"); // hidden for review while requireApproval is off
     expect((await del(x)).status).toBe(200);
     expect(await h.svc.get(x)).toBeUndefined();
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await h.svc.get(x))?.status).toBe("pending");
     expect((await h.request(`/${x}`)).status).toBe(404);
     expect(await h.deps.stores.kv.get("blossom-held-status", x)).toBeUndefined(); // the row carries it again
     // once approved, delete + re-upload is an ordinary upload again
     await h.svc.setStatus(x, "approved", "admin");
     expect((await del(x)).status).toBe(200);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await h.svc.get(x))?.status).toBe("approved");
   });
 
@@ -245,7 +246,7 @@ describe("mirror stops early when the quota can't hold the blob", () => {
     const pulled = { bytes: 0 };
     h = await createHarness({ useSharp: false, allowPrivateMirror: true, fetch: endless(pulled, 1024, 5_000_000) });
     await h.deps.stores.users.upsert(alice.pubkey, { blossomQuota: 1000 } as never);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     const res = await mirror([await sha256(PNG_1x1), "cd".repeat(32)]);
     expect(res.status).toBe(413);
     expect(res.headers.get("x-reason")).toMatch(/quota/);
@@ -280,7 +281,7 @@ describe("mirror stops early when the quota can't hold the blob", () => {
         new Response(PNG_1x1 as BodyInit, { headers: { "content-type": "image/png", "content-length": String(PNG_1x1.length) } })) as unknown as typeof fetch,
     });
     await h.deps.stores.users.upsert(alice.pubkey, { blossomQuota: PNG_1x1.length } as never);
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await mirror([await sha256(PNG_1x1)])).status).toBe(200);
     // a token that also allows a hash they don't own is held to the quota
     expect((await mirror([await sha256(PNG_1x1), "cd".repeat(32)])).status).toBe(413);

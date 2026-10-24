@@ -1,6 +1,7 @@
 import type { NostrEvent, UserRecord } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 import type { Connection } from "../protocol/connection";
+import { GIFT_WRAP_KINDS } from "../subscriptions/visibility";
 
 const MAX_P_TAGS_CHECKED = 20;
 /**
@@ -22,7 +23,7 @@ export async function checkAccess(ctx: RelayContext, event: NostrEvent, user: Us
     case "auth-required":
       if (authed.size === 0) return "auth-required: authentication is required to publish to this relay";
       if (authed.has(event.pubkey)) return undefined;
-      if (event.kind === 1059) return undefined; // gift wraps are signed by throwaway keys
+      if (GIFT_WRAP_KINDS.has(event.kind)) return undefined; // gift wraps are signed by throwaway keys
       return "restricted: event author must match the authenticated pubkey";
     case "whitelist":
     case "invite": {
@@ -49,8 +50,20 @@ async function pTagsAMember(ctx: RelayContext, event: NostrEvent): Promise<boole
 
 /** NIP-70: protected events (`["-"]` tag) may only be published by their authenticated author. */
 export function checkProtected(event: NostrEvent, conn: Connection): string | undefined {
+  if (embedsProtected(event)) return "blocked: reposts may not embed a protected event";
   if (!event.tags.some((t) => t[0] === "-")) return undefined;
   if (conn.authedPubkeys.has(event.pubkey)) return undefined;
   if (conn.authedPubkeys.size === 0) return "auth-required: this event may only be published by its author";
   return "restricted: this event may only be published by its author";
+}
+
+/** NIP-70: "If a repost of a protected event embeds the event anyway, relays SHOULD summarily reject it." */
+function embedsProtected(event: NostrEvent): boolean {
+  if ((event.kind !== 6 && event.kind !== 16) || !event.content.startsWith("{")) return false;
+  try {
+    const inner = JSON.parse(event.content) as { tags?: unknown };
+    return Array.isArray(inner.tags) && inner.tags.some((t) => Array.isArray(t) && t[0] === "-");
+  } catch {
+    return false;
+  }
 }

@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type {
-  AdminRole, BanRequest, BulkResult, BulkUserRequest, NostrEvent, Paged, UserDetail, UserListQuery, UserPatch, UserView,
+  AdminRole, BanRequest, BulkResult, BulkUserRequest, DeleteUserResult, NostrEvent, Paged, UserDetail, UserListQuery, UserPatch, UserView,
 } from "@beamhop/sdk/admin-contract";
 import { api, enc } from "@/lib/api";
 import { useApiMutation } from "./client";
@@ -41,6 +41,11 @@ export function useUserActions(pubkey?: string) {
     invalidate: userKeys(pubkey),
     success: "User banned",
   });
+  const remove = useApiMutation({
+    fn: (pk: string) => api.del<DeleteUserResult>(`/users/${enc(pk)}`),
+    invalidate: userKeys(),
+    success: "User deleted",
+  });
   const simple = (action: "unban" | "mute" | "unmute", label: string) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useApiMutation({ fn: (pk: string) => api.post(`/users/${enc(pk)}/${action}`), invalidate: userKeys(pubkey), success: label });
@@ -67,5 +72,5 @@ export function useUserActions(pubkey?: string) {
     invalidate: userKeys(),
     success: "User added",
   });
-  return { ban, unban, mute, unmute, patch, setRole, bulk, add };
+  return { ban, unban, mute, unmute, remove, patch, setRole, bulk, add };
 }

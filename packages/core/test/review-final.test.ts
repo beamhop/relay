@@ -210,7 +210,7 @@ describe("NIP-29 control events", () => {
     const guesser = connect("6.6.6.6");
     const results: string[] = [];
     for (let i = 0; i < 12; i++) results.push((await guesser.publish(sign(keypair(), { kind: 9021, tags: h("club", [["code", `guess-${i}`]]) })))[3]);
-    expect(results.slice(0, 10).every((m) => m.startsWith("restricted: invalid invite code"))).toBe(true);
+    expect(results.slice(0, 10).every((m) => m.startsWith("restricted: join request pending admin approval"))).toBe(true);
     expect(results.at(-1)).toMatch(/^rate-limited:/);
   });
 

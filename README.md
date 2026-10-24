@@ -7,7 +7,7 @@ A single process serves everything on one port. It runs on **Bun** or **Node ≥
 ```
 ws://host/            → Nostr relay (NIP-01 + many NIPs)
 http://host/          → landing page, NIP-11 (Accept: application/nostr+json), NIP-86 management RPC
-http://host/<sha256>  → Blossom (BUD-01/02/04/06/08)
+http://host/<sha256>  → Blossom (BUD-01/02/04/06/08/11/12)
 http://host/admin/    → admin panel (PWA)
 http://host/plugins/… → plugin public routes
 http://host/metrics   → Prometheus metrics
@@ -17,13 +17,14 @@ http://host/health    → liveness probe (JSON; 503 if the database is unreachab
 ## Features
 
 - **Relay**:
-  - NIPs 1, 2, 4, 5, 9, 10, 11, 13, 17, 22, 28, 29, 40, 42, 44, 45, 50, 51, 56, 59, 62, 65, 70, 77 and 86.
+  - NIPs 1, 4, 5, 9, 11, 13, 17, 29, 40, 42, 45, 50, 56, 59, 62, 70, 77 and 86 (advertised in NIP-11).
+  - Client-side NIPs such as 2, 10, 22, 28, 44, 51 and 65 work through generic NIP-01 storage; per NIP-11 they are not advertised.
   - Full-text search, NIP-42 auth, proof-of-work, NIP-29 groups, negentropy sync and expiration.
   - Rate limits, IP rules and allow/ban lists.
 - **Blossom**:
   - Filesystem or S3-compatible storage.
   - Upload/mirror/media endpoints and range requests.
-  - EXIF stripping, plus thumbnails when `sharp` is installed.
+  - Optional EXIF stripping (off by default, since it changes the blob hash), plus thumbnails when `sharp` is installed.
 - **Admin panel** (`/admin/`):
   - An installable PWA with live dashboard, connections, users and roles, content moderation, reports, media, settings, plugins, audit log, push notifications and a metrics map.
   - Sign in with NIP-07, a private key (nsec/hex, kept in the browser), a password, TOTP or passkeys.

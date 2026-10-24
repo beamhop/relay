@@ -6,10 +6,13 @@ import { blobCsp, extFromMime, normalizeMime, isMimeAllowed, isInlineSafe } from
 import { fetchRemote } from "./mirror";
 import type { BlossomCore } from "./service";
 
-/** `<sha256>`, `<sha256>.<ext>` or `<sha256>.thumb.webp` — strict so it never swallows other root paths. */
-const BLOB_PATH = "/:name{[0-9a-f]{64}(?:\\.[a-z0-9]{1,16}){0,2}}";
+/**
+ * `<sha256>` or `<sha256>.<ext>` (any extension, case-insensitive; e.g. `.PNG`, `.tar.gz`). Strict so it never swallows
+ * other root paths. The extension is ignored: the blob itself is always served (BUD-01).
+ */
+const BLOB_PATH = "/:name{[0-9a-f]{64}(?:\\.[A-Za-z0-9]{1,16}){0,2}}";
+const THUMB_PATH = "/thumb/:name{[0-9a-f]{64}\\.webp}";
 const LIST_PATH = "/list/:pubkey{[0-9a-f]{64}}";
-const THUMB_SUFFIX = ".thumb.webp";
 /** PUT /mirror JSON body (`{"url": …}`) */
 const MAX_MIRROR_BODY = 16 * 1024;
 
@@ -18,10 +21,11 @@ const contentLength = (v: string | null | undefined): number | undefined => (v &
 type Handler = (c: Context) => Promise<Response>;
 
 /**
- * Blossom HTTP routes (BUD-01/02/04/06). No app-wide middleware is registered so mounting this app at "/"
+ * Blossom HTTP routes (BUD-01/02/04/06/08/11/12). No app-wide middleware is registered so mounting this app at "/"
  * doesn't affect other routes; every handler adds CORS headers itself.
  *
- * Thumbnails: `GET /<sha256>.thumb.webp` (or `GET /<sha256>?thumb=1`), only when `hasThumbnail`.
+ * Thumbnails: `GET /thumb/<sha256>.webp`, only when `hasThumbnail`. They live outside the `/<sha256>` namespace
+ * because a hash URL must always return the exact blob bytes.
  */
 export function createRoutes(core: BlossomCore): Hono {
   const app = new Hono();
@@ -60,65 +64,85 @@ export function createRoutes(core: BlossomCore): Hono {
   };
 
   const preflight = () => new Response(null, { status: 204, headers: CORS_HEADERS });
-  for (const p of ["/upload", "/mirror", LIST_PATH, BLOB_PATH]) app.options(p, preflight);
+  for (const p of ["/upload", "/mirror", LIST_PATH, THUMB_PATH, BLOB_PATH]) app.options(p, preflight);
+
+  /** Loads a blob row the requester may see: approved for everyone, pending for owners/staff, blocked for staff. */
+  const loadVisible = async (c: Context, sha256: string) => {
+    // A sent token is verified and its rights resolved before the blob lookup, so a missing blob and a hidden
+    // (pending/blocked) one cost the same and response timing doesn't reveal that the latter exists.
+    let viewer: { staff: boolean; owner: boolean } | undefined;
+    if (c.req.header("authorization")) {
+      const a = optionalAuth(c, "get", sha256);
+      if (a) viewer = { staff: await core.isStaff(a.pubkey), owner: await core.repo.isOwner(sha256, a.pubkey) };
+    }
+    const row = await core.repo.get(sha256);
+    if (!row) throw new BlossomError(404, "blob not found");
+    const isPublic = row.status === "approved";
+    if (!isPublic) {
+      // only owners (pending) and staff (pending/blocked) may fetch unapproved blobs; anyone else gets the
+      // same 404 as for a missing blob (also with a malformed/expired token) so existence isn't revealed
+      const allowed = !!viewer && (viewer.staff || (row.status === "pending" && viewer.owner));
+      if (!allowed) throw new BlossomError(404, "blob not found");
+    }
+    return { row, isPublic };
+  };
+
+  /**
+   * Headers for serving user content from the relay (and admin panel) origin: never sniff, never run scripts
+   * (SVG/HTML), and make active types download instead of rendering.
+   */
+  const blobHeaders = (type: string, etag: string, isPublic: boolean, filename: string) => {
+    const headers = new Headers({
+      "Content-Type": type,
+      ETag: etag,
+      "Cache-Control": isPublic ? "public, max-age=31536000, immutable" : "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": blobCsp(type),
+      "Cross-Origin-Resource-Policy": "cross-origin",
+    });
+    if (!isInlineSafe(type)) headers.set("Content-Disposition", `attachment; filename="${filename}.${extFromMime(type)}"`);
+    return headers;
+  };
+
+  const notModified = (c: Context, etag: string) =>
+    !!c.req.header("if-none-match")?.split(",").some((t) => t.trim().replace(/^W\//, "") === etag);
+
+  // ---------------------------------------------------------------- GET|HEAD /thumb/<sha256>.webp
+  app.get(
+    THUMB_PATH,
+    wrap(async (c) => {
+      const sha256 = c.req.param("name")!.slice(0, 64);
+      const head = c.req.method === "HEAD";
+      const { row, isPublic } = await loadVisible(c, sha256);
+      if (!row.hasThumbnail) throw new BlossomError(404, "thumbnail not found");
+      const etag = `"${sha256}.thumb"`;
+      const headers = blobHeaders("image/webp", etag, isPublic, `${sha256}.thumb`);
+      if (notModified(c, etag)) return new Response(null, { status: 304, headers });
+      const obj = await core.driver.getThumbnail(sha256, { hidden: !isPublic });
+      if (!obj) throw new BlossomError(404, "thumbnail not found");
+      headers.set("Content-Length", String(obj.size));
+      if (head) {
+        await obj.body.cancel();
+        return new Response(null, { status: 200, headers });
+      }
+      core.deps.bus.emit("blob.served", { sha256, size: obj.size, ip: clientIp(c.req.raw, trustProxy, c.env) });
+      return new Response(obj.body, { status: 200, headers });
+    }),
+  );
 
   // ---------------------------------------------------------------- GET|HEAD /<sha256>[.ext]
   // Hono dispatches HEAD to GET handlers (and drops the body); we branch on the method to avoid opening streams.
   app.get(
     BLOB_PATH,
     wrap(async (c) => {
-      const name = c.req.param("name")!;
-      const sha256 = name.slice(0, 64);
-      const thumb = name.endsWith(THUMB_SUFFIX) || c.req.query("thumb") === "1";
+      const sha256 = c.req.param("name")!.slice(0, 64);
       const head = c.req.method === "HEAD";
-      // A sent token is verified and its rights resolved before the blob lookup, so a missing blob and a hidden
-      // (pending/blocked) one cost the same and response timing doesn't reveal that the latter exists.
-      let viewer: { staff: boolean; owner: boolean } | undefined;
-      if (c.req.header("authorization")) {
-        const a = optionalAuth(c, "get", sha256);
-        if (a) viewer = { staff: await core.isStaff(a.pubkey), owner: await core.repo.isOwner(sha256, a.pubkey) };
-      }
-      const row = await core.repo.get(sha256);
-      if (!row) throw new BlossomError(404, "blob not found");
+      const { row, isPublic } = await loadVisible(c, sha256);
 
-      let isPublic = row.status === "approved";
-      if (!isPublic) {
-        // only owners (pending) and staff (pending/blocked) may fetch unapproved blobs; anyone else gets the
-        // same 404 as for a missing blob (also with a malformed/expired token) so existence isn't revealed
-        const allowed = !!viewer && (viewer.staff || (row.status === "pending" && viewer.owner));
-        if (!allowed) throw new BlossomError(404, "blob not found");
-      }
-
-      const etag = `"${thumb ? `${sha256}.thumb` : sha256}"`;
-      const type = thumb ? "image/webp" : row.type;
-      const inline = isInlineSafe(type);
-      const headers = new Headers({
-        "Content-Type": type,
-        ETag: etag,
-        "Cache-Control": isPublic ? "public, max-age=31536000, immutable" : "private, no-store",
-        // blobs are user content served from the relay (and admin panel) origin: never sniff, never run
-        // scripts (SVG/HTML), and make active types download instead of rendering
-        "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": blobCsp(type),
-        "Cross-Origin-Resource-Policy": "cross-origin",
-      });
-      if (!inline) headers.set("Content-Disposition", `attachment; filename="${sha256}.${extFromMime(type)}"`);
-      if (c.req.header("if-none-match")?.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
-        return new Response(null, { status: 304, headers });
-      }
-
-      if (thumb) {
-        if (!row.hasThumbnail) throw new BlossomError(404, "thumbnail not found");
-        const obj = await core.driver.getThumbnail(sha256, { hidden: !isPublic });
-        if (!obj) throw new BlossomError(404, "thumbnail not found");
-        headers.set("Content-Length", String(obj.size));
-        if (head) {
-          await obj.body.cancel();
-          return new Response(null, { status: 200, headers });
-        }
-        core.deps.bus.emit("blob.served", { sha256, size: obj.size, ip: clientIp(c.req.raw, trustProxy, c.env) });
-        return new Response(obj.body, { status: 200, headers });
-      }
+      const etag = `"${sha256}"`;
+      const inline = isInlineSafe(row.type);
+      const headers = blobHeaders(row.type, etag, isPublic, sha256);
+      if (notModified(c, etag)) return new Response(null, { status: 304, headers });
 
       headers.set("Accept-Ranges", "bytes");
       // only redirect to the CDN for types that are safe to render there (the CDN doesn't send our headers)
@@ -163,9 +187,7 @@ export function createRoutes(core: BlossomCore): Hono {
   app.delete(
     BLOB_PATH,
     wrap(async (c) => {
-      const name = c.req.param("name")!;
-      if (name.endsWith(THUMB_SUFFIX)) throw new BlossomError(400, "cannot delete a thumbnail");
-      const sha256 = name.slice(0, 64);
+      const sha256 = c.req.param("name")!.slice(0, 64);
       const a = requireAuth(c, "delete", sha256, true);
       // A missing blob is a 404 even for a used token (a client retrying a DELETE whose response was lost).
       if (!(await core.repo.get(sha256))) throw new BlossomError(404, "blob not found");
@@ -185,21 +207,21 @@ export function createRoutes(core: BlossomCore): Hono {
     wrap(async (c) => {
       if (c.req.method !== "HEAD") throw new BlossomError(405, "use PUT /upload");
       const settings = core.settings;
+      // BUD-06: the hash comes from X-SHA-256; BUD-11: it is the implied hash and a matching `x` tag is required.
       const shaHeader = c.req.header("x-sha-256")?.toLowerCase();
-      if (shaHeader !== undefined && !SHA256_RE.test(shaHeader)) throw new BlossomError(400, "invalid X-SHA-256 header");
+      if (shaHeader === undefined) throw new BlossomError(400, "missing X-SHA-256 header");
+      if (!SHA256_RE.test(shaHeader)) throw new BlossomError(400, "invalid X-SHA-256 header");
       const lenHeader = c.req.header("x-content-length");
       if (lenHeader === undefined) throw new BlossomError(411, "missing X-Content-Length header");
       if (!/^\d+$/.test(lenHeader)) throw new BlossomError(400, "invalid X-Content-Length header");
       const size = Number(lenHeader);
-      const a = requireAuth(c, "upload", shaHeader);
+      const a = requireAuth(c, "upload", shaHeader, true);
       const user = await core.assertCanUpload(a.pubkey);
       if (size > settings.maxUploadBytes) throw new BlossomError(413, `blob too large (max ${settings.maxUploadBytes} bytes)`);
       const type = normalizeMime(c.req.header("x-content-type"));
       if (type && !isMimeAllowed(type, settings.allowedMimeTypes)) throw new BlossomError(415, `type ${type} is not allowed`);
-      if (shaHeader) {
-        await core.assertNotBlocked(shaHeader);
-        if (await core.repo.isOwner(shaHeader, a.pubkey)) return new Response(null, { status: 200 });
-      }
+      await core.assertNotBlocked(shaHeader);
+      if (await core.repo.isOwner(shaHeader, a.pubkey)) return new Response(null, { status: 200 });
       await core.assertQuota(a.pubkey, size, user);
       return new Response(null, { status: 200 });
     }),
@@ -214,23 +236,24 @@ export function createRoutes(core: BlossomCore): Hono {
       core.assertIpRate(ip);
       const shaHeader = c.req.header("x-sha-256")?.toLowerCase();
       if (shaHeader !== undefined && !SHA256_RE.test(shaHeader)) throw new BlossomError(400, "invalid X-SHA-256 header");
-      const a = requireAuth(c, "upload", shaHeader);
+      // BUD-11: an `x` tag matching the blob is required (checked against X-SHA-256 now and the body hash below).
+      const a = requireAuth(c, "upload", shaHeader, true);
+      if (a.hashes.length === 0) throw new BlossomError(401, "auth missing x tag");
       core.assertPubkeyRate(a.pubkey);
       const user = await core.assertCanUpload(a.pubkey);
       const len = contentLength(c.req.header("content-length"));
       if (len !== undefined && len > max) throw new BlossomError(413, `blob too large (max ${max} bytes)`);
       if (shaHeader) await core.assertNotBlocked(shaHeader);
 
-      const descriptor = await core.withUploadBody(ip, async (limits) => {
+      const { descriptor, created } = await core.withUploadBody(ip, async (limits) => {
         const { data, sha256 } = await readLimited(c.req.raw.body, max, len, limits);
         if (data.byteLength === 0) throw new BlossomError(400, "empty body");
         if (shaHeader && shaHeader !== sha256) throw new BlossomError(409, "X-SHA-256 does not match body");
-        if (a.hashes.length > 0 && !a.hashes.includes(sha256)) throw new BlossomError(401, "auth x tag does not match blob");
-        return core.withUploadSlot(
-          async () => (await core.ingest({ data, sha256, pubkey: a.pubkey, declaredType: c.req.header("content-type"), ip, strip: true }, user)).descriptor,
-        );
+        if (!a.hashes.includes(sha256)) throw new BlossomError(401, "auth x tag does not match blob");
+        // `strip` only takes effect when the operator opts in via `settings.blossom.stripExif` (deviates from BUD-02).
+        return core.withUploadSlot(() => core.ingest({ data, sha256, pubkey: a.pubkey, declaredType: c.req.header("content-type"), ip, strip: true }, user));
       });
-      return jsonResponse(descriptor);
+      return jsonResponse(descriptor, created ? 201 : 200);
     }),
   );
 
@@ -257,7 +280,7 @@ export function createRoutes(core: BlossomCore): Hono {
       if (typeof body?.url !== "string") throw new BlossomError(400, "missing url");
       const mirrorUrl = body.url;
 
-      const descriptor = await core.withUploadBody(ip, async (limits) => {
+      const { descriptor, created } = await core.withUploadBody(ip, async (limits) => {
         // one timeout for the whole transfer, so a body cut off by it is reported as a timeout (504)
         const signal = AbortSignal.timeout(core.options.mirrorTimeoutMs ?? 30_000);
         const res = await fetchRemote(mirrorUrl, {
@@ -295,14 +318,15 @@ export function createRoutes(core: BlossomCore): Hono {
         }
         if (!a.hashes.includes(read.sha256)) throw new BlossomError(409, "mirrored blob hash does not match auth x tag");
         // Mirrors are stored byte-identical (no EXIF stripping) so the hash matches the source server.
-        return core.withUploadSlot(
-          async () =>
-            (
-              await core.ingest({ data: read.data, sha256: read.sha256, pubkey: a.pubkey, declaredType: res.headers.get("content-type"), ip, strip: false }, user)
-            ).descriptor,
+        // BUD-04: prefer the origin's Content-Type, falling back to sniffing.
+        return core.withUploadSlot(() =>
+          core.ingest(
+            { data: read.data, sha256: read.sha256, pubkey: a.pubkey, declaredType: res.headers.get("content-type"), preferDeclaredType: true, ip, strip: false },
+            user,
+          ),
         );
       });
-      return jsonResponse(descriptor);
+      return jsonResponse(descriptor, created ? 201 : 200);
     }),
   );
 

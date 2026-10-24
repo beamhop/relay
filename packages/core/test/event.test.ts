@@ -45,7 +45,7 @@ describe("EVENT", () => {
     expect((await c.publish(sign(kp, { content: "x".repeat(11) })))[3]).toMatch(/^invalid: content/);
     expect((await c.publish(sign(kp, { tags: [["t", "a"], ["t", "b"], ["t", "c"]] })))[3]).toMatch(/^invalid: too many tags/);
     c.send(["EVENT", sign(kp, { tags: [["x", "y".repeat(3000)]] })]);
-    expect((await c.socket.waitFor((m) => m[0] === "NOTICE"))[1]).toMatch(/too large/);
+    expect((await c.socket.waitFor((m) => m[0] === "OK" && m[2] === false && /message too large/.test(String(m[3]))))[3]).toMatch(/^invalid:/);
   });
 
   test("created_at bounds", async () => {
@@ -128,6 +128,98 @@ describe("EVENT", () => {
     expect(stores.events.events.has(note.id)).toBe(false);
     expect(stores.events.events.has(vanish.id)).toBe(true);
     expect((await c.publish(note))[3]).toMatch(/^blocked: .*vanish/);
+  });
+
+  test("verifier cache never vouches for a tampered copy of a known event", async () => {
+    const { connect, stores } = await setup();
+    const c = connect();
+    const ev = sign(keypair(), { content: "original" });
+    expect((await c.publish(ev))[2]).toBe(true);
+    stores.events.events.delete(ev.id);
+    for (const forged of [{ ...ev, content: "tampered" }, { ...ev, kind: 7 }, { ...ev, tags: [["t", "x"]] }]) {
+      expect(await c.publish(forged)).toEqual(["OK", ev.id, false, "invalid: bad event id or signature"]);
+    }
+    expect(stores.events.events.has(ev.id)).toBe(false);
+  });
+
+  test("oversized EVENT is answered with OK false, oversized REQ with CLOSED", async () => {
+    const { connect } = await setup({ settings: { limits: { maxMessageBytes: 2000 } } });
+    const c = connect();
+    const ev = sign(keypair(), { tags: [["x", "y".repeat(3000)]] });
+    c.send(["EVENT", ev]);
+    const ok = await c.socket.waitFor((m) => m[0] === "OK");
+    expect(ok.slice(0, 3)).toEqual(["OK", ev.id, false]);
+    expect(ok[3]).toMatch(/^invalid: message too large/);
+    c.send(["REQ", "big", { "#t": ["z".repeat(3000)] }]);
+    expect((await c.socket.waitFor((m) => m[0] === "CLOSED" && m[1] === "big"))[2]).toMatch(/^invalid: message too large/);
+  });
+
+  test("max_content_length counts unicode characters", async () => {
+    const { connect } = await setup({ settings: { limits: { maxContentLength: 3 } } });
+    const c = connect();
+    const kp = keypair();
+    expect((await c.publish(sign(kp, { content: "😀😀😀" })))[2]).toBe(true);
+    expect((await c.publish(sign(kp, { content: "😀😀😀😀" })))[3]).toMatch(/^invalid: content/);
+  });
+
+  test("NIP-62 vanish is honoured for banned, muted and non-member users", async () => {
+    const { connect, stores } = await setup({ settings: { access: { mode: "whitelist" }, limits: { minPowDifficulty: 30 } } });
+    const c = connect();
+    for (const status of ["banned", "muted", undefined] as const) {
+      const kp = keypair();
+      const note = sign(kp, { created_at: now() - 5 });
+      await stores.events.save(note);
+      if (status) await stores.users.upsert(kp.pk, { status });
+      const vanish = sign(kp, { kind: 62, tags: [["relay", "ALL_RELAYS"]] });
+      expect(await c.publish(vanish)).toEqual(["OK", vanish.id, true, ""]);
+      expect(stores.events.events.has(note.id)).toBe(false);
+    }
+  });
+
+  test("NIP-62 deletes only up to the request and tombstones gift wraps to the user", async () => {
+    const { connect, stores } = await setup();
+    const c = connect();
+    const kp = keypair();
+    const old = sign(kp, { created_at: now() - 10 });
+    const future = sign(kp, { created_at: now() + 60 });
+    const wrap = sign(keypair(), { kind: 1059, tags: [["p", kp.pk]], created_at: now() - 100 });
+    for (const e of [old, future, wrap]) await stores.events.save(e);
+    expect((await c.publish(sign(kp, { kind: 62, tags: [["relay", "ALL_RELAYS"]] })))[2]).toBe(true);
+    expect(stores.events.events.has(old.id)).toBe(false);
+    expect(stores.events.events.has(future.id)).toBe(true);
+    expect(stores.events.events.has(wrap.id)).toBe(false);
+    expect((await c.publish(wrap))[2]).toBe(false);
+  });
+
+  test("NIP-09: banned and muted users can delete their events; recipients can delete gift wraps", async () => {
+    const { connect, stores } = await setup();
+    const c = connect();
+    for (const status of ["banned", "muted"] as const) {
+      const kp = keypair();
+      const note = sign(kp);
+      await stores.events.save(note);
+      await stores.users.upsert(kp.pk, { status });
+      expect((await c.publish(sign(kp, { kind: 5, tags: [["e", note.id]] })))[2]).toBe(true);
+      expect(stores.events.events.has(note.id)).toBe(false);
+    }
+    const bob = keypair();
+    const wrap = sign(keypair(), { kind: 1059, tags: [["p", bob.pk]] });
+    const notForBob = sign(keypair(), { kind: 1059, tags: [["p", keypair().pk]] });
+    await c.publish(wrap);
+    await c.publish(notForBob);
+    expect((await c.publish(sign(bob, { kind: 5, tags: [["e", wrap.id], ["e", notForBob.id]] })))[2]).toBe(true);
+    expect(stores.events.events.has(wrap.id)).toBe(false);
+    expect(stores.events.events.has(notForBob.id)).toBe(true);
+    expect((await c.publish(wrap))[2]).toBe(false);
+  });
+
+  test("NIP-70: reposts embedding a protected event are rejected", async () => {
+    const { connect } = await setup();
+    const c = connect();
+    const kp = keypair();
+    const prot = sign(kp, { tags: [["-"]] });
+    expect((await c.publish(sign(keypair(), { kind: 6, content: JSON.stringify(prot), tags: [["e", prot.id]] })))[3]).toMatch(/^blocked: reposts/);
+    expect((await c.publish(sign(keypair(), { kind: 6, content: "", tags: [["e", prot.id]] })))[2]).toBe(true);
   });
 
   test("bans, deny list and mutes", async () => {

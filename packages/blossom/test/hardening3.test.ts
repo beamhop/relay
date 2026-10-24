@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readLimited } from "../src/http";
 import { ByteBudget, ExpiringSet, KeyedConcurrency } from "../src/limits";
-import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness } from "./fakes";
+import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness, xOf } from "./fakes";
 
 let h: Harness;
 afterEach(() => h?.cleanup());
@@ -71,16 +71,16 @@ describe("upload memory budget (D1)", () => {
     h = await createHarness({ useSharp: false, maxBufferedUploadBytes: 1, maxConcurrentUploadsPerIp: 1, uploadStallMs: 50 });
     // budget floor is 2 × maxUploadBytes, so a normal upload still fits
     const ok = await h.svc.app.fetch(
-      new Request("https://cdn.example.com/upload", { method: "PUT", body: PNG_1x1, headers: { authorization: authHeader(alice.sk, "upload") } }),
+      new Request("https://cdn.example.com/upload", { method: "PUT", body: PNG_1x1, headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(PNG_1x1)] }) } }),
       { ip: "203.0.113.7" },
     );
-    expect(ok.status).toBe(200);
+    expect(ok.status).toBe(201);
 
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const put = (body: BodyInit, ip: string) =>
       h.svc.app.fetch(
-        new Request("https://cdn.example.com/upload", { method: "PUT", body, headers: { authorization: authHeader(alice.sk, "upload") }, duplex: "half" } as RequestInit),
+        new Request("https://cdn.example.com/upload", { method: "PUT", body, headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(PNG_1x1)] }) }, duplex: "half" } as RequestInit),
         { ip },
       );
     const hanging = put(stalled(new Uint8Array([1, 2, 3]), gate), "203.0.113.7");
@@ -111,12 +111,12 @@ describe("single-use delete tokens (D2)", () => {
   test("a replayed delete token is refused even after the signer re-uploads the blob", async () => {
     h = await createHarness({ useSharp: false });
     const hash = await sha256(PNG_1x1);
-    const up = () => h.request("/upload", { method: "PUT", body: PNG_1x1, headers: { authorization: authHeader(alice.sk, "upload") } });
-    expect((await up()).status).toBe(200);
+    const up = () => h.request("/upload", { method: "PUT", body: PNG_1x1, headers: { authorization: authHeader(alice.sk, "upload", { x: [hash] }) } });
+    expect((await up()).status).toBe(201);
     const token = authHeader(alice.sk, "delete", { x: [hash] });
     const del = (auth: string) => h.request(`/${hash}`, { method: "DELETE", headers: { authorization: auth } });
     expect((await del(token)).status).toBe(200);
-    expect((await up()).status).toBe(200);
+    expect((await up()).status).toBe(201);
     expect((await del(token)).status).toBe(401);
     expect((await h.request(`/${hash}`)).status).toBe(200);
     expect((await del(authHeader(alice.sk, "delete", { x: [hash], expiration: now() + 900 }))).status).toBe(200);

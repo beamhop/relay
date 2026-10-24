@@ -6,7 +6,7 @@ import { createImageProcessor } from "../src/image";
 import { ipBucket, Semaphore, WindowLimiter } from "../src/limits";
 import { blobCsp } from "../src/mime";
 import { fetchRemote } from "../src/mirror";
-import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness } from "./fakes";
+import { PNG_1x1, authHeader, createHarness, newUser, sha256, type Harness, xOf } from "./fakes";
 
 let h: Harness;
 afterEach(() => h?.cleanup());
@@ -18,7 +18,7 @@ const upload = (data: Uint8Array, u = alice, init: { type?: string; body?: BodyI
   h.request("/upload", {
     method: "PUT",
     body: init.body ?? (data as BodyInit),
-    headers: { authorization: authHeader(u.sk, "upload"), "content-type": init.type ?? "application/octet-stream" },
+    headers: { authorization: authHeader(u.sk, "upload", { x: [xOf(data)] }), "content-type": init.type ?? "application/octet-stream" },
   });
 
 /** RIFF/WAVE header + a few samples — sniffed as audio/wav */
@@ -90,13 +90,13 @@ describe("upload auth scoping (B9)", () => {
 describe("upload rate limits and concurrency (B3)", () => {
   test("per-IP and per-pubkey limits answer 429", async () => {
     h = await createHarness({ useSharp: false, uploadsPerMinutePerIp: 2, uploadsPerMinutePerPubkey: 0 });
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await upload(PNG_1x1, bob)).status).toBe(200);
     expect((await upload(PNG_1x1, newUser())).status).toBe(429);
 
     await h.cleanup();
     h = await createHarness({ useSharp: false, uploadsPerMinutePerIp: 0, uploadsPerMinutePerPubkey: 1 });
-    expect((await upload(PNG_1x1)).status).toBe(200);
+    expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await upload(PNG_1x1)).status).toBe(429);
     expect((await upload(PNG_1x1, bob)).status).toBe(200);
   });
@@ -114,9 +114,9 @@ describe("upload rate limits and concurrency (B3)", () => {
         ctl.close();
       },
     });
-    const first = h.request("/upload", { method: "PUT", body: slow, headers: { authorization: authHeader(alice.sk, "upload") }, duplex: "half" } as RequestInit);
+    const first = h.request("/upload", { method: "PUT", body: slow, headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(PNG_1x1)] }) }, duplex: "half" } as RequestInit);
     await new Promise((r) => setTimeout(r, 20));
-    expect((await upload(PNG_1x1, bob)).status).toBe(200);
+    expect((await upload(PNG_1x1, bob)).status).toBe(201);
     release();
     expect((await first).status).toBe(200);
     // an ingest in progress (slow storage) does
@@ -128,7 +128,7 @@ describe("upload rate limits and concurrency (B3)", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect((await upload(PNG_1x1, bob)).status).toBe(503);
     unblock();
-    expect((await busy).status).toBe(200);
+    expect((await busy).status).toBe(201);
   });
 
   test("helpers", async () => {
