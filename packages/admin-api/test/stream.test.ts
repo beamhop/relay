@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_STREAMS_PER_ADMIN } from "../src/routes/stream";
 import { createHarness, newKey, signEvent } from "./fakes";
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, pred: (s: string) => boolean, timeoutMs = 2000): Promise<string> {
@@ -53,6 +54,82 @@ describe("SSE /stream", () => {
     expect(data.ip).toBeUndefined();
     expect(out).not.toContain("skip me");
     await reader.cancel();
+  });
+
+  test(`at most ${MAX_STREAMS_PER_ADMIN} open streams per admin`, async () => {
+    const h = await createHarness();
+    const cookie = await h.login(h.owner);
+    const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    for (let i = 0; i < MAX_STREAMS_PER_ADMIN; i++) {
+      const res = await h.req("/stream", { headers: { cookie } });
+      expect(res.status).toBe(200);
+      readers.push(res.body!.getReader());
+    }
+    const over = await h.req("/stream", { headers: { cookie } });
+    expect(over.status).toBe(429);
+    expect(((await over.json()) as { code: string }).code).toBe("too_many_streams");
+    // another admin isn't affected
+    const other = await h.login(await h.addAdmin("viewer"));
+    expect((await h.req("/stream", { headers: { cookie: other } })).status).toBe(200);
+    await readers[0].cancel();
+    await Bun.sleep(20);
+    expect((await h.req("/stream", { headers: { cookie } })).status).toBe(200);
+    for (const r of readers.slice(1)) await r.cancel();
+  });
+
+  test("a message sent to many streams is serialized once", async () => {
+    const h = await createHarness();
+    const cookie = await h.login(h.owner);
+    const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    for (let i = 0; i < 5; i++) {
+      const reader = (await h.req("/stream", { headers: { cookie } })).body!.getReader();
+      await readUntil(reader, (s) => s.includes("event: snapshot"));
+      readers.push(reader);
+    }
+    const alert = { level: "warning" as const, title: "Disk", message: "low" };
+    const stringify = JSON.stringify;
+    let calls = 0;
+    JSON.stringify = ((v: unknown, ...rest: never[]) => {
+      if (v === alert) calls++;
+      return stringify(v, ...rest);
+    }) as typeof JSON.stringify;
+    try {
+      h.bus.emit("alert", alert);
+    } finally {
+      JSON.stringify = stringify;
+    }
+    for (const r of readers) expect(await readUntil(r, (s) => s.includes("event: alert"))).toContain('"title":"Disk"');
+    expect(calls).toBe(1);
+    for (const r of readers) await r.cancel();
+  });
+
+  test("streams of one session share one authorization recheck, and all end at logout", async () => {
+    const h = await createHarness();
+    const mod = await h.addAdmin("moderator");
+    const cookie = await h.login(mod);
+    const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    for (let i = 0; i < 4; i++) {
+      const reader = (await h.req("/stream", { headers: { cookie } })).body!.getReader();
+      await readUntil(reader, (s) => s.includes("event: snapshot"));
+      readers.push(reader);
+    }
+    const get = h.stores.users.get.bind(h.stores.users);
+    let lookups = 0;
+    h.stores.users.get = (pk: string) => (pk === mod.pk && lookups++, get(pk));
+    await Bun.sleep(275); // ~5 rounds at the 50 ms test interval
+    h.stores.users.get = get;
+    expect(lookups).toBeGreaterThan(0);
+    expect(lookups).toBeLessThanOrEqual(7);
+    await h.withCookie(cookie, "/auth/logout", { method: "POST" });
+    for (const r of readers) {
+      const end = await Promise.race([
+        (async () => {
+          for (;;) if ((await r.read()).done) return "closed";
+        })(),
+        Bun.sleep(1000).then(() => "open"),
+      ]);
+      expect(end).toBe("closed");
+    }
   });
 
   test("events=1 requires content.view; unauthenticated is 401", async () => {
