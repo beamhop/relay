@@ -21,6 +21,7 @@ import { ListInput } from "@/components/list-input";
 import { BytesField, ListField, NumberField, SelectField, SwitchField, TextField } from "@/components/form-fields";
 import { useSaveSettings, useSettings } from "@/queries/misc";
 import { useCan } from "@/queries/auth";
+import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { SETTINGS_SECTIONS, type SectionKey } from "@/lib/settings-sections";
 import { kindName, parsePubkey, shortNpub } from "@/lib/nostr";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,7 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
     if (await tryMutate(save, { [sectionKey]: values } as any)) form.reset(values);
   });
   const dirty = form.formState.isDirty;
+  useUnsavedGuard(dirty && editable);
   return (
     <Form {...form}>
       <form onSubmit={onSubmit} noValidate className="space-y-4">

@@ -2,6 +2,8 @@ import * as React from "react";
 import { useInFlight } from "@/hooks/use-in-flight";
 import { tryMutate } from "@/queries/client";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Controller, useForm, useWatch } from "react-hook-form";
+import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { ArrowLeft, Ban, CheckCircle2, ExternalLink, FileText, Image as ImageIcon, MoreHorizontal, Save, Trash2, VolumeX, Volume2 } from "lucide-react";
 import type { AdminRole, MediaItem, UserDetail, UserPatch } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
@@ -221,7 +223,8 @@ const quotaBytes = (v: string): number | null | undefined => {
 };
 
 type EditFields = Pick<UserDetail, "notes" | "tags" | "allowed" | "denied" | "nip05Name" | "blossomQuota" | "rateLimit">;
-const formOf = (u: EditFields) => ({
+interface EditForm { notes: string; tags: string[]; allowed: boolean; denied: boolean; nip05Name: string; quotaMb: string; epm: string; rpm: string }
+const formOf = (u: EditFields): EditForm => ({
   notes: u.notes,
   tags: u.tags,
   allowed: u.allowed,
@@ -237,30 +240,22 @@ function EditCard({ u }: { u: UserDetail }) {
   const can = useCan();
   const { patch } = useBanFlow();
   const editable = can("users.edit");
-  const init = React.useCallback(() => formOf(u), [u]);
-  const [f, setF] = React.useState(init);
-  // refetches (mute/ban/role changes, window focus) must not wipe unsaved edits: only fields the
-  // admin hasn't touched follow the server; a different user resets the form entirely
-  const baseline = React.useRef({ pubkey: u.pubkey, values: f });
-  React.useEffect(() => {
-    const next = init();
-    const prev = baseline.current;
-    baseline.current = { pubkey: u.pubkey, values: next };
-    if (prev.pubkey !== u.pubkey) return setF(next);
-    setF((cur) => {
-      const merged = { ...cur };
-      for (const k of Object.keys(next) as (keyof typeof next)[]) {
-        if (JSON.stringify(cur[k]) === JSON.stringify(prev.values[k])) (merged as Record<string, unknown>)[k] = next[k];
-      }
-      return merged;
-    });
-  }, [init, u.pubkey]);
-  const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((s) => ({ ...s, [k]: v }));
+  const server = React.useMemo(() => formOf(u), [u]);
+  // refetches (mute/ban/role changes, window focus) must not wipe unsaved edits: `values` + keepDirtyValues lets only
+  // fields the admin hasn't touched follow the server (the card is keyed by pubkey, so another user starts fresh)
+  const form = useForm<EditForm>({ values: server, resetOptions: { keepDirtyValues: true } });
+  const { register, control } = form;
+  const dirty = form.formState.isDirty;
+  useUnsavedGuard(dirty && editable);
+  const [epm, rpm, quotaMb] = useWatch({ control, name: ["epm", "rpm", "quotaMb"] });
+  const invalidNum = [epm, rpm].some((v) => v.trim() !== "" && !(Number(v) >= 0)) || quotaBytes(quotaMb) === undefined;
   const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
 
   const save = () => {
+    const f = form.getValues();
+    // the latest server values (they move with refetches, see above)
+    const o = (form.formState.defaultValues ?? server) as EditForm;
     const body: UserPatch = {};
-    const o = baseline.current.values;
     if (f.notes !== o.notes) body.notes = f.notes;
     if (JSON.stringify(f.tags) !== JSON.stringify(o.tags)) body.tags = f.tags;
     if (f.allowed !== o.allowed) body.allowed = f.allowed;
@@ -278,16 +273,11 @@ function EditCard({ u }: { u: UserDetail }) {
         // the server normalises values (trimmed lower-case names, whole MB, plain numbers): show what it
         // stored and make that the new baseline, so the form isn't left dirty with the typed spelling
         onSuccess: (updated) => {
-          if (updated.pubkey !== baseline.current.pubkey) return;
-          const next = formOf(updated);
-          baseline.current = { pubkey: u.pubkey, values: next };
-          setF(next);
+          if (updated.pubkey === u.pubkey) form.reset(formOf(updated));
         },
       },
     );
   };
-  const dirty = JSON.stringify(f) !== JSON.stringify(baseline.current.values);
-  const invalidNum = [f.epm, f.rpm].some((v) => v.trim() !== "" && !(Number(v) >= 0)) || quotaBytes(f.quotaMb) === undefined;
 
   return (
     <Card>
@@ -298,41 +288,49 @@ function EditCard({ u }: { u: UserDetail }) {
       <CardContent>
         <fieldset disabled={!editable} className="space-y-4">
           <div className="grid gap-2 sm:grid-cols-2">
-            <ToggleRow label="Allow-listed" hint="Can write in whitelist mode" checked={f.allowed} onChange={(v) => set("allowed", v)} disabled={!editable} />
-            <ToggleRow label="Deny-listed" hint="Always rejected" checked={f.denied} onChange={(v) => set("denied", v)} disabled={!editable} />
+            <Controller
+              control={control}
+              name="allowed"
+              render={({ field }) => <ToggleRow label="Allow-listed" hint="Can write in whitelist mode" checked={field.value} onChange={field.onChange} disabled={!editable} />}
+            />
+            <Controller
+              control={control}
+              name="denied"
+              render={({ field }) => <ToggleRow label="Deny-listed" hint="Always rejected" checked={field.value} onChange={field.onChange} disabled={!editable} />}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="u-notes">Notes</Label>
-            <Textarea id="u-notes" rows={3} value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Internal notes, visible to admins only" />
+            <Textarea id="u-notes" rows={3} {...register("notes")} placeholder="Internal notes, visible to admins only" />
           </div>
           <div className="space-y-2">
             <Label>Tags</Label>
-            <ListInput value={f.tags} onChange={(v) => set("tags", v)} placeholder="Add tag and press Enter" />
+            <Controller control={control} name="tags" render={({ field }) => <ListInput value={field.value} onChange={field.onChange} placeholder="Add tag and press Enter" />} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="u-nip05">NIP-05 name</Label>
-            <Input id="u-nip05" value={f.nip05Name} onChange={(e) => set("nip05Name", e.target.value)} placeholder="alice" />
+            <Input id="u-nip05" {...register("nip05Name")} placeholder="alice" />
             <p className="text-xs text-muted-foreground">Served at /.well-known/nostr.json as name@relay-domain</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="u-quota">Media quota (MB)</Label>
-              <Input id="u-quota" inputMode="decimal" value={f.quotaMb} onChange={(e) => set("quotaMb", e.target.value)} placeholder="relay default" />
+              <Input id="u-quota" inputMode="decimal" {...register("quotaMb")} placeholder="relay default" />
               <p className="text-xs text-muted-foreground">Empty = relay default · 0 = no uploads · "unlimited"</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="u-epm">Events / min</Label>
-              <Input id="u-epm" inputMode="numeric" value={f.epm} onChange={(e) => set("epm", e.target.value)} placeholder="default" />
+              <Input id="u-epm" inputMode="numeric" {...register("epm")} placeholder="default" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="u-rpm">REQs / min</Label>
-              <Input id="u-rpm" inputMode="numeric" value={f.rpm} onChange={(e) => set("rpm", e.target.value)} placeholder="default" />
+              <Input id="u-rpm" inputMode="numeric" {...register("rpm")} placeholder="default" />
             </div>
           </div>
           {editable && (
             <div className="flex justify-end gap-2">
               {dirty && (
-                <Button type="button" variant="ghost" onClick={() => setF(baseline.current.values)}>
+                <Button type="button" variant="ghost" onClick={() => form.reset()}>
                   Reset
                 </Button>
               )}
