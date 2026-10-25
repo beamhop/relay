@@ -163,10 +163,6 @@ async function hashLegacySessionIds(db: Db): Promise<void> {
   });
 }
 
-/** Splits a list into chunks for `IN (?, ?, …)` queries (keeps parameter counts portable). */
-export function chunk<T>(items: T[], size = 500): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
+/** Splits a list into chunks for `IN (?, ?, …)` queries (keeps parameter counts portable; 500 by default). */
+export { chunk } from "@beamhop/sdk/util";
 export const placeholders = (n: number) => new Array(n).fill("?").join(",");

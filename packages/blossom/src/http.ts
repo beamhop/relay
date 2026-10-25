@@ -41,7 +41,7 @@ export function jsonResponse(body: unknown, status = 200): Response {
   return withCors(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 }
 
-export const sha256Hex = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
+export { sha256Hex } from "@beamhop/sdk/util";
 
 export interface ReadLimits {
   /** reserves memory for each chunk before it is kept (shared budget); false aborts with 503 */

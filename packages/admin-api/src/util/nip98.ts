@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
 import { verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "@beamhop/sdk";
+import { sha256Hex } from "@beamhop/sdk/util";
 
 const NIP98_KIND = 27235;
 const HEX64 = /^[0-9a-f]{64}$/;
 
-export const sha256Hex = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
+export { sha256Hex };
 
 /** Structural check for a nostr event (prior to signature verification). */
 export function isNostrEventShape(v: unknown): v is NostrEvent {

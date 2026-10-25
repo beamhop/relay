@@ -14,7 +14,8 @@
     "./net": "./src/net.ts",
     "./regex-safety": "./src/regex-safety.ts",
     "./search": "./src/search.ts",
-    "./secrets": "./src/secrets.ts"
+    "./secrets": "./src/secrets.ts",
+    "./util": "./src/util.ts"
   },
   "dependencies": {
     "hono": "^4.13.13",

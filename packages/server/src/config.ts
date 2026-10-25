@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { nip19 } from "nostr-tools";
 import { ConfigSchema, type BeamhopConfig } from "@beamhop/sdk";
+import { deepMerge } from "@beamhop/sdk/util";
 import { proxyMatcher } from "./runtime/common";
 
 type Json = Record<string, unknown>;
@@ -68,14 +69,7 @@ export function toHexSecretKey(input: string): string {
 
 const isObj = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
 
-export function deepMerge(base: Json, patch: Json): Json {
-  const out: Json = { ...base };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) continue;
-    out[k] = isObj(v) && isObj(out[k]) ? deepMerge(out[k] as Json, v) : v;
-  }
-  return out;
-}
+export { deepMerge };
 
 function setPath(obj: Json, path: string, value: unknown) {
   const parts = path.split(".");

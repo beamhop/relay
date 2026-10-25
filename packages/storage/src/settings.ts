@@ -1,5 +1,6 @@
 import type { BusEvents, DeepPartial, EventBus, Logger, RuntimeSettings, SettingsService, Stores } from "@beamhop/sdk";
 import { RuntimeSettingsSchema } from "@beamhop/sdk";
+import { deepMerge, isPlainObject } from "@beamhop/sdk/util";
 
 export const SETTINGS_NAMESPACE = "settings";
 export const SETTINGS_KEY = "runtime";
@@ -11,19 +12,7 @@ export interface StartupAlerts {
   takeStartupAlert(): Alert | undefined;
 }
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
-
-/** Deep merge: plain objects are merged recursively; arrays and scalars replace; `undefined` is ignored. */
-export function deepMerge<T>(base: T, patch: unknown): T {
-  if (!isPlainObject(base) || !isPlainObject(patch)) return (patch === undefined ? base : patch) as T;
-  const out: Record<string, unknown> = { ...base };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) continue;
-    out[k] = isPlainObject(v) && isPlainObject(out[k]) ? deepMerge(out[k], v) : v;
-  }
-  return out as T;
-}
+export { deepMerge };
 
 /**
  * Runtime settings backed by kv("settings","runtime"). Values are cached in memory; `update()`
