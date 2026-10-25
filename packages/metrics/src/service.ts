@@ -74,6 +74,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     topPubkeysPerHour: opts.topPubkeysPerHour ?? 1000,
     maxRejectionReasonsPerHour: opts.maxRejectionReasonsPerHour,
     onDropped: (message) => logger.error(message),
+    now,
   });
   const collector = new Collector(startedAt, rollup, geo);
   collector.attach(bus);
