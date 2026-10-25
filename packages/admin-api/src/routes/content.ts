@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { EventView, Filter, ImportResult, NostrEvent } from "@beamhop/sdk";
+import type { EventBanLiftRequest, EventBanListResponse, EventView, Filter, ImportResult, NostrEvent } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, forbidden, HttpError, notFound } from "../errors";
@@ -8,7 +8,9 @@ import { audited, auditLists } from "../util/audit";
 import { FiltersSchema, isConstrained, parseFiltersParam } from "../util/filters";
 import { isNostrEventShape, isValidSignedEvent } from "../util/nip98";
 import { parseEventId } from "../util/pubkey";
-import { readBody } from "../util/request";
+import { BAN_LIST_MAX } from "../services/banned-events";
+import type { Same } from "../util/contract";
+import { readBody, readQuery } from "../util/request";
 
 const MAX_QUERY_LIMIT = 500;
 const EXPORT_CAP = 1_000_000;
@@ -31,6 +33,9 @@ const SAME_SECOND_CAP = 10_000;
 
 const QuerySchema = z.object({ filters: FiltersSchema, limit: z.number().int().min(1).optional() });
 const DeleteOne = z.object({ reason: z.string().max(1000).optional() });
+const BanLift = DeleteOne;
+true satisfies Same<z.output<typeof BanLift>, EventBanLiftRequest>;
+const BanListQuery = z.object({ limit: z.coerce.number().int().min(1).max(BAN_LIST_MAX).default(1000) });
 const DeleteMany = z
   .object({ ids: z.array(z.string()).max(10_000).optional(), filters: FiltersSchema.optional(), reason: z.string().max(1000).optional() })
   .refine((b) => (b.ids?.length ?? 0) > 0 || (b.filters?.length ?? 0) > 0, "ids or filters required");
@@ -386,6 +391,24 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       },
     );
     return c.json(truncated ? { deleted, truncated } : { deleted });
+  });
+
+  // event bans (placed with NIP-86 banevent): listed and lifted with the same rank rule as NIP-86 unbanevent
+  app.get("/events/bans", requirePermission("content.view"), async (c) => {
+    const { limit } = readQuery(c, BanListQuery);
+    const body: EventBanListResponse = { items: await ctx.bannedEvents.list(limit) };
+    return c.json(body);
+  });
+
+  app.delete("/events/bans/:id", requirePermission("content.delete"), async (c) => {
+    const id = parseEventId(c.req.param("id"));
+    const { reason } = await readBody(c, BanLift);
+    const role = await ctx.bannedEvents.liftBlockedBy(id, principalOf(c).role!);
+    if (role) throw forbidden(`this event was banned by a user with role ${role}`, "forbidden_target");
+    // lifts the write block only; the deleted event is not restored
+    if (!(await ctx.bannedEvents.lift(id))) throw notFound("event ban not found");
+    await ctx.audit(c, "event.unban", id, { reason: reason ?? "" });
+    return c.json({ ok: true });
   });
 
   app.get("/events/:id", requirePermission("content.view"), async (c) => {

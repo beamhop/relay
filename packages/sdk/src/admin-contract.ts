@@ -147,6 +147,22 @@ export interface EventDeleteRequest { ids?: string[]; filters?: Filter[]; reason
 /** POST /events/import  body: JSONL (one event per line), ?bypassPolicies=true → ImportResult */
 export interface ImportResult { imported: number; duplicates: number; rejected: number; errors: string[] }
 /** GET /events/export?filters=<urlencoded json Filter[]> → application/x-ndjson stream */
+/**
+ * GET /events/bans?limit → EventBanListResponse (content.view): event ids refused on write (NIP-86 banevent), newest
+ * first. DELETE /events/bans/:id {reason?} → {ok: true} (content.delete; 404 without a ban): lifts the write block only,
+ * the deleted event is not restored. A ban placed by a higher role can't be lifted (403 forbidden_target).
+ */
+export interface EventBanView {
+  id: string;
+  reason: string;
+  /** pubkey that placed the ban */
+  by: string;
+  at: number;
+  /** role it was placed with (null: recorded before roles were) */
+  byRole: AdminRole | null;
+}
+export interface EventBanListResponse { items: EventBanView[] }
+export interface EventBanLiftRequest { reason?: string }
 
 // ------------------------------------------------------------- reports (NIP-56 kind 1984)
 export type ReportStatus = "open" | "resolved" | "dismissed";

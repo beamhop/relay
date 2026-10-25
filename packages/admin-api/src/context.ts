@@ -7,6 +7,7 @@ import type { ReportService } from "./services/reports";
 import type { PushSender, PushService } from "./services/push";
 import type { UserService } from "./services/users";
 import type { ModerationService } from "./services/moderation";
+import type { BannedEventService } from "./services/banned-events";
 import type { CredentialService } from "./services/credentials";
 import type { ReplayGuard } from "./services/replay";
 import type { PasswordHasher, ScryptParams } from "./util/password";
@@ -71,6 +72,8 @@ export interface ApiContext {
   push: PushService;
   /** ban/unban, IP rules, user deletion: the effects every moderation path shares */
   moderation: ModerationService;
+  /** event bans (NIP-86 banevent, REST /events/bans): rows, write enforcement, lift rank rule */
+  bannedEvents: BannedEventService;
   credentials: CredentialService;
   passwords: PasswordHasher;
   /** NIP-98 event ids already used (replay protection, shared through the database) */
