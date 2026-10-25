@@ -1,6 +1,6 @@
 import type { ConnectionInfo, Filter, NostrEvent, ReadContext } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
-import { CONTROL_KINDS, GROUP_KIND } from "../nips/nip29/groups";
+import { CONTROL_KINDS, GROUP_KIND } from "../nips/nip29/kinds";
 
 /** Kinds only delivered to authenticated recipients (NIP-04 DMs, NIP-59 gift wraps incl. ephemeral 21059). */
 const GATED_KINDS: ReadonlySet<number> = new Set([4, 1059, 21059]);
