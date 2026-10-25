@@ -85,6 +85,8 @@ export interface UserRecord {
   nip05Name: string | null;
   invitedBy: string | null;
   banReason: string | null;
+  /** why the pubkey was allow-listed (NIP-86 allowpubkey), if given */
+  allowReason: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
   /**

@@ -173,6 +173,15 @@ describe("deletion", () => {
     expect((await stores.events.save(theirs)).status).toBe("saved");
   });
 
+  test("NIP-62: a deletion request can't delete a request to vanish", async () => {
+    const a = signer();
+    const vanish = a.sign({ kind: 62, created_at: T, tags: [["relay", "ALL_RELAYS"]] });
+    await stores.events.save(vanish);
+    const del = a.sign({ kind: 5, created_at: T + 5, tags: [["e", vanish.id]] });
+    expect(await stores.events.applyDeletion(del)).toBe(0);
+    expect(await stores.events.getById(vanish.id)).toBeDefined();
+  });
+
   test("NIP-09 by a tag: deletes versions up to deletion time, blocks older re-publish only", async () => {
     const a = signer();
     const b = signer();

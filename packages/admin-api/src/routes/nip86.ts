@@ -151,8 +151,8 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
           if (!permissionsFor(caller.role).has("users.ban")) throw new RpcError("forbidden: pubkey is banned; unbanning requires permission users.ban");
           await assertCan("moderate", caller, pk);
         }
-        // the reason goes to the audit log; it must not overwrite the operator's notes on the user
-        await ctx.users.update(pk, { allowed: true, ...(unbanned ? { status: "active", banReason: null } : {}) }, caller.pubkey);
+        // the reason is kept for listallowedpubkeys (and audited); it must not overwrite the operator's notes on the user
+        await ctx.users.update(pk, { allowed: true, allowReason: reason || null, ...(unbanned ? { status: "active", banReason: null } : {}) }, caller.pubkey);
         await audit(caller, "user.allow", pk, { reason, ...(unbanned ? { unbanned } : {}) });
         return true;
       },
@@ -162,7 +162,7 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
       async run(params, caller) {
         const pk = pubkeyParam(params);
         await assertCan("edit", caller, pk, { allowed: false });
-        await ctx.users.update(pk, { allowed: false }, caller.pubkey);
+        await ctx.users.update(pk, { allowed: false, allowReason: null }, caller.pubkey);
         await audit(caller, "user.disallow", pk, { reason: str(params, 1, "reason", true) });
         return true;
       },
@@ -170,7 +170,7 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
     listallowedpubkeys: {
       permission: "users.view",
       async run() {
-        return (await allUsers({ allowed: true })).map((u) => ({ pubkey: u.pubkey, reason: "" }));
+        return (await allUsers({ allowed: true })).map((u) => ({ pubkey: u.pubkey, reason: u.allowReason ?? "" }));
       },
     },
     listeventsneedingmoderation: {
@@ -248,10 +248,12 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
       async run(params, caller) {
         const kind = kindParam(params);
         const m = settings.get().moderation;
+        const add = (list: number[]) => (list.includes(kind) ? list : [...list, kind]);
+        // an empty allowlist means "all kinds": extending it would turn the relay into "only this kind", so the kind is
+        // only noted for listallowedkinds then
         const patch = {
           kindBlocklist: m.kindBlocklist.filter((k) => k !== kind),
-          // an empty allowlist means "all kinds"; only extend it when it's already in use
-          kindAllowlist: m.kindAllowlist.length && !m.kindAllowlist.includes(kind) ? [...m.kindAllowlist, kind] : m.kindAllowlist,
+          ...(m.kindAllowlist.length ? { kindAllowlist: add(m.kindAllowlist) } : { kindExplicitlyAllowed: add(m.kindExplicitlyAllowed) }),
         };
         await settings.update({ moderation: patch }, caller.pubkey);
         await audit(caller, "settings.update", null, { patch: { moderation: patch }, kind });
@@ -268,6 +270,7 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
         const rest = m.kindAllowlist.filter((k) => k !== kind);
         const patch = {
           kindBlocklist: m.kindBlocklist.includes(kind) ? m.kindBlocklist : [...m.kindBlocklist, kind],
+          kindExplicitlyAllowed: m.kindExplicitlyAllowed.filter((k) => k !== kind),
           ...(rest.length ? { kindAllowlist: rest } : {}),
         };
         await settings.update({ moderation: patch }, caller.pubkey);
@@ -277,7 +280,11 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
     },
     listallowedkinds: {
       permission: "settings.view",
-      run: async () => settings.get().moderation.kindAllowlist,
+      // with an empty allowlist every kind not blocklisted is accepted; those allowed explicitly are listed
+      run: async () => {
+        const m = settings.get().moderation;
+        return m.kindAllowlist.length ? m.kindAllowlist : m.kindExplicitlyAllowed;
+      },
     },
     listdisallowedkinds: {
       permission: "settings.view",

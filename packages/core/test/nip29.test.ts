@@ -123,6 +123,29 @@ describe("NIP-29 relay-based groups", () => {
     expect((await c.publish(sign(admin, { kind: 9, content: "old ref", tags: h("tl", [["previous", first.id.slice(0, 8)]]) })))[2]).toBe(true);
   });
 
+  test("previous tags are checked on control events too", async () => {
+    const { connect, relay } = await setup();
+    const c = connect();
+    const admin = keypair();
+    const bob = keypair();
+    const carol = keypair();
+    await c.publish(sign(admin, { kind: 9007, tags: h("ctl") }));
+    const first = sign(admin, { kind: 9, content: "one", tags: h("ctl") });
+    await c.publish(first);
+    const bad = [["previous", "deadbeef"]];
+    const good = [["previous", first.id.slice(0, 8)]];
+
+    // moderation, join and leave requests with unknown references are refused and change nothing
+    expect((await c.publish(sign(admin, { kind: 9000, tags: h("ctl", [["p", carol.pk], ...bad]) })))[3]).toMatch(/^invalid: previous/);
+    expect((await c.publish(sign(bob, { kind: 9021, tags: h("ctl", bad) })))[3]).toMatch(/^invalid: previous/);
+    expect((await relay.groups.get("ctl"))?.memberList.map((m) => m.pubkey)).toEqual([admin.pk]);
+
+    expect((await c.publish(sign(admin, { kind: 9000, tags: h("ctl", [["p", carol.pk], ...good]) })))[2]).toBe(true);
+    expect((await c.publish(sign(bob, { kind: 9021, tags: h("ctl", good) })))[2]).toBe(true);
+    expect((await c.publish(sign(bob, { kind: 9022, tags: h("ctl", bad) })))[3]).toMatch(/^invalid: previous/);
+    expect((await relay.groups.get("ctl"))?.members).toBe(3);
+  });
+
   test("late publication of group events is rejected", async () => {
     const { connect } = await setup();
     const c = connect();

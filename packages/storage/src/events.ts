@@ -406,7 +406,8 @@ export class SqlEventStore implements EventStore {
       for (let i = 0; i < idList.length; i += 500) {
         const part = idList.slice(i, i + 500);
         const inl = inList(tx.dialect, "id", part);
-        const r = await tx.run(`DELETE FROM events WHERE pubkey = ? AND kind <> 5 AND ${inl.sql}`, [deletion.pubkey, ...inl.params]);
+        // deletions of deletions (NIP-09) and of requests to vanish (NIP-62) have no effect
+        const r = await tx.run(`DELETE FROM events WHERE pubkey = ? AND kind NOT IN (5, 62) AND ${inl.sql}`, [deletion.pubkey, ...inl.params]);
         deleted += r.changes;
       }
       // NIP-59: recipients may delete gift wraps addressed to them (signed by throwaway keys)

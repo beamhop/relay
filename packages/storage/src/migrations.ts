@@ -170,6 +170,7 @@ export const FTS_MIGRATION_ID = "002_events_fts";
 /** "Unlimited" as a per-user quota: Number.MAX_SAFE_INTEGER bytes (fits postgres BIGINT and a JS number exactly). */
 export const UNLIMITED_QUOTA_BYTES = Number.MAX_SAFE_INTEGER;
 export const BLOSSOM_QUOTA_ZERO_MIGRATION_ID = "003_blossom_quota_zero_unlimited";
+export const ALLOW_REASON_MIGRATION_ID = "004_users_allow_reason";
 
 export function storageMigrations(withFts: boolean): Migration[] {
   const list: Migration[] = [
@@ -188,6 +189,8 @@ export function storageMigrations(withFts: boolean): Migration[] {
   // under the old meaning become an explicit (effectively unlimited) quota so upgraded relays keep their behaviour.
   // Runs once: a 0 set after the upgrade keeps its new meaning.
   list.push({ id: BLOSSOM_QUOTA_ZERO_MIGRATION_ID, up: `UPDATE users SET blossom_quota = ${UNLIMITED_QUOTA_BYTES} WHERE blossom_quota = 0` });
+  // NIP-86 listallowedpubkeys answers with the reason given to allowpubkey
+  list.push({ id: ALLOW_REASON_MIGRATION_ID, up: "ALTER TABLE users ADD COLUMN allow_reason TEXT" });
   return list;
 }
 

@@ -15,6 +15,7 @@ interface UserRow {
   nip05_name: string | null;
   invited_by: string | null;
   ban_reason: string | null;
+  allow_reason: string | null;
   first_seen_at: number;
   last_seen_at: number;
   event_count: number;
@@ -35,6 +36,7 @@ const FIELDS: { [K in keyof Patch]-?: [column: string, toDb: (v: NonNullable<Pat
   nip05Name: ["nip05_name", (v) => (v ? v.trim().toLowerCase() : null)],
   invitedBy: ["invited_by", (v) => v ?? null],
   banReason: ["ban_reason", (v) => v ?? null],
+  allowReason: ["allow_reason", (v) => v ?? null],
   firstSeenAt: ["first_seen_at", (v) => v ?? 0],
   lastSeenAt: ["last_seen_at", (v) => v ?? 0],
   eventCount: ["event_count", (v) => v ?? 0],
@@ -54,6 +56,7 @@ export const defaultUser = (pubkey: string): UserRecord => ({
   nip05Name: null,
   invitedBy: null,
   banReason: null,
+  allowReason: null,
   firstSeenAt: 0,
   lastSeenAt: 0,
   eventCount: 0,
@@ -72,6 +75,7 @@ const rowToUser = (r: UserRow): UserRecord => ({
   nip05Name: r.nip05_name ?? null,
   invitedBy: r.invited_by ?? null,
   banReason: r.ban_reason ?? null,
+  allowReason: r.allow_reason ?? null,
   firstSeenAt: toNum(r.first_seen_at),
   lastSeenAt: toNum(r.last_seen_at),
   eventCount: toNum(r.event_count),

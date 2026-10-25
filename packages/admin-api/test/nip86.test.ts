@@ -126,6 +126,35 @@ describe("NIP-86", () => {
     expect(await (await rpc(h, h.owner, { method: "listdisallowedkinds" })).json()).toEqual({ result: [7] });
   });
 
+  test("allowkind on an open relay is listed by listallowedkinds without restricting other kinds", async () => {
+    const h = await createHarness();
+    const list = async () => (await (await rpc(h, h.owner, { method: "listallowedkinds" })).json()) as { result: number[] };
+    expect(await list()).toEqual({ result: [] });
+    await rpc(h, h.owner, { method: "allowkind", params: [7] });
+    expect(await list()).toEqual({ result: [7] });
+    expect(h.settings.get().moderation.kindAllowlist).toEqual([]);
+    await rpc(h, h.owner, { method: "disallowkind", params: [7] });
+    expect(await list()).toEqual({ result: [] });
+    expect(h.settings.get().moderation.kindBlocklist).toEqual([7]);
+
+    // an allowlist in use is extended and listed as is
+    await h.settings.update({ moderation: { kindAllowlist: [1] } }, h.owner.pk);
+    await rpc(h, h.owner, { method: "allowkind", params: [7] });
+    expect(await list()).toEqual({ result: [1, 7] });
+    expect(h.settings.get().moderation.kindBlocklist).toEqual([]);
+  });
+
+  test("listallowedpubkeys returns the reason given to allowpubkey", async () => {
+    const h = await createHarness();
+    const target = "a".repeat(64);
+    const list = async () => ((await (await rpc(h, h.owner, { method: "listallowedpubkeys" })).json()) as { result: { pubkey: string; reason: string }[] }).result;
+    await rpc(h, h.owner, { method: "allowpubkey", params: [target, "friend"] });
+    expect(await list()).toEqual([{ pubkey: target, reason: "friend" }]);
+    await rpc(h, h.owner, { method: "unallowpubkey", params: [target] });
+    await rpc(h, h.owner, { method: "allowpubkey", params: [target] });
+    expect(await list()).toEqual([{ pubkey: target, reason: "" }]);
+  });
+
   // the preflight itself is answered by the relay's HTTP routes (the server only routes POST / here)
   test("responses carry CORS headers, including errors and 401", async () => {
     const h = await createHarness();

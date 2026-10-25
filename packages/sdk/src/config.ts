@@ -237,6 +237,11 @@ export const RuntimeSettingsSchema = z.object({
       /** if non-empty, only these kinds accepted */
       kindAllowlist: z.array(z.number()).default([]),
       kindBlocklist: z.array(z.number()).default([]),
+      /**
+       * kinds allowed with NIP-86 allowkind while kindAllowlist is empty (all kinds accepted): reported by
+       * listallowedkinds, never enforced
+       */
+      kindExplicitlyAllowed: z.array(z.number()).default([]),
       wordFilters: z.array(WordFilterSchema).default([]),
       /** auto-ban pubkey after N reports (NIP-56) from distinct members (0 = off) */
       autoBanReportThreshold: z.number().default(0),

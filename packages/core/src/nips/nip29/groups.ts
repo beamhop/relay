@@ -176,6 +176,11 @@ export class GroupsService {
       if (g.supportedKinds && !g.supportedKinds.includes(k)) return { reject: `restricted: kind ${k} is not supported by this group` };
       return checkPrevious(this.host, event, g);
     }
+    // NIP-29 timeline references apply to every group event, control events included (not to 9007: no timeline yet)
+    if (k !== GROUP_KIND.CREATE_GROUP && g && !(decision && ("reject" in decision || "duplicate" in decision))) {
+      const prev = await checkPrevious(this.host, event, g);
+      if (prev) return prev;
+    }
     // A control event changes state at most once, even if it is deleted and sent again later. The claim
     // is part of commit (which runs only after the event was stored as new) and is given back when the
     // state change fails, so a failed attempt doesn't make the event a "duplicate" forever.

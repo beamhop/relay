@@ -67,7 +67,7 @@ export function stubStores(): Stores & { db: ReturnType<typeof stubDb>; auditEnt
   const users = new Map<string, UserRecord>();
   const blankUser = (pubkey: string): UserRecord => ({
     pubkey, status: "active", allowed: false, denied: false, role: null, notes: "", tags: [], rateLimit: null, blossomQuota: null,
-    nip05Name: null, invitedBy: null, banReason: null, firstSeenAt: 0, lastSeenAt: 0, eventCount: 0,
+    nip05Name: null, invitedBy: null, banReason: null, allowReason: null, firstSeenAt: 0, lastSeenAt: 0, eventCount: 0,
   });
   return {
     db: stubDb(),
