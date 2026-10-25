@@ -1,10 +1,18 @@
-import { type Filter, type RetentionRule, nowSec } from "@beamhop/sdk";
+import { type EventStore, type Filter, type RetentionRule, nowSec, yieldToEventLoop } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 
-const BATCH = 1000;
-/** upper bound of events examined per rule per run, keeps the job from monopolizing the DB */
-const MAX_SCAN = 200_000;
+/** candidate authors fetched per page (keyset by pubkey) */
+const PAGE = 200;
 const GROUP_META = [39000, 39001, 39002, 39003];
+
+/**
+ * Per-pubkey cap state that outlives a run: for each author checked, the stored count found and the author's
+ * eventCount at that moment. eventCount only grows (lifetime accepted events), so `stored + (eventCount now -
+ * eventCount then)` bounds what is stored now: an author still within the cap by that bound is not counted again.
+ * Kept per event store (one relay) and rule settings; lost on restart (the next run re-counts once).
+ */
+type CapMemo = Map<string, { stored: number; eventCount: number }>;
+const memos = new WeakMap<EventStore, Map<string, CapMemo>>();
 
 /** Applies settings.retention rules. Returns number of deleted events. */
 export async function runRetention(ctx: RelayContext): Promise<number> {
@@ -28,44 +36,50 @@ export async function runRetention(ctx: RelayContext): Promise<number> {
   return total;
 }
 
+/** One SQL-side delete (batched by the store), exempt authors excluded there: no events are loaded. */
 async function purgeOlderThan(ctx: RelayContext, rule: RetentionRule, exempt: Set<string>): Promise<number> {
   const base: Filter = { until: nowSec() - Math.floor(rule.maxAgeDays! * 86400) };
   if (rule.kinds?.length) base.kinds = rule.kinds;
-  if (exempt.size === 0) return ctx.stores.events.deleteByFilter([base]);
+  return ctx.stores.events.deleteByFilter([base], { exceptAuthors: [...exempt] });
+}
 
+/**
+ * Candidates are users whose eventCount (lifetime accepted events, an upper bound of what they have stored) is
+ * over the cap, paged by pubkey (stable while counts change). The store counts what each one really has stored and
+ * trims it in SQL; authors found within the cap are skipped on later runs until they could have crossed it.
+ */
+async function capPerPubkey(ctx: RelayContext, rule: RetentionRule, exempt: Set<string>): Promise<number> {
+  const max = rule.maxPerPubkey!;
+  const kinds = rule.kinds?.length ? [...rule.kinds] : undefined;
+  const memo = capMemo(ctx.stores.events, `${rule.id}\u0000${max}\u0000${kinds?.join(",") ?? ""}`);
   let deleted = 0;
-  let scanned = 0;
-  let until = base.until!;
-  while (scanned < MAX_SCAN) {
-    const batch = await ctx.stores.events.query([{ ...base, until, limit: BATCH }], { maxLimit: BATCH });
-    scanned += batch.length;
-    const ids = batch.filter((e) => !exempt.has(e.pubkey)).map((e) => e.id);
-    if (ids.length) deleted += await ctx.stores.events.deleteByIds(ids);
-    if (batch.length < BATCH) break;
-    const oldest = batch[batch.length - 1].created_at;
-    until = ids.length === 0 && oldest === until ? oldest - 1 : oldest;
+  let after: string | undefined;
+  const seen = new Set<string>();
+  for (;;) {
+    const { items } = await ctx.stores.users.list({ sort: "pubkey", minEventCount: max, afterPubkey: after, limit: PAGE });
+    if (!items.length) break;
+    after = items[items.length - 1].pubkey;
+    for (const u of items) {
+      seen.add(u.pubkey);
+      if (exempt.has(u.pubkey)) continue;
+      const known = memo.get(u.pubkey);
+      if (known && known.stored + Math.max(0, u.eventCount - known.eventCount) <= max) continue;
+      const r = await ctx.stores.events.trimPubkey(u.pubkey, max, { kinds });
+      deleted += r.deleted;
+      memo.set(u.pubkey, { stored: r.remaining, eventCount: u.eventCount });
+    }
+    if (items.length < PAGE) break;
+    await yieldToEventLoop();
   }
+  // users gone below the threshold (deleted) don't need their entry any more
+  for (const pk of memo.keys()) if (!seen.has(pk)) memo.delete(pk);
   return deleted;
 }
 
-async function capPerPubkey(ctx: RelayContext, rule: RetentionRule, exempt: Set<string>): Promise<number> {
-  const max = rule.maxPerPubkey!;
-  let deleted = 0;
-  // candidate authors: users with more events than the cap (eventCount is an upper bound across kinds)
-  for (let offset = 0; offset < 100_000; offset += 200) {
-    const { items } = await ctx.stores.users.list({ sort: "eventCount", limit: 200, offset });
-    if (!items.length) break;
-    let anyOver = false;
-    for (const u of items) {
-      if (u.eventCount <= max) continue;
-      anyOver = true;
-      if (exempt.has(u.pubkey)) continue;
-      const f: Filter = { authors: [u.pubkey], limit: max + 5000 };
-      if (rule.kinds?.length) f.kinds = rule.kinds;
-      const evs = await ctx.stores.events.query([f], { maxLimit: max + 5000 });
-      if (evs.length > max) deleted += await ctx.stores.events.deleteByIds(evs.slice(max).map((e) => e.id));
-    }
-    if (!anyOver) break;
-  }
-  return deleted;
+function capMemo(store: EventStore, key: string): CapMemo {
+  let byRule = memos.get(store);
+  if (!byRule) memos.set(store, (byRule = new Map()));
+  let memo = byRule.get(key);
+  if (!memo) byRule.set(key, (memo = new Map()));
+  return memo;
 }

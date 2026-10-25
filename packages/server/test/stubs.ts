@@ -84,7 +84,7 @@ export function stubStores(): Stores & { db: ReturnType<typeof stubDb>; auditEnt
     events: {
       async init() {}, async save() { return { status: "saved" }; }, async query() { return []; }, async count() { return 0; },
       async getById() { return undefined; }, async queryIdsForSync() { return []; }, async applyDeletion() { return 0; },
-      async deleteByIds() { return 0; }, async deleteByFilter() { return 0; }, async deleteByPubkey() { return 0; },
+      async deleteByIds() { return 0; }, async deleteByFilter() { return 0; }, async trimPubkey() { return { deleted: 0, remaining: 0 }; }, async deleteByPubkey() { return 0; },
       async purgeExpired() { return 0; }, async stats() { return { total: 0, byKind: [], sizeBytes: 0 }; },
     },
     invites: { async create() { throw new Error("stub"); }, async list() { return []; }, async redeem() { return false; }, async revoke() {} },

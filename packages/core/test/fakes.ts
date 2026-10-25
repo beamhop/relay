@@ -124,6 +124,9 @@ export class FakeEventStore implements EventStore {
     for (const e of [...this.events.values()]) if (filters.some((f) => matchFilter(f, e)) && this.events.delete(e.id)) n++;
     return n;
   }
+  async trimPubkey() {
+    return { deleted: 0, remaining: 0 };
+  }
   async deleteByPubkey(pk: string, until?: number) {
     return this.deleteByFilter([until === undefined ? { authors: [pk] } : { authors: [pk], until }]);
   }

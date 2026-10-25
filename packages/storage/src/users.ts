@@ -140,9 +140,10 @@ export class SqlUserStore implements UserStore {
 
   /** `sort: "pubkey"` orders by pubkey alone (ascending): stable across pages, for callers that page through everything. */
   async list(q: UserQuery): Promise<{ items: UserRecord[]; total: number }> {
-    // buffered activity changes counts/timestamps the ORDER BY uses: the overlay alone would fix the numbers but not
-    // the order, so write it out first (admin listing only; touch() stays buffered on the hot path)
-    if (this.pending.size && q.sort !== "pubkey") await this.flush();
+    // buffered activity changes counts/timestamps the ORDER BY (or minEventCount) uses: the overlay alone would fix
+    // the numbers but not the order / selection, so write it out first (admin listing and retention only; touch()
+    // stays buffered on the hot path)
+    if (this.pending.size && (q.sort !== "pubkey" || q.minEventCount !== undefined)) await this.flush();
     const conds: string[] = [];
     const params: unknown[] = [];
     const inList = (pks: string[]) => {
@@ -170,6 +171,14 @@ export class SqlUserStore implements UserStore {
     if (q.allowed !== undefined) {
       conds.push("allowed = ?");
       params.push(q.allowed ? 1 : 0);
+    }
+    if (q.minEventCount !== undefined) {
+      conds.push("event_count > ?");
+      params.push(q.minEventCount);
+    }
+    if (q.afterPubkey !== undefined) {
+      conds.push("pubkey > ?");
+      params.push(q.afterPubkey);
     }
     if (q.tag) {
       // exact (case-sensitive) on both backends; sqlite LIKE would be case-insensitive

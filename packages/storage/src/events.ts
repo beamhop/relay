@@ -69,8 +69,12 @@ export interface EventStoreOptions {
  * Measured on 1M events: kinds [1,7] 335 → 0.2 ms, 50 heavy authors 199 → 9 ms, 50 light authors 0.6 → 1.2 ms.
  */
 const SPLIT_MAX_VALUES = 50;
-/** Bulk deletes (sqlite) remove this many events per transaction, yielding to the event loop in between. */
+/** Bulk deletes (sqlite) start at this many events per statement, yielding to the event loop in between. */
 export const DELETE_BATCH = 500;
+const DELETE_BATCH_MIN = 50;
+const DELETE_BATCH_MAX = 2000;
+/** target duration of one bulk-delete statement (the longest the event loop waits) */
+const DELETE_SLICE_MS = 50;
 
 const rowToEvent = (r: EventRow): NostrEvent => ({
   id: r.id,
@@ -131,6 +135,8 @@ const toWebsearch = (terms: string[], phrases: boolean[]) =>
 
 export class SqlEventStore implements EventStore {
   private initialized = false;
+  /** current adaptive bulk-delete batch size (see deleteSeqs) */
+  private deleteBatch = DELETE_BATCH;
 
   constructor(
     private db: Db,
@@ -420,10 +426,19 @@ export class SqlEventStore implements EventStore {
    * Admin bulk delete. Each filter's `limit` (if any) bounds the number of newest matches removed.
    * Filters without any constraint are rejected to avoid accidentally wiping the database.
    */
-  async deleteByFilter(filters: Filter[]): Promise<number> {
+  async deleteByFilter(filters: Filter[], opts: { exceptAuthors?: string[] } = {}): Promise<number> {
     const now = nowSec();
     const built = filters.map((f) => ({ f, b: this.build(f, { now, includeExpired: true }) }));
     if (built.some(({ b }) => b?.unconstrained)) throw new Error("deleteByFilter: refusing to delete with an empty filter");
+    const except = strings(opts.exceptAuthors ?? []);
+    if (except.length) {
+      for (const { b } of built) {
+        if (!b) continue;
+        const inl = inList(this.db.dialect, "e.pubkey", except);
+        b.conds.push(`NOT (${inl.sql})`);
+        b.params.push(...inl.params);
+      }
+    }
     if (this.db.dialect === "sqlite") {
       // victims are selected once (so each filter's limit means the newest matches now), then deleted in batches
       const seqs = new Set<number>();
@@ -460,6 +475,45 @@ export class SqlEventStore implements EventStore {
     });
   }
 
+  async trimPubkey(pubkey: string, keep: number, opts: { kinds?: number[] } = {}): Promise<{ deleted: number; remaining: number }> {
+    keep = safeInt(keep);
+    const kinds = opts.kinds?.length ? inList(this.db.dialect, "kind", [...new Set(opts.kinds)], "int") : undefined;
+    const match = `pubkey = ?${kinds ? ` AND ${kinds.sql}` : ""}`;
+    const mp = [pubkey, ...(kinds?.params ?? [])];
+    const countWhere = async (extra = "", p: unknown[] = []) =>
+      toNum((await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE ${match}${extra}`, [...mp, ...p]))?.n);
+    if (this.db.dialect !== "sqlite") {
+      return this.db.tx(async (tx) => {
+        await lockPubkey(tx, pubkey);
+        const total = toNum((await tx.get<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE ${match}`, mp))?.n);
+        if (total <= keep) return { deleted: 0, remaining: total };
+        const deleted = (
+          await tx.run(`DELETE FROM events WHERE seq IN (SELECT seq FROM events WHERE ${match} ORDER BY created_at DESC, id ASC OFFSET ?)`, [...mp, keep])
+        ).changes;
+        return { deleted, remaining: total - deleted };
+      });
+    }
+    // sqlite, without sorting the author's rows by id (that reads every row of the table): counts and the
+    // boundary come from the (pubkey[, kind], created_at) indexes; only rows at the boundary timestamp are
+    // ordered by id
+    const total = await countWhere();
+    if (total <= keep) return { deleted: 0, remaining: total };
+    let victims: number[];
+    if (keep === 0) {
+      victims = (await this.db.all<{ seq: number }>(`SELECT seq FROM events WHERE ${match}`, mp)).map((r) => Number(r.seq));
+    } else {
+      const edge = toNum(
+        (await this.db.get<{ t: number }>(`SELECT created_at AS t FROM events WHERE ${match} ORDER BY created_at DESC LIMIT 1 OFFSET ?`, [...mp, keep - 1]))?.t,
+      );
+      const newer = await countWhere(" AND created_at > ?", [edge]);
+      const atEdge = await this.db.all<{ seq: number }>(`SELECT seq FROM events WHERE ${match} AND created_at = ? ORDER BY id ASC`, [...mp, edge]);
+      const older = await this.db.all<{ seq: number }>(`SELECT seq FROM events WHERE ${match} AND created_at < ?`, [...mp, edge]);
+      victims = [...atEdge.slice(keep - newer), ...older].map((r) => Number(r.seq));
+    }
+    const deleted = await this.deleteSeqs(victims);
+    return { deleted, remaining: total - deleted };
+  }
+
   async deleteByPubkey(pubkey: string, until?: number): Promise<number> {
     if (this.db.dialect === "sqlite") {
       const rows =
@@ -486,16 +540,29 @@ export class SqlEventStore implements EventStore {
   }
 
   /**
-   * sqlite: deletes events by seq, DELETE_BATCH per statement, with a timer turn between batches. SQLite runs on the
-   * event loop: one statement removing 80k events (plus their tag and FTS rows) stalled the relay for 6 s. Each
-   * batch is atomic, the whole call is not; rows already gone (deleted or replaced meanwhile) are simply not counted.
+   * sqlite: deletes events by seq in batches, with a timer turn between them. SQLite runs on the event loop: one
+   * statement removing 80k events (plus their tag and FTS rows) stalled the relay for 6-9 s. The batch size adapts
+   * to keep each statement near DELETE_SLICE_MS (a deleted event costs ~0.1-0.3 ms, with all its index entries).
+   * Seqs are deleted in order (table and event_tags pages are then visited sequentially). Each batch is atomic, the
+   * whole call is not; rows already gone (deleted or replaced meanwhile) are simply not counted.
    */
   private async deleteSeqs(seqs: number[]): Promise<number> {
+    seqs.sort((a, b) => a - b);
     let deleted = 0;
-    for (const [i, part] of chunk(seqs, DELETE_BATCH).entries()) {
+    let size = this.deleteBatch;
+    for (let i = 0; i < seqs.length; ) {
       if (i > 0) await yieldToEventLoop();
-      deleted += (await this.db.run(`DELETE FROM events WHERE seq IN (${part.map(() => "?").join(", ")})`, part)).changes;
+      const part = seqs.slice(i, i + size);
+      i += part.length;
+      const started = performance.now();
+      // one statement text for every batch size (json list instead of a placeholder per value)
+      deleted += (await this.db.run("DELETE FROM events WHERE seq IN (SELECT value FROM json_each(?))", [JSON.stringify(part)])).changes;
+      const ms = performance.now() - started;
+      if (ms > DELETE_SLICE_MS) size = Math.max(DELETE_BATCH_MIN, size >> 1);
+      else if (ms < DELETE_SLICE_MS / 4) size = Math.min(DELETE_BATCH_MAX, size * 2);
     }
+    // the next bulk delete (e.g. retention's next author) starts from the size that fit
+    this.deleteBatch = size;
     return deleted;
   }
 
