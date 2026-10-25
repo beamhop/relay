@@ -9,6 +9,9 @@ export type LiveEvent = StreamEvents["event"] & { receivedAt: number };
 type Status = "idle" | "connecting" | "open" | "error";
 
 const HISTORY = 180; // 6 min @ 2s
+/** report events within this window cost one invalidation of the report lists and update one toast */
+const REPORT_BATCH_MS = 2000;
+const REPORT_TOAST_ID = "live-new-reports";
 
 /** Single SSE connection to /admin/api/stream shared by the whole app. */
 class LiveStore {
@@ -22,6 +25,11 @@ class LiveStore {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = false;
   private withEvents = false;
+  /** reports received since the last flush */
+  private reportBatch: ReportView[] = [];
+  private reportTimer: ReturnType<typeof setTimeout> | undefined;
+  /** reports counted in the "new reports" toast that is still showing */
+  private unseenReports = 0;
   onNavigate?: (url: string) => void;
 
   subscribe = (fn: () => void) => {
@@ -41,9 +49,16 @@ class LiveStore {
   stop() {
     this.running = false;
     clearTimeout(this.timer);
+    clearTimeout(this.reportTimer);
+    this.reportTimer = undefined;
+    this.reportBatch = [];
     this.es?.close();
     this.es = null;
-    this.setStatus("idle");
+    // a later start (e.g. after signing in again) must not show this session's numbers as live
+    this.snapshot = null;
+    this.history = [];
+    this.status = "idle";
+    this.emit();
     document.removeEventListener("visibilitychange", this.onVisibility);
   }
 
@@ -123,13 +138,37 @@ class LiveStore {
     es.addEventListener("report", (m) => {
       const r = parse<ReportView>(m);
       if (!r) return;
-      queryClient.invalidateQueries({ queryKey: ["reports"] });
-      toast.warning(`New report: ${r.type}`, {
-        description: `${displayName(r.reporter, r.reporterProfile)} reported ${displayName(r.targetPubkey, r.targetProfile)}`,
-        action: { label: "Review", onClick: () => this.openUrl("/reports") },
-      });
+      // a burst of reports (spam wave, auto-reports from word filters) refetches the lists once per window
+      // instead of once per report, and shows one toast that counts them
+      this.reportBatch.push(r);
+      this.reportTimer ??= setTimeout(this.flushReports, REPORT_BATCH_MS);
     });
   }
+
+  private flushReports = () => {
+    this.reportTimer = undefined;
+    const batch = this.reportBatch;
+    this.reportBatch = [];
+    if (!batch.length) return;
+    queryClient.invalidateQueries({ queryKey: ["reports"] });
+    this.unseenReports += batch.length;
+    const reset = () => (this.unseenReports = 0);
+    const r = batch[0];
+    const one = this.unseenReports === 1;
+    toast.warning(one ? `New report: ${r.type}` : `${this.unseenReports} new reports`, {
+      id: REPORT_TOAST_ID,
+      description: one ? `${displayName(r.reporter, r.reporterProfile)} reported ${displayName(r.targetPubkey, r.targetProfile)}` : undefined,
+      action: {
+        label: "Review",
+        onClick: () => {
+          reset();
+          this.openUrl("/reports");
+        },
+      },
+      onDismiss: reset,
+      onAutoClose: reset,
+    });
+  };
 
   private openUrl(url: string) {
     if (/^https?:\/\//i.test(url)) window.open(url, "_blank", "noopener,noreferrer");

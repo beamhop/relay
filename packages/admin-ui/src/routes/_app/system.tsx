@@ -8,7 +8,8 @@ import { PageHeader } from "@/components/page-header";
 import { ErrorState } from "@/components/empty-state";
 import { CopyButton } from "@/components/copy-button";
 import { useSystem } from "@/queries/auth";
-import { useLiveSnapshot, useLiveStatus } from "@/lib/live";
+import { useLiveStatus } from "@/lib/live";
+import { useSnapshot } from "@/queries/dashboard";
 import { formatBytes, formatDuration, formatMs, formatPercent } from "@/lib/format";
 import { toNpub } from "@/lib/nostr";
 
@@ -22,7 +23,7 @@ const NIP_NAMES: Record<number, string> = {
 
 function SystemPage() {
   const { data: s, isLoading, error, refetch } = useSystem();
-  const snap = useLiveSnapshot();
+  const { data: snap } = useSnapshot();
   const live = useLiveStatus();
   if (isLoading)
     return (
