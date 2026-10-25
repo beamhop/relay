@@ -3,10 +3,10 @@ import type { Db, Migration } from "@beamhop/sdk";
 export const NAMESPACE = "storage";
 
 /*
- * Two columns are written but never read: event_tags.created_at (also part of event_tags_lookup_idx) and
- * deleted_events.deletion_id. They are kept on purpose: dropping them means rewriting event_tags — the largest
- * table — on SQLite (DROP COLUMN copies every row, and the index must go first) and rebuilding the lookup index
- * under a write lock on Postgres, a long outage on a big relay for a few bytes per row.
+ * event_tags.created_at is a copy of the event's created_at (written by save(), never updated): SQLite tag queries
+ * read event_tags_lookup_idx (name, value, created_at DESC) in order with it. deleted_events.deletion_id is
+ * written but never read; it is kept on purpose: dropping it means rewriting the table on SQLite (DROP COLUMN
+ * copies every row), not worth a few bytes per row.
  */
 
 const eventsSqlite = `

@@ -16,7 +16,8 @@ export interface QueryOptions {
 
 export interface EventStoreStats {
   total: number;
-  byKind: { kind: number; count: number }[];
+  /** only with `stats({ byKind: true })` (a full scan of the events table) */
+  byKind?: { kind: number; count: number }[];
   sizeBytes: number;
 }
 
@@ -37,12 +38,16 @@ export interface EventStore {
   applyDeletion(deletion: NostrEvent): Promise<number>;
   /** Admin deletion, no ownership check. With `tombstone` (a reason / deletion id) the ids can't be re-published. */
   deleteByIds(ids: string[], opts?: { tombstone?: string }): Promise<number>;
+  /** Each filter's `limit` bounds the number of newest matches removed. */
   deleteByFilter(filters: Filter[]): Promise<number>;
   /** NIP-62 / admin purge of everything by pubkey (optionally only events with created_at <= until). */
   deleteByPubkey(pubkey: string, until?: number): Promise<number>;
-  /** NIP-40: delete events whose expiration tag < now. */
+  /**
+   * NIP-40: delete events whose expiration tag < now. Like the other bulk deletes it may run in several batches
+   * (the SQLite store yields to the event loop between them): not atomic as a whole.
+   */
   purgeExpired(now: number): Promise<number>;
-  stats(): Promise<EventStoreStats>;
+  stats(opts?: { byKind?: boolean }): Promise<EventStoreStats>;
 }
 
 export type UserStatus = "active" | "banned" | "muted";

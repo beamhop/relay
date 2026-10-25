@@ -8,8 +8,8 @@ import type {
   QueryOptions,
   SaveResult,
 } from "@beamhop/sdk";
-import { getDTag, isAddressable, isEphemeral, isReplaceable, nowSec } from "@beamhop/sdk";
-import { escapeLike, greatest, inList, insertRows, isUniqueViolation, parseJson, toNum } from "./sql";
+import { getDTag, isAddressable, isEphemeral, isReplaceable, nowSec, yieldToEventLoop } from "@beamhop/sdk";
+import { chunk, escapeLike, greatest, inList, insertRows, isUniqueViolation, parseJson, toNum } from "./sql";
 
 /** Tag values longer than this many UTF-8 bytes are not indexed (and thus not matchable by `#x` filters). */
 export const MAX_INDEXED_TAG_VALUE = 1024;
@@ -30,6 +30,8 @@ interface EventRow {
 interface BuiltFilter {
   /** FROM clause (aliasing events as `e`) */
   from: string;
+  /** created_at column to order by: `t.created_at` when the plan is driven from event_tags (always equal to e's) */
+  timeCol: string;
   conds: string[];
   params: unknown[];
   /** extra ORDER BY prefix (relevance) and its params, appended after WHERE params */
@@ -41,12 +43,34 @@ interface BuiltFilter {
 interface BuildOptions {
   now: number;
   includeExpired?: boolean;
+  /** leave out this column's IN list: the caller adds one `= ?` branch per value (see SPLIT_MAX_VALUES) */
+  split?: SplitColumn;
+  /** start the plan at event_tags for the first single-value tag condition (sqlite) */
+  driveByTag?: boolean;
 }
+
+type SplitColumn = "e.kind" | "e.pubkey";
 
 export interface EventStoreOptions {
   /** sqlite: FTS5 table available (otherwise search falls back to LIKE) */
   fts: boolean;
+  /**
+   * sqlite: plan-shaping query forms (per-value UNION ALL, event_tags-driven tag lookups); default true.
+   * false keeps the single generic statement per filter (tests compare both).
+   */
+  queryShapes?: boolean;
 }
+
+/**
+ * sqlite query(): an `authors` / `kinds` list of 2..SPLIT_MAX_VALUES values with a limit runs as a UNION ALL of
+ * one LIMITed branch per value. With `kind IN (1, 7) ORDER BY created_at DESC` sqlite can't read the
+ * (kind, created_at) index in order across both values: it walks the whole created_at index, or sorts every
+ * match of a heavy author. One branch per value reads at most `limit` index entries from each range.
+ * Measured on 1M events: kinds [1,7] 335 → 0.2 ms, 50 heavy authors 199 → 9 ms, 50 light authors 0.6 → 1.2 ms.
+ */
+const SPLIT_MAX_VALUES = 50;
+/** Bulk deletes (sqlite) remove this many events per transaction, yielding to the event loop in between. */
+export const DELETE_BATCH = 500;
 
 const rowToEvent = (r: EventRow): NostrEvent => ({
   id: r.id,
@@ -220,15 +244,9 @@ export class SqlEventStore implements EventStore {
       let limit = filter.limit;
       if (opts.maxLimit !== undefined) limit = Math.min(limit ?? opts.maxLimit, opts.maxLimit);
       if (limit !== undefined && limit <= 0) continue;
-      const b = this.build(filter, { now });
-      if (!b) continue;
-      const params = [...b.params, ...(b.rank?.params ?? [])];
-      let sql = `SELECT ${EVENT_COLUMNS} FROM ${b.from}${where(b.conds)} ORDER BY ${b.rank ? `${b.rank.sql}, ` : ""}e.created_at DESC, e.id ASC`;
-      if (limit !== undefined) {
-        sql += " LIMIT ?";
-        params.push(safeInt(limit));
-      }
-      for (const r of await this.db.all<EventRow>(sql, params)) {
+      const q = this.querySql(filter, now, limit);
+      if (!q) continue;
+      for (const r of await this.db.all<EventRow>(q.sql, q.params)) {
         if (seen.has(r.id)) continue;
         seen.add(r.id);
         out.push(rowToEvent(r));
@@ -237,6 +255,39 @@ export class SqlEventStore implements EventStore {
     // NIP-50: search results keep their relevance order instead of the usual created_at order
     if (filters.length === 1 && filters[0].search) return out;
     return out.sort(compareEvents);
+  }
+
+  /**
+   * The SELECT query() runs for one filter (exposed for plan tests). On sqlite it picks a shape the planner
+   * handles well: event_tags-driven for a single-value tag, per-value UNION ALL for short kinds/authors lists;
+   * otherwise (and always on postgres) one generic statement.
+   * @internal
+   */
+  querySql(filter: Filter, now: number, limit?: number): { sql: string; params: unknown[] } | null {
+    const shaped = this.db.dialect === "sqlite" && this.opts.queryShapes !== false && filter.search === undefined && !filter.ids;
+    const split = shaped && limit !== undefined ? splitOf(filter) : undefined;
+    const b = this.build(filter, { now, split: split?.column, driveByTag: shaped && !split });
+    if (!b) return null;
+    const order = `ORDER BY ${b.rank ? `${b.rank.sql}, ` : ""}${b.timeCol} DESC, e.id ASC`;
+    if (split && limit !== undefined) {
+      // branches carry only the sort key; the full rows are read for the final `limit` seqs only
+      const lim = safeInt(limit);
+      const params: unknown[] = [];
+      const branches = split.values.map((v) => {
+        params.push(v, ...b.params, lim);
+        return `SELECT * FROM (SELECT e.seq, e.created_at, e.id FROM ${b.from}${where([`${split.column} = ?`, ...b.conds])} ${order} LIMIT ?)`;
+      });
+      params.push(lim);
+      const seqs = `SELECT seq FROM (${branches.join(" UNION ALL ")}) ORDER BY created_at DESC, id ASC LIMIT ?`;
+      return { sql: `SELECT ${EVENT_COLUMNS} FROM events e WHERE e.seq IN (${seqs}) ORDER BY e.created_at DESC, e.id ASC`, params };
+    }
+    const params = [...b.params, ...(b.rank?.params ?? [])];
+    let sql = `SELECT ${EVENT_COLUMNS} FROM ${b.from}${where(b.conds)} ${order}`;
+    if (limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(safeInt(limit));
+    }
+    return { sql, params };
   }
 
   async count(filters: Filter[]): Promise<number> {
@@ -336,23 +387,33 @@ export class SqlEventStore implements EventStore {
     });
   }
 
+  /** On sqlite each batch of DELETE_BATCH ids is its own transaction (see deleteSeqs); postgres deletes all in one. */
   async deleteByIds(ids: string[], opts: { tombstone?: string } = {}): Promise<number> {
     const unique = [...new Set(ids)];
     if (!unique.length) return 0;
     const now = nowSec();
-    return this.db.tx(async (tx) => {
-      let deleted = 0;
-      for (let i = 0; i < unique.length; i += 500) {
-        const inl = inList(tx.dialect, "id", unique.slice(i, i + 500));
-        if (opts.tombstone !== undefined) {
-          const rows = await tx.all<{ id: string; pubkey: string }>(`SELECT id, pubkey FROM events WHERE ${inl.sql}`, inl.params);
-          const stones = rows.map((r) => [r.pubkey, r.id, now, opts.tombstone]);
-          if (stones.length) await insertRows(tx, "INSERT INTO deleted_events (pubkey, ref, deleted_at, deletion_id)", 4, stones, "ON CONFLICT (pubkey, ref) DO NOTHING");
-        }
-        deleted += (await tx.run(`DELETE FROM events WHERE ${inl.sql}`, inl.params)).changes;
+    const deletePart = async (tx: Db, part: string[]) => {
+      const inl = inList(tx.dialect, "id", part);
+      if (opts.tombstone !== undefined) {
+        const rows = await tx.all<{ id: string; pubkey: string }>(`SELECT id, pubkey FROM events WHERE ${inl.sql}`, inl.params);
+        const stones = rows.map((r) => [r.pubkey, r.id, now, opts.tombstone]);
+        if (stones.length) await insertRows(tx, "INSERT INTO deleted_events (pubkey, ref, deleted_at, deletion_id)", 4, stones, "ON CONFLICT (pubkey, ref) DO NOTHING");
       }
-      return deleted;
-    });
+      return (await tx.run(`DELETE FROM events WHERE ${inl.sql}`, inl.params)).changes;
+    };
+    if (this.db.dialect !== "sqlite") {
+      return this.db.tx(async (tx) => {
+        let deleted = 0;
+        for (const part of chunk(unique, 500)) deleted += await deletePart(tx, part);
+        return deleted;
+      });
+    }
+    let deleted = 0;
+    for (const [i, part] of chunk(unique, DELETE_BATCH).entries()) {
+      if (i > 0) await yieldToEventLoop();
+      deleted += await this.db.tx((tx) => deletePart(tx, part));
+    }
+    return deleted;
   }
 
   /**
@@ -363,6 +424,22 @@ export class SqlEventStore implements EventStore {
     const now = nowSec();
     const built = filters.map((f) => ({ f, b: this.build(f, { now, includeExpired: true }) }));
     if (built.some(({ b }) => b?.unconstrained)) throw new Error("deleteByFilter: refusing to delete with an empty filter");
+    if (this.db.dialect === "sqlite") {
+      // victims are selected once (so each filter's limit means the newest matches now), then deleted in batches
+      const seqs = new Set<number>();
+      for (const { f, b } of built) {
+        if (!b) continue;
+        if (f.limit !== undefined && f.limit <= 0) continue;
+        const params = [...b.params];
+        let sql = `SELECT e.seq FROM ${b.from}${where(b.conds)}`;
+        if (f.limit !== undefined) {
+          sql += " ORDER BY e.created_at DESC LIMIT ?";
+          params.push(safeInt(f.limit));
+        }
+        for (const r of await this.db.all<{ seq: number }>(sql, params)) seqs.add(Number(r.seq));
+      }
+      return this.deleteSeqs([...seqs]);
+    }
     // serialize with save() for the authors involved (postgres), so a concurrent save can't slip in
     const authors = [...new Set(filters.flatMap((f) => f.authors ?? []))].sort();
     return this.db.tx(async (tx) => {
@@ -384,6 +461,13 @@ export class SqlEventStore implements EventStore {
   }
 
   async deleteByPubkey(pubkey: string, until?: number): Promise<number> {
+    if (this.db.dialect === "sqlite") {
+      const rows =
+        until === undefined
+          ? await this.db.all<{ seq: number }>("SELECT seq FROM events WHERE pubkey = ?", [pubkey])
+          : await this.db.all<{ seq: number }>("SELECT seq FROM events WHERE pubkey = ? AND created_at <= ?", [pubkey, until]);
+      return this.deleteSeqs(rows.map((r) => Number(r.seq)));
+    }
     return this.db.tx(async (tx) =>
       until === undefined
         ? (await tx.run("DELETE FROM events WHERE pubkey = ?", [pubkey])).changes
@@ -392,18 +476,39 @@ export class SqlEventStore implements EventStore {
   }
 
   async purgeExpired(now: number): Promise<number> {
+    if (this.db.dialect === "sqlite") {
+      const rows = await this.db.all<{ seq: number }>("SELECT seq FROM events WHERE expiration IS NOT NULL AND expiration <= ?", [now]);
+      return this.deleteSeqs(rows.map((r) => Number(r.seq)));
+    }
     return this.db.tx(
       async (tx) => (await tx.run("DELETE FROM events WHERE expiration IS NOT NULL AND expiration <= ?", [now])).changes,
     );
   }
 
-  async stats(): Promise<EventStoreStats> {
+  /**
+   * sqlite: deletes events by seq, DELETE_BATCH per statement, with a timer turn between batches. SQLite runs on the
+   * event loop: one statement removing 80k events (plus their tag and FTS rows) stalled the relay for 6 s. Each
+   * batch is atomic, the whole call is not; rows already gone (deleted or replaced meanwhile) are simply not counted.
+   */
+  private async deleteSeqs(seqs: number[]): Promise<number> {
+    let deleted = 0;
+    for (const [i, part] of chunk(seqs, DELETE_BATCH).entries()) {
+      if (i > 0) await yieldToEventLoop();
+      deleted += (await this.db.run(`DELETE FROM events WHERE seq IN (${part.map(() => "?").join(", ")})`, part)).changes;
+    }
+    return deleted;
+  }
+
+  /** `byKind` (a full GROUP BY scan) only when asked for. */
+  async stats(opts: { byKind?: boolean } = {}): Promise<EventStoreStats> {
     const total = toNum((await this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM events"))?.n);
-    const byKind = (
-      await this.db.all<{ kind: number; n: number }>(
-        "SELECT kind, COUNT(*) AS n FROM events GROUP BY kind ORDER BY n DESC, kind ASC",
-      )
-    ).map((r) => ({ kind: Number(r.kind), count: Number(r.n) }));
+    const byKind = opts.byKind
+      ? (
+          await this.db.all<{ kind: number; n: number }>(
+            "SELECT kind, COUNT(*) AS n FROM events GROUP BY kind ORDER BY n DESC, kind ASC",
+          )
+        ).map((r) => ({ kind: Number(r.kind), count: Number(r.n) }))
+      : undefined;
     let sizeBytes = 0;
     try {
       const row =
@@ -418,7 +523,7 @@ export class SqlEventStore implements EventStore {
     } catch (err) {
       this.logger.debug("size query failed", { err: String(err) });
     }
-    return { total, byKind, sizeBytes };
+    return byKind ? { total, byKind, sizeBytes } : { total, sizeBytes };
   }
 
   // ------------------------------------------------------------------ filter → SQL
@@ -429,11 +534,23 @@ export class SqlEventStore implements EventStore {
     const conds: string[] = [];
     const params: unknown[] = [];
     let from = "events e";
+    let timeCol = "e.created_at";
     let rank: BuiltFilter["rank"];
     const add = (c: { sql: string; params: unknown[] }) => {
       conds.push(c.sql);
       params.push(...c.params);
     };
+
+    // sqlite: a single-value tag is read from event_tags_lookup_idx (name, value, created_at DESC) in order, then
+    // joined to events by seq (CROSS JOIN pins that loop order). As `e.seq IN (subquery)` the planner walks an
+    // events index instead and probes the tag list per row. event_tags.created_at is written from the event and
+    // never changes, so ordering by it is ordering by e.created_at (since/until also use it, on the index).
+    const driveKey = o.driveByTag ? Object.keys(filter).find((k) => isTagKey(k) && singleTagValue(filter[k as `#${string}`]) !== undefined) : undefined;
+    if (driveKey) {
+      from = "event_tags t CROSS JOIN events e ON e.seq = t.event_seq";
+      timeCol = "t.created_at";
+      add({ sql: "t.name = ? AND t.value = ?", params: [driveKey.slice(1), singleTagValue(filter[driveKey as `#${string}`])] });
+    }
 
     if (filter.ids) {
       const ids = strings(filter.ids);
@@ -443,18 +560,18 @@ export class SqlEventStore implements EventStore {
     if (filter.authors) {
       const authors = strings(filter.authors);
       if (!authors.length) return null;
-      add(inList(dialect, "e.pubkey", authors));
+      if (o.split !== "e.pubkey") add(inList(dialect, "e.pubkey", authors));
     }
     if (filter.kinds) {
       const kinds = [...new Set(filter.kinds.filter((k) => Number.isInteger(k)))];
       if (!kinds.length) return null;
-      add(inList(dialect, "e.kind", kinds, "int"));
+      if (o.split !== "e.kind") add(inList(dialect, "e.kind", kinds, "int"));
     }
-    if (typeof filter.since === "number") add({ sql: "e.created_at >= ?", params: [safeInt(filter.since)] });
-    if (typeof filter.until === "number") add({ sql: "e.created_at <= ?", params: [safeInt(filter.until)] });
+    if (typeof filter.since === "number") add({ sql: `${timeCol} >= ?`, params: [safeInt(filter.since)] });
+    if (typeof filter.until === "number") add({ sql: `${timeCol} <= ?`, params: [safeInt(filter.until)] });
 
     for (const key of Object.keys(filter)) {
-      if (!key.startsWith("#")) continue;
+      if (!key.startsWith("#") || key === driveKey) continue;
       const raw = filter[key as `#${string}`];
       if (raw === undefined) continue;
       const name = key.slice(1);
@@ -489,10 +606,10 @@ export class SqlEventStore implements EventStore {
       }
     }
 
-    const unconstrained = conds.length === 0;
+    const unconstrained = conds.length === 0 && !o.split;
     // NIP-40: an event is expired once now >= expiration (same boundary as core's isExpired)
     if (!o.includeExpired) add({ sql: "(e.expiration IS NULL OR e.expiration > ?)", params: [o.now] });
-    return { from, conds, params, rank, unconstrained };
+    return { from, timeCol, conds, params, rank, unconstrained };
   }
 }
 
@@ -507,6 +624,29 @@ async function lockPubkey(tx: Db, pubkey: string): Promise<void> {
 
 /** deleteByFilter takes per-author locks only for small author lists (vanish, admin user deletes). */
 const MAX_LOCKED_AUTHORS = 20;
+
+const isTagKey = (k: string) => k.length === 2 && k[0] === "#" && SINGLE_LETTER.test(k[1]);
+/** The value of a tag condition with exactly one (usable) value, else undefined. */
+function singleTagValue(raw: unknown): string | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const values = strings(raw);
+  return values.length === 1 ? values[0] : undefined;
+}
+
+/** Which IN list query() splits into per-value branches (see SPLIT_MAX_VALUES), if any. */
+function splitOf(filter: Filter): { column: SplitColumn; values: (string | number)[] } | undefined {
+  // a single-value tag is driven from event_tags instead
+  if (Object.keys(filter).some((k) => isTagKey(k) && singleTagValue(filter[k as `#${string}`]) !== undefined)) return undefined;
+  const fits = (n: number) => n >= 2 && n <= SPLIT_MAX_VALUES;
+  // authors first: each branch is then `pubkey = ? [AND kind IN (…)]` on (pubkey, kind, created_at) / (pubkey, created_at)
+  const authors = filter.authors ? strings(filter.authors) : [];
+  if (fits(authors.length)) return { column: "e.pubkey", values: authors };
+  // per-kind branches that still carry a long authors list are no faster than one statement
+  if (authors.length > 1) return undefined;
+  const kinds = filter.kinds ? [...new Set(filter.kinds.filter((k) => Number.isInteger(k)))] : [];
+  if (fits(kinds.length)) return { column: "e.kind", values: kinds };
+  return undefined;
+}
 
 const where = (conds: string[]) => (conds.length ? ` WHERE ${conds.join(" AND ")}` : "");
 /** Distinct string values; NUL-containing ones are dropped (never stored, and postgres can't bind them). */
