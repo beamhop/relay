@@ -66,7 +66,8 @@ export function useUserActions() {
   const bulk = useApiMutation({
     fn: (body: BulkUserRequest) => api.post<BulkResult>("/users/bulk", body),
     invalidate: contentKeys(),
-    success: (r) => `${r?.ok ?? 0} updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
+    success: (r) =>
+      `${r?.ok ?? 0} updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}${r?.remaining?.length ? `, ${r.remaining.length} not done (time limit) — run again for the rest` : ""}`,
   });
   const add = useApiMutation({
     fn: (body: { pubkey: string; allowed?: boolean; notes?: string; tags?: string[] }) => api.post<UserView>("/users", body),

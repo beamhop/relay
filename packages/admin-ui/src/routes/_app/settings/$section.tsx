@@ -234,6 +234,11 @@ function LimitsFields({ control }: { control: Control<any> }) {
         <NumberField control={control} name="reqPerMinute" label="REQs / minute" min={0} />
         <NumberField control={control} name="connectionsPerIp" label="Connections per IP" min={1} />
       </Grid>
+      <SubHeading hint="Relay-wide. 0 connections means unlimited; filter weight caps how many live subscriptions everyone together may hold.">Capacity</SubHeading>
+      <Grid cols={3}>
+        <NumberField control={control} name="maxConnections" label="Max connections" min={0} />
+        <NumberField control={control} name="maxTotalFilterWeight" label="Max total filter weight" min={0} />
+      </Grid>
     </>
   );
 }
