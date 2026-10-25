@@ -115,7 +115,10 @@ export interface BulkUserRequest {
 export interface BulkResult {
   ok: number;
   failed: { pubkey: string; error: string }[];
-  /** inputs not reached (the action's time budget ran out, or the client went away): nothing was done to them, resend them */
+  /**
+   * Present only when the action stopped early (its time budget ran out, or the client went away): the inputs not
+   * reached, to which nothing was done — resend them
+   */
   remaining?: string[];
 }
 /** GET /users/:pubkey/events?limit&until&kinds=1,7 → {items: NostrEvent[]} */

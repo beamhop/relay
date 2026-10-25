@@ -175,7 +175,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     assertPermission(c, BULK_PERMISSION[body.action]);
     if ((body.action === "add-tag" || body.action === "remove-tag") && !body.tag) throw badRequest("tag required");
     const actor = principalOf(c);
-    const result: BulkResult = { ok: 0, failed: [], remaining: [] };
+    const result: BulkResult = { ok: 0, failed: [] };
     const done: string[] = [];
     // the rank checks need the staff set once, not a lookup per target
     const moderate = await ctx.users.moderationCheck(actor);

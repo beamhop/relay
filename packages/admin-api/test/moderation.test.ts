@@ -131,10 +131,10 @@ describe("users bulk", () => {
     expect(h.audit.entries.find((e) => e.action === "user.bulk.mute")?.details).toMatchObject({ remaining: targets, remainingCount: 2, ok: 0 });
   });
 
-  test("a finished bulk action returns an empty remaining list", async () => {
+  test("a finished bulk action has no remaining list", async () => {
     const h = await createHarness();
     const r = (await (await h.asKey(h.owner, "/users/bulk", { method: "POST", body: { pubkeys: [newKey().pk], action: "mute" } })).json()) as BulkResult;
-    expect(r).toEqual({ ok: 1, failed: [], remaining: [] });
+    expect(r).toEqual({ ok: 1, failed: [] });
   });
 });
 
