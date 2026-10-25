@@ -1,4 +1,4 @@
-import type { Filter, NostrEvent, ReadContext, UserRecord } from "@beamhop/sdk";
+import type { EventStore, Filter, NostrEvent, ReadContext, UserRecord } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 import { isExpired } from "../nips/nip40";
 import { verifyAuthEvent } from "../nips/nip42";
@@ -7,8 +7,8 @@ import { processEvent } from "../pipeline/write";
 import { isVisibleTo, onlyGatedKinds, restrictedSubFilters } from "../subscriptions/visibility";
 import { filterWeight } from "../util/filter";
 import { withPrefix } from "../util/reasons";
-import { type Connection, type NegSession, SOFT_BUFFER_LIMIT, type Subscription } from "./connection";
-import { eventSize, isSearchFilter, REQ_BURST, SEARCH_MAX_LIMIT, SEARCH_MS_PER_MINUTE, SEARCH_PER_MINUTE } from "./read-limits";
+import { type Connection, type EventJson, type NegSession, SOFT_BUFFER_LIMIT, type Subscription } from "./connection";
+import { eventSize, isSearchFilter, QUERY_MS_PER_MINUTE, REQ_BURST, SEARCH_MAX_LIMIT, SEARCH_MS_PER_MINUTE, SEARCH_PER_MINUTE } from "./read-limits";
 import { nowSec } from "@beamhop/sdk";
 
 /** Max items in a negentropy session before refusing with NEG-ERR. */
@@ -117,13 +117,26 @@ async function waitForDrain(conn: Connection, signal?: AbortSignal): Promise<boo
 
 // ------------------------------------------------------------------ rate limiting for reads
 
-type ReadRate = "staff" | "ok" | "limited";
+type ReadRate = "staff" | "ok" | "limited" | "error";
+
+/** Refusal for a read whose rate limit couldn't be determined (the user lookup failed). */
+const READ_RATE_ERROR = "error: internal error";
 
 /**
  * General REQ/COUNT/NEG-OPEN bucket. The burst is capped (REQ_BURST) so a client can't have a whole
- * minute's allowance executed back to back.
+ * minute's allowance executed back to back. "error" when a user lookup failed: the read is refused,
+ * but answered.
  */
 async function readRate(ctx: RelayContext, conn: Connection): Promise<ReadRate> {
+  try {
+    return await takeReadRate(ctx, conn);
+  } catch (err) {
+    ctx.logger.warn("user lookup for read limits failed", { err: String(err) });
+    return "error";
+  }
+}
+
+async function takeReadRate(ctx: RelayContext, conn: Connection): Promise<ReadRate> {
   const def = ctx.s().limits.reqPerMinute;
   let limit = def;
   let override = false;
@@ -245,6 +258,42 @@ async function withQuerySlot<T>(ctx: RelayContext, signal: AbortSignal | undefin
   }
 }
 
+/** The event store calls reads make (metered per connection for plain reads, see meteredStore). */
+type ReadStore = Pick<EventStore, "query" | "count" | "queryIdsForSync">;
+
+/**
+ * Admission for plain (non-search) stored reads: refused while the address's or the relay-wide query-time
+ * budget is in debt. Staff are exempt (their time still counts relay-wide).
+ */
+function admitQuery(ctx: RelayContext, conn: Connection, staff: boolean): string | undefined {
+  if (staff) return undefined;
+  const Q = QUERY_MS_PER_MINUTE;
+  if (!ctx.rate.take(`queryms:ip:${conn.ipKey}`, Q.ip, 0, Q.ipBurst)) return "rate-limited: too many expensive queries, slow down";
+  if (!ctx.rate.take("queryms:all", Q.all, 0, Q.allBurst)) return "rate-limited: relay is busy, try again shortly";
+  return undefined;
+}
+
+/** The event store with each query's measured time charged to the query-time budgets (QUERY_MS_PER_MINUTE). */
+function meteredStore(ctx: RelayContext, conn: Connection, staff: boolean): ReadStore {
+  const events = ctx.stores.events;
+  const Q = QUERY_MS_PER_MINUTE;
+  const timed = async <T>(q: () => Promise<T>): Promise<T> => {
+    const t0 = performance.now();
+    try {
+      return await q();
+    } finally {
+      const ms = performance.now() - t0;
+      ctx.rate.charge("queryms:all", Q.all, ms, Q.allBurst);
+      if (!staff) ctx.rate.charge(`queryms:ip:${conn.ipKey}`, Q.ip, ms, Q.ipBurst);
+    }
+  };
+  return {
+    query: (filters, opts) => timed(() => events.query(filters, opts)),
+    count: (filters) => timed(() => events.count(filters)),
+    queryIdsForSync: (filter) => timed(() => events.queryIdsForSync(filter)),
+  };
+}
+
 export function authReadDenied(ctx: RelayContext, conn: Connection): string | undefined {
   const { access } = ctx.s();
   if ((access.authForRead || access.mode === "auth-required") && conn.authedPubkeys.size === 0) return "auth-required: authentication is required to read from this relay";
@@ -262,18 +311,18 @@ export const MAX_SEARCH_COUNT_SCAN = 1_000;
  * candidates exist to check cheaply (caller should refuse). Candidates are listed by id and checked in
  * small batches: anyone can store thousands of them (gift wraps, DMs) near maxEventBytes each.
  */
-async function hiddenIds(ctx: RelayContext, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<Map<string, number> | null> {
+async function hiddenIds(ctx: RelayContext, store: ReadStore, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<Map<string, number> | null> {
   const subs = filters.flatMap((f) => restrictedSubFilters(ctx, f, conn.authedPubkeys));
   const hidden = new Map<string, number>();
   if (!subs.length) return hidden;
   const candidates = new Map<string, { id: string; created_at: number }>();
   for (const { limit: _x, ...f } of subs) {
-    const items = await candidateIds(ctx, f, MAX_PRIVATE_SCAN);
+    const items = await candidateIds(store, f, MAX_PRIVATE_SCAN);
     if (!items) return null;
     for (const it of items) candidates.set(it.id, it);
     if (candidates.size > MAX_PRIVATE_SCAN) return null;
   }
-  const visible = await filterVisible(ctx, conn, [...candidates.values()], rctx);
+  const visible = await filterVisible(ctx, store, conn, [...candidates.values()], rctx);
   if (!visible) return null;
   const seen = new Set(visible.map((it) => it.id));
   for (const [id, it] of candidates) if (!seen.has(id)) hidden.set(id, it.created_at);
@@ -285,14 +334,14 @@ async function hiddenIds(ctx: RelayContext, conn: Connection, filters: Filter[],
  * by id (the store applies it only when loading events), so search matches are counted first and loaded
  * only when at most MAX_SEARCH_COUNT_SCAN match (searches run one at a time relay-wide).
  */
-async function candidateIds(ctx: RelayContext, f: Filter, max: number): Promise<{ id: string; created_at: number }[] | null> {
+async function candidateIds(store: ReadStore, f: Filter, max: number): Promise<{ id: string; created_at: number }[] | null> {
   if (!isSearchFilter(f)) {
-    const items = await ctx.stores.events.queryIdsForSync({ ...f, limit: max + 1 });
+    const items = await store.queryIdsForSync({ ...f, limit: max + 1 });
     return items.length > max ? null : items;
   }
   const cap = Math.min(max, MAX_SEARCH_COUNT_SCAN);
-  if ((await ctx.stores.events.count([f])) > cap) return null;
-  const evs = await ctx.stores.events.query([{ ...f, limit: cap + 1 }], { maxLimit: cap + 1 });
+  if ((await store.count([f])) > cap) return null;
+  const evs = await store.query([{ ...f, limit: cap + 1 }], { maxLimit: cap + 1 });
   return evs.length > cap ? null : evs.map((ev) => ({ id: ev.id, created_at: ev.created_at }));
 }
 
@@ -301,15 +350,15 @@ async function candidateIds(ctx: RelayContext, f: Filter, max: number): Promise<
  * may hide anything: candidate ids are listed (cheap), then checked in batches like sync candidates.
  * Returns null when there are too many candidates to check.
  */
-async function countVisible(ctx: RelayContext, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<number | null> {
+async function countVisible(ctx: RelayContext, store: ReadStore, conn: Connection, filters: Filter[], rctx: ReadContext): Promise<number | null> {
   const candidates = new Map<string, { id: string; created_at: number }>();
   for (const f of filters) {
-    const items = await candidateIds(ctx, f, MAX_VISIBILITY_SCAN);
+    const items = await candidateIds(store, f, MAX_VISIBILITY_SCAN);
     if (!items) return null;
     for (const it of items) candidates.set(it.id, it);
     if (candidates.size > MAX_VISIBILITY_SCAN) return null;
   }
-  const visible = await filterVisible(ctx, conn, [...candidates.values()], rctx);
+  const visible = await filterVisible(ctx, store, conn, [...candidates.values()], rctx);
   return visible ? visible.length : null;
 }
 
@@ -324,6 +373,7 @@ function visibilityBatch(ctx: RelayContext): number {
  */
 async function filterVisible(
   ctx: RelayContext,
+  store: ReadStore,
   conn: Connection,
   items: { id: string; created_at: number }[],
   rctx: ReadContext,
@@ -333,7 +383,7 @@ async function filterVisible(
   const size = visibilityBatch(ctx);
   for (let i = 0; i < items.length; i += size) {
     const batch = items.slice(i, i + size);
-    const events = await ctx.stores.events.query([{ ids: batch.map((it) => it.id) }], { maxLimit: batch.length });
+    const events = await store.query([{ ids: batch.map((it) => it.id) }], { maxLimit: batch.length });
     const byId = new Map(events.map((ev) => [ev.id, ev]));
     for (const it of batch) {
       const ev = byId.get(it.id);
@@ -388,7 +438,7 @@ const storeOrder = (a: NostrEvent, b: NostrEvent) => b.created_at - a.created_at
  * while hidden events keep taking their slots. `until` is inclusive, so the events of the oldest second
  * already seen are read again and skipped.
  */
-function olderPages(ctx: RelayContext, f: Filter, first: NostrEvent[], scan: { left: number }, signal: AbortSignal) {
+function olderPages(ctx: RelayContext, store: ReadStore, f: Filter, first: NostrEvent[], scan: { left: number }, signal: AbortSignal) {
   const maxLimit = ctx.s().limits.maxLimit;
   let full = first.length >= f.limit!;
   let until = Number.POSITIVE_INFINITY;
@@ -409,7 +459,7 @@ function olderPages(ctx: RelayContext, f: Filter, first: NostrEvent[], scan: { l
     // scan budget used up, or a page's worth of results share one second
     if (ask <= tie.size) return null;
     await yieldToLoop(); // sqlite queries are synchronous: let other connections in between pages
-    const r = await withQuerySlot(ctx, signal, () => ctx.stores.events.query([{ ...f, until, limit: ask }], { maxLimit: ask, signal }));
+    const r = await withQuerySlot(ctx, signal, () => store.query([{ ...f, until, limit: ask }], { maxLimit: ask, signal }));
     if ("aborted" in r) throw new StreamEnded();
     if ("reason" in r) throw new StreamEnded(r.reason);
     const evs = r.value;
@@ -473,6 +523,7 @@ async function streamStored(
   queryFilters: Filter[],
   rctx: ReadContext,
   search: SearchCharge | null,
+  store: ReadStore,
 ): Promise<number | null> {
   const subId = sub.id;
   const L = ctx.s().limits;
@@ -491,11 +542,13 @@ async function streamStored(
   // pages[0]: the plain filters' union; pages[i]: first page of gapped[i - 1]
   let pages: NostrEvent[][];
   try {
+    // a search's queries are timed (and budgeted) by runSearch as a whole
+    const first = search ? ctx.stores.events : store;
     const run = async () => {
-      const out = [plain.length ? await ctx.stores.events.query(plain, { maxLimit: L.maxLimit, signal }) : []];
+      const out = [plain.length ? await first.query(plain, { maxLimit: L.maxLimit, signal }) : []];
       for (const f of gapped) {
         if (signal.aborted) break;
-        out.push(isSearchFilter(f) ? await rankVisible(ctx, f, visible, scan, signal) : await ctx.stores.events.query([f], { maxLimit: L.maxLimit, signal }));
+        out.push(isSearchFilter(f) ? await rankVisible(ctx, f, visible, scan, signal) : await first.query([f], { maxLimit: L.maxLimit, signal }));
       }
       return out;
     };
@@ -547,7 +600,7 @@ async function streamStored(
         items: keep(evs, sizes[i]),
         pos: 0,
         left: f ? f.limit! : Number.POSITIVE_INFINITY,
-        more: f && !isSearchFilter(f) ? olderPages(ctx, f, evs, scan, signal) : null,
+        more: f && !isSearchFilter(f) ? olderPages(ctx, store, f, evs, scan, signal) : null,
       };
     });
     pages = []; // let hidden results be collected right away
@@ -620,6 +673,7 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
   if (denied) return conn.closedSub(subId, denied);
   const rate = await readRate(ctx, conn);
   if (rate === "limited") return conn.closedSub(subId, "rate-limited: too many requests");
+  if (rate === "error") return conn.closedSub(subId, READ_RATE_ERROR);
 
   if (conn.subs.size >= L.maxSubscriptions) return conn.closedSub(subId, `rate-limited: too many subscriptions (max ${L.maxSubscriptions})`);
 
@@ -649,11 +703,18 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
     // not retryable as is: the client has to close subscriptions or send smaller filters
     return conn.closedSub(subId, `restricted: too many filter values across this connection's subscriptions (max ${MAX_FILTER_WEIGHT_PER_CONN})`);
   }
+  // relay-wide, the fan-out index is bounded too (transient: subscriptions elsewhere close)
+  if (L.maxTotalFilterWeight > 0 && ctx.subs.weight + weight > L.maxTotalFilterWeight) {
+    return conn.closedSub(subId, "rate-limited: relay holds too many subscriptions, try again later");
+  }
   let search: SearchCharge | null = null;
   if (filters.some((f) => f.limit !== 0 && isSearchFilter(f))) {
     const admitted = admitSearch(ctx, conn, rate === "staff");
     if ("reason" in admitted) return conn.closedSub(subId, admitted.reason);
     search = admitted;
+  } else if (filters.some((f) => f.limit !== 0)) {
+    const refused = admitQuery(ctx, conn, rate === "staff");
+    if (refused) return conn.closedSub(subId, refused);
   }
 
   const sub: Subscription = { conn, id: subId, filters, pending: [], sentIds: new Set(), abort: new AbortController(), weight };
@@ -673,7 +734,7 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
       return;
     }
     try {
-      const sent = await streamStored(ctx, conn, sub, queryFilters, rctx, search);
+      const sent = await streamStored(ctx, conn, sub, queryFilters, rctx, search, meteredStore(ctx, conn, rate === "staff"));
       if (sent === null) return;
       results = sent;
       // never let EOSE be dropped by an overfull send buffer
@@ -696,14 +757,17 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
   ctx.bus.emit("req.executed", { connId: conn.id, subId, filters, results, durationMs: performance.now() - started, ip: conn.ip });
 }
 
-/** Called by fan-out for a matched subscription. Returns true if delivered (or buffered). */
-export function deliverLive(sub: Subscription, event: NostrEvent): boolean {
+/**
+ * Called by fan-out for a matched subscription. Returns true if delivered (or buffered). `serialized`
+ * gives the event's JSON, computed once for all recipients.
+ */
+export function deliverLive(sub: Subscription, event: NostrEvent, serialized?: () => EventJson): boolean {
   if (sub.pending) {
     if (sub.pending.length >= MAX_PENDING_LIVE) sub.pending.shift();
     sub.pending.push(event);
     return true;
   }
-  return sub.conn.sendLive(sub.id, event);
+  return sub.conn.sendLive(sub.id, event, serialized);
 }
 
 export function handleClose(ctx: RelayContext, conn: Connection, subId: string): void {
@@ -738,6 +802,7 @@ export async function handleCount(ctx: RelayContext, conn: Connection, subId: st
   if (denied) return conn.closedSub(subId, denied);
   const rate = await readRate(ctx, conn);
   if (rate === "limited") return conn.closedSub(subId, "rate-limited: too many requests");
+  if (rate === "error") return conn.closedSub(subId, READ_RATE_ERROR);
   const started = performance.now();
   let hq: { filters: Filter[] } | { reject: string };
   try {
@@ -751,6 +816,9 @@ export async function handleCount(ctx: RelayContext, conn: Connection, subId: st
     const admitted = admitSearch(ctx, conn, rate === "staff");
     if ("reason" in admitted) return conn.closedSub(subId, admitted.reason);
     search = admitted;
+  } else {
+    const refused = admitQuery(ctx, conn, rate === "staff");
+    if (refused) return conn.closedSub(subId, refused);
   }
   // bounded per connection like REQ, so one connection's burst of COUNTs can't take every relay-wide slot
   await conn.queries.acquire();
@@ -763,13 +831,15 @@ export async function handleCount(ctx: RelayContext, conn: Connection, subId: st
     const filters = hq.filters.map(({ limit: _l, ...f }) => f);
     const rctx: ReadContext = { conn, subId, source: "count" };
     const pluginHooks = ctx.hooks.counts.visibility > 0;
+    // a search's queries are timed (and budgeted) by runSearch as a whole
+    const store = search ? ctx.stores.events : meteredStore(ctx, conn, rate === "staff");
     // Plugin hooks may hide any event: candidates are checked one by one (in batches). Otherwise only the
     // built-in private subsets are checked. Counted first: everything counted already exists when the
     // hidden set is computed, so a private event stored in between can only lower the count.
     const work = async (): Promise<number | null> => {
-      if (pluginHooks) return countVisible(ctx, conn, filters, rctx);
-      const total = await ctx.stores.events.count(filters);
-      const hidden = await hiddenIds(ctx, conn, filters, rctx);
+      if (pluginHooks) return countVisible(ctx, store, conn, filters, rctx);
+      const total = await store.count(filters);
+      const hidden = await hiddenIds(ctx, store, conn, filters, rctx);
       return hidden ? Math.max(0, total - hidden.size) : null;
     };
     const r = search
@@ -903,7 +973,11 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   const denied = authReadDenied(ctx, conn);
   if (denied) return negErr(denied);
   if (conn.authedPubkeys.size === 0 && onlyGatedKinds(filter)) return negErr("auth-required: authentication is required to sync direct messages");
-  if ((await readRate(ctx, conn)) === "limited") return negErr("rate-limited: too many requests");
+  const rate = await readRate(ctx, conn);
+  if (rate === "limited") return negErr("rate-limited: too many requests");
+  if (rate === "error") return negErr(READ_RATE_ERROR);
+  const refused = admitQuery(ctx, conn, rate === "staff");
+  if (refused) return negErr(refused);
   if (conn.negSessions.size + conn.negOpening >= MAX_NEG_SESSIONS_PER_CONN) {
     return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
   }
@@ -922,7 +996,7 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   ctx.neg.opening++;
   ctx.neg.openingByIp.set(conn.ipKey, (ctx.neg.openingByIp.get(conn.ipKey) ?? 0) + 1);
   try {
-    await openNegSession(ctx, conn, subId, filter, message);
+    await openNegSession(ctx, meteredStore(ctx, conn, rate === "staff"), conn, subId, filter, message);
   } finally {
     conn.negOpening--;
     ctx.neg.opening--;
@@ -932,7 +1006,7 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   }
 }
 
-async function openNegSession(ctx: RelayContext, conn: Connection, subId: string, filter: Filter, message: string): Promise<void> {
+async function openNegSession(ctx: RelayContext, store: ReadStore, conn: Connection, subId: string, filter: Filter, message: string): Promise<void> {
   const negErr = (reason: string) => negError(ctx, conn, subId, reason);
   const rctx: ReadContext = { conn, subId, source: "sync" };
   const hq = await ctx.hooks.runQuery([filter], rctx).catch(() => ({ reject: "error: query policy failed" }));
@@ -942,14 +1016,14 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
   const syncFilters = hq.filters.map(({ limit: _limit, ...f }) => f);
   if (syncFilters.some((f) => f.search !== undefined)) return negErr("unsupported: search filters cannot be used for sync");
   // Ids are listed page by page straight into the session's typed arrays (no object per id is kept), and count
-  // against the relay-wide item budget while they are listed, so syncs being prepared can't exhaust memory either.
+  // against the relay-wide item budget (by allocated slots) while they are listed, so syncs being prepared can't exhaust memory either.
   const storage = new NegentropyStorage();
   let listed = 0;
   try {
     let exclude: { id: string; created_at: number }[] = [];
     try {
       for (const f of syncFilters) {
-        const refused = await listSyncIds(ctx, f, storage, (n) => {
+        const refused = await listSyncIds(ctx, store, f, storage, (n) => {
           ctx.neg.items += n;
           listed += n;
         });
@@ -959,11 +1033,11 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
       // ids are disclosed to the client, so everything it may not read must go. The hidden set is
       // computed after the ids, so every listed id already existed when it was computed. Under plugin
       // visibility hooks, or with too many private candidates, every listed id is checked instead.
-      const hidden = ctx.hooks.counts.visibility > 0 ? null : await hiddenIds(ctx, conn, syncFilters, rctx);
+      const hidden = ctx.hooks.counts.visibility > 0 ? null : await hiddenIds(ctx, store, conn, syncFilters, rctx);
       if (hidden) exclude = [...hidden].map(([id, created_at]) => ({ id, created_at }));
       else {
         const items = storage.inserted > MAX_VISIBILITY_SCAN ? null : storage.pendingItems();
-        const visible = items && (await filterVisible(ctx, conn, items, rctx));
+        const visible = items && (await filterVisible(ctx, store, conn, items, rctx));
         if (!items || !visible) return negErr("blocked: filter matches too many events to check against this relay's visibility rules; narrow it");
         const ok = new Set(visible.map((it) => it.id));
         exclude = items.filter((it) => !ok.has(it.id));
@@ -996,22 +1070,22 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
 }
 
 /**
- * Lists the (created_at, id) pairs matching `f` into `storage`, NEG_ID_PAGE at a time (oldest first), charging
- * each page with `charge`. Returns a NEG-ERR reason when the sync is refused.
+ * Lists the (created_at, id) pairs matching `f` into `storage`, NEG_ID_PAGE at a time (oldest first), charging the
+ * slots allocated for each page with `charge`. Returns a NEG-ERR reason when the sync is refused.
  */
-async function listSyncIds(ctx: RelayContext, f: Filter, storage: NegentropyStorage, charge: (n: number) => void): Promise<string | undefined> {
+async function listSyncIds(ctx: RelayContext, store: ReadStore, f: Filter, storage: NegentropyStorage, charge: (n: number) => void): Promise<string | undefined> {
   let since = f.since;
   /** ids already listed at `since` (the next page reads that second again) */
   let boundary = new Set<string>();
   for (;;) {
-    const rows = await ctx.stores.events.queryIdsForSync({ ...f, ...(since !== undefined ? { since } : {}), limit: NEG_ID_PAGE });
-    let added = 0;
-    for (const r of rows) {
-      if (since !== undefined && (r.created_at < since || (r.created_at === since && boundary.has(r.id)))) continue;
-      storage.insert(r.created_at, r.id);
-      added++;
-    }
-    charge(added);
+    const rows = await store.queryIdsForSync({ ...f, ...(since !== undefined ? { since } : {}), limit: NEG_ID_PAGE });
+    // the page's room is allocated at once (no doubling), and what is allocated is what's charged
+    const fresh = since === undefined ? rows : rows.filter((r) => r.created_at > since! || (r.created_at === since && !boundary.has(r.id)));
+    const allocated = storage.capacity;
+    storage.reserve(fresh.length);
+    for (const r of fresh) storage.insert(r.created_at, r.id);
+    const added = fresh.length;
+    charge(storage.capacity - allocated);
     // counted before the filters of a union are merged
     if (storage.inserted > MAX_NEG_ITEMS) return "blocked: too many results";
     if (ctx.neg.items > NEG_GLOBAL_ITEM_BUDGET) sweepNegSessions(ctx);

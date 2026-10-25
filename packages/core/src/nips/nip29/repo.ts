@@ -124,6 +124,11 @@ export class GroupRepo {
     return this.db.migrate("core", GROUP_MIGRATIONS);
   }
 
+  /** Runs `fn` in one transaction (several rows of one state change are written together or not at all). */
+  tx<T>(fn: (repo: GroupRepo) => Promise<T>): Promise<T> {
+    return this.db.tx((db) => fn(new GroupRepo(db)));
+  }
+
   async loadAll(): Promise<GroupState[]> {
     const groups = await this.db.all<GroupRow>("SELECT * FROM core_groups");
     const members = await this.db.all<{ group_id: string; pubkey: string; roles: string }>("SELECT group_id, pubkey, roles FROM core_group_members");

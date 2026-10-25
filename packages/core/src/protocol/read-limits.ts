@@ -17,6 +17,14 @@ export const SEARCH_PER_MINUTE = { conn: 10, connBurst: 3, ip: 30, ipBurst: 10 }
  * budgets too; the difference to the actual time is settled after the query ran.
  */
 export const SEARCH_MS_PER_MINUTE = { ip: 3_000, ipBurst: 1_500, all: 15_000, allBurst: 5_000 };
+/**
+ * Store time (ms) plain REQ/COUNT/NEG-OPEN queries (and their refill pages, hidden-event checks and id
+ * listing) may take per minute, per address and relay-wide; search has its own budgets above. Each query's
+ * measured time is charged after it ran, and new reads are refused while a budget is in debt, so one
+ * client's expensive filters can't occupy the event loop (SQLite queries are synchronous). Staff are exempt
+ * from the checks; their time still counts relay-wide.
+ */
+export const QUERY_MS_PER_MINUTE = { ip: 15_000, ipBurst: 10_000, all: 45_000, allBurst: 20_000 };
 /** Bounds of the per-search time estimate charged at admission (ms). */
 export const SEARCH_ESTIMATE_MS = { initial: 25, min: 10, max: 1_000 };
 /** Max `limit` of a search filter (ranking cost grows with it). */
