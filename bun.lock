@@ -96,6 +96,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@beamhop/sdk": "workspace:*",
+        "@noble/curves": "^2.0.1",
         "hono": "^4.13.13",
         "nostr-tools": "^2.25.2",
       },

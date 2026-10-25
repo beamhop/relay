@@ -48,6 +48,20 @@ if (!result.success) {
 }
 chmodSync(join(out, "cli.js"), 0o755);
 
+// the signature verification worker runs as its own file next to cli.js (core's VerifyPool looks for it there)
+const worker = await Bun.build({
+  entrypoints: [resolve(root, "../core/src/pipeline/verify-worker.ts")],
+  outdir: out,
+  target: "node",
+  format: "esm",
+  minify: { syntax: true, whitespace: false, identifiers: false },
+  naming: "verify-worker.js",
+});
+if (!worker.success) {
+  for (const log of worker.logs) console.error(log);
+  process.exit(1);
+}
+
 if (existsSync(join(uiDist, "index.html"))) {
   cpSync(uiDist, join(out, "admin-ui"), { recursive: true });
   console.log("copied admin UI → dist/node/admin-ui");
