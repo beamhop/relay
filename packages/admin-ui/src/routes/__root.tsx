@@ -1,6 +1,7 @@
-import { Link, Outlet, createRootRouteWithContext, type ErrorComponentProps } from "@tanstack/react-router";
+import { Link, Outlet, createRootRouteWithContext } from "@tanstack/react-router";
 import type { QueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { AppLoadError } from "@/components/route-error";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -9,18 +10,8 @@ export interface RouterContext {
 export const Route = createRootRouteWithContext<RouterContext>()({
   component: Outlet,
   notFoundComponent: NotFound,
-  errorComponent: RootError,
+  errorComponent: AppLoadError,
 });
-
-function RootError({ error, reset }: ErrorComponentProps) {
-  return (
-    <div className="flex min-h-dvh flex-col items-center justify-center gap-3 p-6 text-center">
-      <p className="text-lg font-medium">Can’t load the admin panel</p>
-      <p className="max-w-md text-sm text-muted-foreground">{error instanceof Error ? error.message : String(error)}</p>
-      <Button onClick={() => { reset(); window.location.reload(); }}>Retry</Button>
-    </div>
-  );
-}
 
 function NotFound() {
   return (

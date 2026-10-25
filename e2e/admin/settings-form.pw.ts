@@ -199,12 +199,20 @@ test("the hidden save bar is not keyboard-focusable while the form is clean", as
   await expect(page.getByRole("button", { name: "Discard" })).toBeFocused();
 });
 
-test("switching sections discards unsaved edits of the previous one", async ({ page }) => {
+test("switching sections asks first, then discards unsaved edits of the previous one", async ({ page }) => {
   await page.goto("settings/info");
   const original = await page.getByLabel("Name", { exact: true }).inputValue();
   await page.getByLabel("Name", { exact: true }).fill(uniq("unsaved"));
   await expect(unsaved(page)).toBeVisible();
-  await settingsNav(page).getByRole("link", { name: "Access", exact: true }).click();
+  const access = settingsNav(page).getByRole("link", { name: "Access", exact: true });
+  // Cancel keeps the edit and stays on the section
+  await access.click();
+  const dialog = page.getByRole("alertdialog", { name: "Discard unsaved changes?" });
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(unsaved(page)).toBeVisible();
+  await access.click();
+  await dialog.getByRole("button", { name: "Discard" }).click();
   await expect(page.getByText("Who can read from and write to the relay")).toBeVisible();
   await expect(page.getByRole("button", { name: "Save" })).toHaveCount(0);
   await settingsNav(page).getByRole("link", { name: "Relay info", exact: true }).click();
