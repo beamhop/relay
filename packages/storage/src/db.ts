@@ -134,6 +134,16 @@ export interface SqliteOptions {
   logger?: Logger;
 }
 
+/**
+ * WAL pages written before a commit checkpoints (sqlite's default is 1000). A saved event dirties ~15 pages (table,
+ * five indexes, tags, FTS), so the default checkpointed, with an fsync, every ~65 events: about half the cost of a
+ * save. Checkpointing less often also writes each hot index page back once instead of many times. Measured on 6k
+ * events, one transaction each: 167 → 95 µs per save.
+ */
+export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 10_000;
+/** the WAL file is truncated back to this many bytes after a checkpoint (it otherwise keeps its largest size) */
+const SQLITE_JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024;
+
 export const SQLITE_TX_WARN_MS = 5_000;
 export const SQLITE_TX_TIMEOUT_MS = 60_000;
 const SQLITE_LONG_TX_MS = 20;
@@ -194,6 +204,14 @@ class SqliteDb extends BaseDb {
     const next = this.chain.then(fn);
     this.chain = next.catch(() => {});
     return next;
+  }
+  /**
+   * Whether the caller runs in a transaction's async context (the open one, or one that finished or was rolled back
+   * by the watchdog). Batching callers (see SqlEventStore.save) must not queue such work behind their own
+   * transaction: the open one would wait for itself.
+   */
+  get inTxContext(): boolean {
+    return this.txContext.getStore() !== undefined;
   }
   all<T>(sql: string, params?: unknown[]) {
     return this.op(() => this.d.all(sql, normalizeParams(params)) as T[]);
@@ -403,7 +421,9 @@ export async function createDb(config: Pick<BeamhopConfig, "database">, sqliteOp
     return new PostgresDb(sql);
   }
   const d = await openSqlite(sqlitePath);
-  d.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  d.exec(
+    `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = ${SQLITE_WAL_AUTOCHECKPOINT_PAGES}; PRAGMA journal_size_limit = ${SQLITE_JOURNAL_SIZE_LIMIT};`,
+  );
   return new SqliteDb(d, sqliteOpts);
 }
 
