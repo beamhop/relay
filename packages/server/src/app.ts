@@ -14,6 +14,7 @@ import {
   type CreateBlossom,
   type CreateMetrics,
   type CreateRelay,
+  type HookIncident,
   type Logger,
   type MetricsService,
   type RelayEngine,
@@ -170,7 +171,7 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
   const extras: ServerExtras = { pluginsEnabled: [], prometheus: true, ...overrides.extras };
   const logger = overrides.logger ?? createLogger(config.logLevel);
   const log = logger.child("server");
-  const bus = new EventBus();
+  const bus = new EventBus({ logger: logger.child("bus") });
   const hooks = new HookRegistry();
   const f = await loadFactories(overrides.factories ?? {}, config.blossom.enabled, config.admin.enabled);
 
@@ -183,6 +184,7 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
     const relay = await f.createRelay({ ...base, logger: logger.child("relay") });
     const blossom = config.blossom.enabled ? await f.createBlossom({ ...base, logger: logger.child("blossom") }) : undefined;
     const metrics = await f.createMetrics({ ...base, logger: logger.child("metrics"), relay, blossom });
+    hooks.onIncident(hookIncidentReporter({ bus, metrics, logger: logger.child("hooks") }));
     const plugins = createPluginManager({
       ...base,
       logger,
@@ -249,6 +251,54 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
     for (const fn of cleanupOnFail) await fn().catch(() => {});
     throw err;
   }
+}
+
+/** One log line / alert per key per this window; the rest are counted and reported with the next one. */
+const INCIDENT_WINDOW_MS = 60_000;
+
+/**
+ * Hook timeouts and errors: every one is counted (`hook_incidents_total`); logs are coalesced per (owner, kind,
+ * type) and timeouts raise a bus alert at most once a minute per owner.
+ */
+export function hookIncidentReporter(d: { bus: EventBus; metrics: Pick<MetricsService, "counter">; logger: Logger; now?: () => number }) {
+  const counter = d.metrics.counter("hook_incidents_total", "plugin hook timeouts and errors");
+  const now = d.now ?? Date.now;
+  const logged = new Map<string, { at: number; suppressed: number }>();
+  const alerted = new Map<string, { at: number; suppressed: number }>();
+  /** returns how many were swallowed since the last pass, or -1 while still inside the window */
+  const pass = (m: Map<string, { at: number; suppressed: number }>, key: string) => {
+    const t = now();
+    const prev = m.get(key);
+    if (prev && t - prev.at < INCIDENT_WINDOW_MS) {
+      prev.suppressed++;
+      return -1;
+    }
+    m.set(key, { at: t, suppressed: 0 });
+    return prev?.suppressed ?? 0;
+  };
+  return (i: HookIncident) => {
+    counter.add(1, { kind: i.kind, owner: i.owner, type: i.type });
+    const effect =
+      i.type === "error" ? "the request was refused"
+      : i.kind === "write" ? "the event was processed without its verdict"
+      : "the request was refused";
+    const what = i.type === "timeout" ? `did not answer within ${i.timeoutMs} ms` : "failed";
+    const logSkipped = pass(logged, `${i.owner}|${i.kind}|${i.type}`);
+    if (logSkipped >= 0) {
+      d.logger.warn(`${i.kind} hook of ${i.owner} ${what}; ${effect}`, {
+        ...(i.error !== undefined ? { error: i.error } : {}),
+        ...(logSkipped ? { suppressedSinceLastLog: logSkipped } : {}),
+      });
+    }
+    if (i.type !== "timeout") return;
+    const alertSkipped = pass(alerted, i.owner);
+    if (alertSkipped < 0) return;
+    d.bus.emit("alert", {
+      level: "warning",
+      title: `Plugin hook timed out: ${i.owner}`,
+      message: `A ${i.kind} hook of ${i.owner} did not answer within ${i.timeoutMs} ms; ${effect}.` + (alertSkipped ? ` ${alertSkipped} more timeout(s) since the last alert.` : ""),
+    });
+  };
 }
 
 interface AppDeps {
