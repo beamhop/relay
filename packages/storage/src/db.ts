@@ -129,18 +129,29 @@ export interface SqliteOptions {
   txTimeoutMs?: number;
   /** transactions running longer than this yield a macrotask turn after committing; default 20 ms */
   longTxMs?: number;
+  /** close() waits at most this long for queued statements and the open transaction; default 3 s */
+  closeWaitMs?: number;
   logger?: Logger;
 }
 
 export const SQLITE_TX_WARN_MS = 5_000;
 export const SQLITE_TX_TIMEOUT_MS = 60_000;
 const SQLITE_LONG_TX_MS = 20;
+const SQLITE_CLOSE_WAIT_MS = 3_000;
 
 /** Rejection of a statement or tx() issued by a transaction the watchdog already rolled back. */
 export class TxAbortedError extends Error {
   constructor(message = "sqlite transaction was rolled back by the watchdog (open too long)") {
     super(message);
     this.name = "TxAbortedError";
+  }
+}
+
+/** Rejection of a statement issued after the database started closing (work that outlived shutdown). */
+export class DbClosedError extends Error {
+  constructor(message = "database is closed") {
+    super(message);
+    this.name = "DbClosedError";
   }
 }
 
@@ -153,6 +164,9 @@ class SqliteDb extends BaseDb {
   private openTx: object | null = null;
   /** Tokens of transactions the watchdog rolled back: their late statements must not run outside of them. */
   private abandoned = new WeakSet<object>();
+  /** set by close(): new work from outside the open transaction is refused, queued work still runs */
+  private closing = false;
+  private closed = false;
   constructor(
     private d: SqliteDriver,
     private opts: SqliteOptions = {},
@@ -169,6 +183,7 @@ class SqliteDb extends BaseDb {
   private op<T>(fn: () => T): Promise<T> {
     const ctx = this.txContext.getStore();
     if (ctx !== undefined && this.abandoned.has(ctx)) return Promise.reject(new TxAbortedError());
+    if (this.closed || (this.closing && (ctx === undefined || ctx !== this.openTx))) return Promise.reject(new DbClosedError());
     if (this.openTx === null || ctx === this.openTx) {
       try {
         return Promise.resolve(fn());
@@ -202,6 +217,7 @@ class SqliteDb extends BaseDb {
     const ctx = this.txContext.getStore();
     if (ctx !== undefined && this.abandoned.has(ctx)) return Promise.reject(new TxAbortedError());
     if (this.openTx !== null && ctx === this.openTx) return fn(this);
+    if (this.closing || this.closed) return Promise.reject(new DbClosedError());
     const next = this.chain.then(() => this.runTx(fn));
     this.chain = next.catch(() => {});
     return next;
@@ -272,7 +288,23 @@ class SqliteDb extends BaseDb {
       this.opts.logger?.debug("sqlite ROLLBACK failed", { err: String(err) });
     }
   }
+  /**
+   * Refuses new work, lets what is already queued (and the open transaction) finish for up to `closeWaitMs`, then
+   * closes the connection. Later calls reject with DbClosedError instead of a driver error.
+   */
   async close() {
+    if (this.closing) return;
+    this.closing = true;
+    const waitMs = this.opts.closeWaitMs ?? SQLITE_CLOSE_WAIT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      this.chain.then(() => true),
+      new Promise<false>((r) => (timer = setTimeout(() => r(false), waitMs))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) this.opts.logger?.warn("closing the database with work still queued", { waitMs });
+    if (this.openTx !== null) this.rollback();
+    this.closed = true;
     this.d.close();
   }
 }

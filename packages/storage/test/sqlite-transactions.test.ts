@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Logger } from "@beamhop/sdk";
-import { createMemoryDb, TxAbortedError } from "../src/db";
+import { createMemoryDb, DbClosedError, TxAbortedError } from "../src/db";
 
 const race = <T>(p: Promise<T>, ms: number) =>
   Promise.race([p, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), ms))]);
@@ -98,5 +98,44 @@ describe("sqlite migrations", () => {
     await db.migrate("ns", mig);
     db.all = all;
     expect(await db.all("SELECT id FROM _migrations WHERE namespace = 'ns'")).toEqual([{ id: "001" }]);
+  });
+});
+
+describe("sqlite close", () => {
+  test("waits for the open transaction and queued work, then refuses new work with DbClosedError", async () => {
+    const db = await createMemoryDb();
+    await db.exec("CREATE TABLE t (x INTEGER)");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const inTx = db.tx(async (d) => {
+      await d.run("INSERT INTO t VALUES (1)");
+      await gate;
+      await d.run("INSERT INTO t VALUES (2)");
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    const queued = db.run("INSERT INTO t VALUES (3)");
+    const closing = db.close();
+    // new work after close() started is refused at once, queued work and the open transaction still finish
+    await expect(db.get("SELECT 1")).rejects.toBeInstanceOf(DbClosedError);
+    release();
+    await inTx;
+    await queued;
+    await closing;
+    await expect(db.all("SELECT x FROM t")).rejects.toBeInstanceOf(DbClosedError);
+    await expect(db.tx(async () => {})).rejects.toBeInstanceOf(DbClosedError);
+  });
+
+  test("a transaction that never settles doesn't hold close() past closeWaitMs", async () => {
+    const { logger, lines } = recordingLogger();
+    const db = await createMemoryDb({ closeWaitMs: 30, logger });
+    await db.exec("CREATE TABLE t (x INTEGER)");
+    const hung = db.tx(async (d) => {
+      await d.run("INSERT INTO t VALUES (1)");
+      await new Promise(() => {});
+    });
+    void hung.catch(() => {});
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await race(db.close(), 1000)).toBeUndefined();
+    expect(lines.some((l) => l.level === "warn" && l.msg.includes("still queued"))).toBe(true);
   });
 });
