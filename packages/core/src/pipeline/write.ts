@@ -77,7 +77,8 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   if (event.content.length > L.maxContentLength && codePoints(event.content) > L.maxContentLength) return reject(`invalid: content is too long (max ${L.maxContentLength})`, "too-large");
 
   // ---- id / signature
-  if (!ctx.verifier.verify(event)) return reject("invalid: bad event id or signature");
+  const verified = ctx.verifier.check(event);
+  if (!(typeof verified === "boolean" ? verified : await verified)) return reject("invalid: bad event id or signature");
 
   // ---- timestamps
   const now = nowSec();

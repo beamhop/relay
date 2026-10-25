@@ -14,6 +14,7 @@ import { GroupRepo } from "./nips/nip29/repo";
 import { ContentPolicy } from "./pipeline/content-policy";
 import { MAX_VANISH_MARKERS, VANISH_KV_NAMESPACE } from "./pipeline/special-kinds";
 import { Verifier } from "./pipeline/verify";
+import { sharedVerifyPool } from "./pipeline/verify-pool";
 import { EPHEMERAL_DEDUP_SIZE, processEvent } from "./pipeline/write";
 import { Connection, type EventJson, serializeEvent } from "./protocol/connection";
 import {
@@ -86,7 +87,10 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     subs,
     conns,
     groups: undefined as unknown as GroupsService,
-    verifier: new Verifier(),
+    verifier: new Verifier(
+      undefined,
+      sharedVerifyPool(deps.config.server.verifyWorkers ?? 0, (msg, err) => logger.error(msg, err === undefined ? {} : { err: String(err) })),
+    ),
     policy: new ContentPolicy(deps.settings, logger),
     vanished: new Map(),
     ephemeralSeen: new Lru(EPHEMERAL_DEDUP_SIZE),

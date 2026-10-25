@@ -77,6 +77,28 @@ const DELETE_BATCH_MAX = 2000;
 /** target duration of one bulk-delete statement (the longest the event loop waits) */
 const DELETE_SLICE_MS = 50;
 
+/**
+ * sqlite save(): saves arriving while a transaction is running are committed together in the next one (group
+ * commit), each inside its own savepoint, at most this many per transaction. A commit (WAL frames for every page the
+ * event dirtied) costs several times the statements themselves: 16 events per transaction measured 167 → 68 µs per
+ * save. A save arriving while nothing is queued still commits alone, right away.
+ */
+export const SAVE_BATCH_MAX = 64;
+
+interface SaveJob {
+  event: NostrEvent;
+  resolve: (r: SaveResult) => void;
+  reject: (err: unknown) => void;
+  result?: SaveResult;
+  error?: unknown;
+}
+
+/** Group commit needs the sqlite Db's transaction-context probe: a wrapper without it (tests) saves one by one. */
+const batchable = (db: Db) => {
+  const probe = (db as { inTxContext?: unknown }).inTxContext;
+  return typeof probe === "boolean" && !probe;
+};
+
 const rowToEvent = (r: EventRow): NostrEvent => ({
   id: r.id,
   pubkey: r.pubkey,
@@ -119,6 +141,9 @@ export class SqlEventStore implements EventStore {
   private initialized = false;
   /** current adaptive bulk-delete batch size (see deleteSeqs) */
   private deleteBatch = DELETE_BATCH;
+  /** sqlite: saves waiting for the next group-commit transaction (see flushSaves) */
+  private saveQueue: SaveJob[] = [];
+  private flushing = false;
 
   constructor(
     private db: Db,
@@ -148,6 +173,13 @@ export class SqlEventStore implements EventStore {
    */
   async save(event: NostrEvent): Promise<SaveResult> {
     if (isEphemeral(event.kind)) return { status: "saved", message: "ephemeral event not stored" };
+    // a save from inside a transaction joins it (as before) instead of waiting for a batch behind it
+    if (this.db.dialect === "sqlite" && batchable(this.db)) {
+      return new Promise<SaveResult>((resolve, reject) => {
+        this.saveQueue.push({ event, resolve, reject });
+        if (!this.flushing) void this.flushSaves();
+      });
+    }
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.db.tx((tx) => this.saveIn(tx, event));
@@ -156,6 +188,43 @@ export class SqlEventStore implements EventStore {
         if (isUniqueViolation(err) && attempt < 3) continue;
         throw err;
       }
+    }
+  }
+
+  /**
+   * Commits the queued saves, SAVE_BATCH_MAX per transaction, until the queue is empty. A failing save is rolled back
+   * to its savepoint and rejects alone; a transaction that fails as a whole (watchdog, database closing) rejects
+   * every save in it.
+   */
+  private async flushSaves(): Promise<void> {
+    this.flushing = true;
+    try {
+      while (this.saveQueue.length) {
+        const batch = this.saveQueue.splice(0, SAVE_BATCH_MAX);
+        try {
+          await this.db.tx(async (tx) => {
+            for (const job of batch) {
+              await tx.exec("SAVEPOINT save_event");
+              try {
+                job.result = await this.saveIn(tx, job.event);
+              } catch (err) {
+                await tx.exec("ROLLBACK TO save_event");
+                job.error = err;
+              }
+              await tx.exec("RELEASE save_event");
+            }
+          });
+        } catch (err) {
+          for (const job of batch) job.reject(err);
+          continue;
+        }
+        for (const job of batch) {
+          if (job.result) job.resolve(job.result);
+          else job.reject(job.error);
+        }
+      }
+    } finally {
+      this.flushing = false;
     }
   }
 

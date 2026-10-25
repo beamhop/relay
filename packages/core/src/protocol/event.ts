@@ -10,6 +10,8 @@ export function handleEvent(ctx: RelayContext, conn: Connection, event: NostrEve
   // bounded: the per-connection queue would otherwise grow without limit when events arrive faster than they're stored
   if (conn.inflightEvents >= conn.maxInflightEvents) return conn.ok(event.id, false, "rate-limited: too many events awaiting OK; slow down");
   conn.inflightEvents++;
+  // the signature is checked on a worker while earlier EVENTs of this connection are still being processed
+  ctx.verifier.prefetch(event);
   const pending = { id: event.id, answered: false };
   conn.awaitingOk.add(pending);
   const answer = (ok: boolean, message: string) => {

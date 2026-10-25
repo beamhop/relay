@@ -5,7 +5,7 @@
  * bun:sqlite is used for SQLite; sharp/better-sqlite3 are excluded (thumbnails disabled).
  */
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
 const gen = join(root, ".build");
@@ -38,13 +38,25 @@ try {
 } catch {
   /* nothing to preload */
 }
+// an embedded entry point is found by its path relative to the entry points' common directory
+const verifyWorker = resolve(root, "../core/src/pipeline/verify-worker.ts");
+const commonDir = (a: string, b: string) => {
+  const x = a.split(sep);
+  const y = b.split(sep);
+  let i = 0;
+  while (i < x.length && x[i] === y[i]) i++;
+  return x.slice(0, i).join(sep);
+};
+const workerSpec = "./" + relative(commonDir(gen, resolve(verifyWorker, "..")), verifyWorker).split(sep).join("/");
 writeFileSync(
   join(gen, "entry.ts"),
   `${preload}import "./no-autorun.ts";
 import { files } from "./embedded-ui.ts";
 import { setEmbeddedUi } from "../src/static.ts";
+import { setVerifyWorkerPath } from "../../core/src/pipeline/verify-pool.ts";
 import { main } from "../src/cli.ts";
 setEmbeddedUi(files);
+setVerifyWorkerPath(${JSON.stringify(workerSpec)});
 main().catch((err) => {
   console.error("error: " + (err instanceof Error ? err.message : String(err)));
   process.exit(1);
@@ -54,7 +66,8 @@ main().catch((err) => {
 
 mkdirSync(resolve(outfile, ".."), { recursive: true });
 const args = [
-  "build", "--compile", join(gen, "entry.ts"), "--outfile", outfile, "--minify-syntax", "--minify-whitespace",
+  // the signature verification worker is an extra entry point (found through setVerifyWorkerPath above)
+  "build", "--compile", join(gen, "entry.ts"), verifyWorker, "--outfile", outfile, "--minify-syntax", "--minify-whitespace",
   "--external", "better-sqlite3", "--external", "sharp",
   ...(target ? ["--target", target] : []),
 ];

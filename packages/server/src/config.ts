@@ -126,6 +126,7 @@ const ENV: EnvSpec[] = [
   ["BEAMHOP_PROXY_IP_HEADER", "server.proxyIpHeader", (v) => v.trim().toLowerCase()],
   ["BEAMHOP_TRUSTED_PROXIES", "server.trustedProxies", list],
   ["BEAMHOP_SHUTDOWN_TIMEOUT_MS", "server.shutdownTimeoutMs", (v, n) => num(n, v)],
+  ["BEAMHOP_VERIFY_WORKERS", "server.verifyWorkers", (v, n) => num(n, v)],
   ["BEAMHOP_DB_DRIVER", "database.driver", (v) => v],
   ["BEAMHOP_SQLITE_PATH", "database.sqlitePath", (v) => v],
   ["BEAMHOP_DATABASE_URL", "database.postgresUrl", (v) => v],

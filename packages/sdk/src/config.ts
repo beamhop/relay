@@ -28,6 +28,13 @@ export const ConfigSchema = z.object({
        * services close in order; the process is forced out when it runs out
        */
       shutdownTimeoutMs: z.number().int().min(1_000).max(600_000).default(10_000),
+      /**
+       * worker threads verifying EVENT signatures off the event loop (0: on the main thread, the default). Spreads
+       * verification over cores when many connections publish at once (above ~5k events/s on one core). Each EVENT
+       * then waits a round trip to a worker, so a connection sending over 100 EVENTs in one go reaches the
+       * awaiting-OK limit sooner.
+       */
+      verifyWorkers: z.number().int().min(0).max(64).default(0),
     })
     .prefault({}),
   database: z
