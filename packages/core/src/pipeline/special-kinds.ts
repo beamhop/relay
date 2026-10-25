@@ -172,6 +172,7 @@ function scheduleAutoBan(ctx: RelayContext, report: NostrEvent): void {
     .then(() => maybeAutoBan(ctx, report, target))
     .catch((err) => ctx.logger.error("auto-ban check failed", { err: String(err) }));
   chains.set(target, run);
+  ctx.tasks?.track("auto-ban check", run);
   void run.then(() => {
     if (chains.get(target) === run) chains.delete(target);
   });

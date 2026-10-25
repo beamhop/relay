@@ -122,6 +122,14 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
   let otel: OtelHandle | undefined;
   const timers: ReturnType<typeof setInterval>[] = [];
   let running = false;
+  /** stats refreshes and prunes in progress: stop() awaits them before the last flush (the database closes next) */
+  const inBackground = new Set<Promise<unknown>>();
+  const background = (label: string, fn: () => Promise<unknown>) => {
+    const p = fn().catch(() => {});
+    inBackground.add(p);
+    void p.then(() => inBackground.delete(p));
+    deps.tasks?.track(label, p);
+  };
 
   async function refreshStats() {
     if (stats.inflight) return;
@@ -191,8 +199,8 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     const lag = loopLag();
     const [p50, p95, p99] = collector.latency.percentiles(t, 60_000, [50, 95, 99]);
 
-    if (t - stats.at >= statsMs) void refreshStats().catch(() => {});
-    else if (stats.mediaDirty && t - stats.mediaAt >= statsDirtyMs) void refreshMedia().catch(() => {});
+    if (t - stats.at >= statsMs) background("metrics stats", refreshStats);
+    else if (stats.mediaDirty && t - stats.mediaAt >= statsDirtyMs) background("metrics media stats", refreshMedia);
 
     snap = {
       at: Math.floor(t / 1000),
@@ -278,11 +286,11 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       }
       if (opts.timers === false) return;
       lagMonitor?.start();
-      void refreshStats().catch(() => {});
-      void prune();
+      background("metrics stats", refreshStats);
+      background("metrics prune", prune);
       every(tickMs, tick);
       every(flushMs, flush);
-      every(DAY_MS, prune);
+      every(DAY_MS, () => background("metrics prune", prune));
     },
     async stop() {
       if (!running) return;
@@ -291,6 +299,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       lagMonitor?.stop();
       collector.detach();
       for (const u of statsUnsubs.splice(0)) u();
+      await Promise.all(inBackground);
       collector.roll(now());
       rollup.closeCurrent(Math.floor(now() / 1000));
       await flush();

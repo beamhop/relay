@@ -5,6 +5,7 @@ import type { Stores } from "./stores";
 import type { EventBus, EventSource } from "./bus";
 import type { HookRegistry } from "./hooks";
 import type { Logger } from "./logger";
+import type { StopContext, TaskTracker } from "./lifecycle";
 
 /** Shared dependencies passed to every service factory. */
 export interface CoreDeps {
@@ -14,6 +15,11 @@ export interface CoreDeps {
   hooks: HookRegistry;
   bus: EventBus;
   logger: Logger;
+  /**
+   * Background work started off request paths (report filing, pushes, prunes): shutdown awaits it, bounded, before
+   * the database closes. The server passes one shared tracker; without it a service keeps its own.
+   */
+  tasks?: TaskTracker;
 }
 
 // ---------------------------------------------------------------- relay (packages/core)
@@ -84,7 +90,13 @@ export interface RelayEngine {
   };
   /** starts background jobs (expiration purge, retention, etc.) */
   start(): Promise<void>;
-  stop(): Promise<void>;
+  /**
+   * Shutdown, first phase: refuse new connections and messages, answer the EVENTs already queued, let running jobs
+   * finish (they are asked to stop at their next safe point). Returns by `ctx.deadline`. Optional for test doubles.
+   */
+  drain?(ctx: StopContext): Promise<void>;
+  /** Closes every connection (1001): EVENTs still unanswered get OK false first. */
+  stop(ctx?: StopContext): Promise<void>;
 }
 export type CreateRelay = (deps: CoreDeps) => Promise<RelayEngine>;
 
@@ -126,6 +138,9 @@ export interface BlossomService {
   unblock?(sha256: string, actor: string): Promise<boolean>;
   /** Blocked hashes, newest first. `blockedBy`: pubkey of the admin who blocked it (null when unknown). */
   blocklist?(): Promise<{ sha256: string; reason: string; createdAt: number; blockedBy?: string | null }[]>;
+  /** Shutdown: refuse new uploads/mirrors (503), stop background upkeep, await it until `ctx.deadline`. */
+  drain?(ctx: StopContext): Promise<void>;
+  stop?(ctx: StopContext): Promise<void>;
 }
 export type CreateBlossom = (deps: CoreDeps) => Promise<BlossomService>;
 
@@ -219,5 +234,8 @@ export interface AdminApi {
   app: Hono;
   /** NIP-86 handler: server routes POST / with Content-Type application/nostr+json+rpc here (`env.ip`: client IP, for audit) */
   nip86(req: Request, env?: { ip?: string }): Promise<Response>;
+  /** Shutdown: end the live (SSE) streams, drop pending push digests, await pushes being sent until `ctx.deadline`. */
+  drain?(ctx: StopContext): Promise<void>;
+  stop?(ctx: StopContext): Promise<void>;
 }
 export type CreateAdminApi = (deps: AdminApiDeps) => Promise<AdminApi>;

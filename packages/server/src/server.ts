@@ -6,6 +6,9 @@ import { wsUrlFrom } from "./landing";
 
 export type { RunningServer, ServeOptions };
 
+/** The graceful shutdown plans to be done this long before the force-exit timer fires. */
+const FORCE_EXIT_MARGIN_MS = 500;
+
 /** Starts the HTTP/WebSocket listener with the best adapter for the current runtime. */
 export async function serve(beamhop: Beamhop, opts: ServeOptions & { runtime?: "bun" | "node" } = {}): Promise<RunningServer> {
   const useBun = (opts.runtime ?? (isBun ? "bun" : "node")) === "bun";
@@ -126,14 +129,14 @@ export async function startServer(
   const shutdown = (reason = "shutdown") =>
     (shuttingDown ??= (async () => {
       log.info(`${reason}: shutting down gracefully…`);
+      // the steps race their own deadlines inside this budget; the timer is the backstop for one that ignores them
+      const totalMs = beamhop.config.server.shutdownTimeoutMs;
       const force = setTimeout(() => {
         log.error("graceful shutdown timed out, forcing exit");
         process.exit(1);
-      }, 10_000);
+      }, totalMs);
       force.unref?.();
-      server.stopAccepting();
-      await beamhop.stop();
-      await server.stop();
+      await beamhop.stop({ reason, server, timeoutMs: Math.max(0, totalMs - FORCE_EXIT_MARGIN_MS) });
       clearTimeout(force);
       uninstall?.();
       log.info("bye");

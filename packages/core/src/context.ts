@@ -37,6 +37,8 @@ export interface RelayContext extends CoreDeps {
   /** relay-wide read throttling: search/query concurrency, materialized result memory */
   reads: ReadLimits;
   s(): RuntimeSettings;
+  /** shutting down past the drain deadline: EVENTs still queued are answered OK false instead of processed */
+  refuseQueuedEvents?: boolean;
   /** Fans out an accepted event to matching live subscriptions; returns recipient count. */
   broadcast(event: NostrEvent): number;
   /** Closes matching connections with a NOTICE (see RelayEngine.disconnect); returns how many. */

@@ -17,7 +17,9 @@ import type {
   RelayEngine,
   SettingsService,
   Stores,
+  StopContext,
 } from "@beamhop/sdk";
+import { settleBy } from "@beamhop/sdk";
 import { discoverPlugins, importSpecifier, type DiscoveredPlugin } from "./discovery";
 import { fileBody } from "../static";
 
@@ -100,6 +102,8 @@ const noop = () => {};
 export interface ServerPluginManager extends PluginManager {
   /** Discover + load all plugins and enable the ones marked enabled. */
   start(): Promise<void>;
+  /** Shutdown, first phase: plugin jobs stop being scheduled; runs in progress are awaited until `ctx.deadline`. */
+  drain(ctx: StopContext): Promise<void>;
   /** Teardown all running plugins without changing their persisted enabled state. */
   stop(): Promise<void>;
   /** Discover + load plugins and apply their database migrations without enabling them. Returns how many migrated. */
@@ -522,6 +526,18 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
         n++;
       }
       return n;
+    },
+
+    async drain(ctx) {
+      // teardown (stop) waits for runs too, but by then the relay is closed: let them finish while it still serves
+      const runs: Promise<void>[] = [];
+      for (const e of entries.values()) {
+        const act = e.activation;
+        if (!act) continue;
+        for (const stop of act.jobs.splice(0)) stop();
+        runs.push(...act.running);
+      }
+      if (runs.length && (await settleBy(ctx.signal, Promise.all(runs))).status === "timeout") log.warn("plugin jobs still running at the shutdown deadline");
     },
 
     async stop() {

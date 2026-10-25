@@ -14,17 +14,18 @@ const GROUP_META = [39000, 39001, 39002, 39003];
 type CapMemo = Map<string, { stored: number; eventCount: number }>;
 const memos = new WeakMap<EventStore, Map<string, CapMemo>>();
 
-/** Applies settings.retention rules. Returns number of deleted events. */
-export async function runRetention(ctx: RelayContext): Promise<number> {
+/** Applies settings.retention rules. Returns number of deleted events. `signal` (shutdown) stops it between rules. */
+export async function runRetention(ctx: RelayContext, signal?: AbortSignal): Promise<number> {
   let total = 0;
   for (const rule of ctx.s().retention.rules) {
+    if (signal?.aborted) break;
     if (!rule.enabled) continue;
     const exempt = new Set(rule.exemptPubkeys);
     // never let retention eat relay-signed NIP-29 state
     if (!rule.kinds?.length || rule.kinds.some((k) => GROUP_META.includes(k))) exempt.add(ctx.key.pubkey);
     try {
       if (rule.maxAgeDays && rule.maxAgeDays > 0) total += await purgeOlderThan(ctx, rule, exempt);
-      if (rule.maxPerPubkey && rule.maxPerPubkey > 0) total += await capPerPubkey(ctx, rule, exempt);
+      if (rule.maxPerPubkey && rule.maxPerPubkey > 0) total += await capPerPubkey(ctx, rule, exempt, signal);
     } catch (err) {
       ctx.logger.error("retention rule failed", { rule: rule.id, err: String(err) });
     }
@@ -48,7 +49,7 @@ async function purgeOlderThan(ctx: RelayContext, rule: RetentionRule, exempt: Se
  * over the cap, paged by pubkey (stable while counts change). The store counts what each one really has stored and
  * trims it in SQL; authors found within the cap are skipped on later runs until they could have crossed it.
  */
-async function capPerPubkey(ctx: RelayContext, rule: RetentionRule, exempt: Set<string>): Promise<number> {
+async function capPerPubkey(ctx: RelayContext, rule: RetentionRule, exempt: Set<string>, signal?: AbortSignal): Promise<number> {
   const max = rule.maxPerPubkey!;
   const kinds = rule.kinds?.length ? [...rule.kinds] : undefined;
   const memo = capMemo(ctx.stores.events, `${rule.id}\u0000${max}\u0000${kinds?.join(",") ?? ""}`);
@@ -56,10 +57,12 @@ async function capPerPubkey(ctx: RelayContext, rule: RetentionRule, exempt: Set<
   let after: string | undefined;
   const seen = new Set<string>();
   for (;;) {
+    if (signal?.aborted) return deleted;
     const { items } = await ctx.stores.users.list({ sort: "pubkey", minEventCount: max, afterPubkey: after, limit: PAGE });
     if (!items.length) break;
     after = items[items.length - 1].pubkey;
     for (const u of items) {
+      if (signal?.aborted) return deleted;
       seen.add(u.pubkey);
       if (exempt.has(u.pubkey)) continue;
       const known = memo.get(u.pubkey);

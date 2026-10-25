@@ -7,6 +7,7 @@ export * from "./runtime";
 export * from "./bus";
 export * from "./hooks";
 export * from "./services";
+export * from "./lifecycle";
 export * from "./plugin";
 export * from "./ui-contract";
 export * from "./admin-contract";

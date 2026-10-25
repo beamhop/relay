@@ -21,6 +21,13 @@ function wsRoundtrip(url: string, headers?: Record<string, string>): Promise<str
   });
 }
 
+// @hono/node-server swaps in its own global Request/Response; Bun.serve in later test files needs the native ones
+const { Request: NativeRequest, Response: NativeResponse } = globalThis;
+afterAll(() => {
+  Object.defineProperty(globalThis, "Request", { value: NativeRequest });
+  Object.defineProperty(globalThis, "Response", { value: NativeResponse });
+});
+
 for (const runtime of ["bun", "node"] as const) {
   describe(`${runtime} runtime adapter`, () => {
     let bh: Beamhop;

@@ -19,7 +19,7 @@ export interface GapRelay {
   dir: string;
   runtime: "bun" | "node";
   owner: { sk: Uint8Array; pubkey: string };
-  /** graceful stop (same order as the CLI): stop accepting → beamhop.stop → close sockets. Keeps the dir unless `rm`. */
+  /** graceful stop, as the CLI does it (drain → relay → plugins → services → db → sockets). Keeps the dir unless `rm`. */
   stop(rm?: boolean): Promise<void>;
 }
 
@@ -74,9 +74,7 @@ export async function bootGap(opts: GapBootOptions = {}): Promise<GapRelay> {
     async stop(rm = true) {
       if (!stopped) {
         stopped = true;
-        server.stopAccepting();
-        await beamhop.stop();
-        await server.stop();
+        await beamhop.stop({ server });
       }
       if (rm) rmSync(dir, { recursive: true, force: true });
     },

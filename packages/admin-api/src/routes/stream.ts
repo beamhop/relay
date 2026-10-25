@@ -35,7 +35,8 @@ interface OpenStream {
   close: () => void;
 }
 
-export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
+/** Returns `closeAll` for shutdown: ends every open stream and refuses new ones (503). */
+export function registerStreamRoutes(app: AdminApp, ctx: ApiContext): { closeAll(): void } {
   const { metrics, bus } = ctx.deps;
   const snapshotMs = ctx.opts.snapshotIntervalMs ?? 2000;
   const heartbeatMs = ctx.opts.heartbeatMs ?? 15_000;
@@ -45,6 +46,7 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
   // check per round, and a round only starts once the previous one is done
   const open = new Set<OpenStream>();
   const perAdmin = new Map<string, number>();
+  let closing = false;
   let authTimer: ReturnType<typeof setInterval> | undefined;
   let checking = false;
   const recheck = async () => {
@@ -83,6 +85,7 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
   };
 
   app.get("/stream", requirePermission("dashboard.view"), (c) => {
+    if (closing) throw new HttpError(503, "server is shutting down", "shutting_down");
     const p = principalOf(c);
     const wantEvents = ["1", "true"].includes(c.req.query("events") ?? "");
     if (wantEvents && !p.permissions.has("content.view")) throw forbidden("missing permission: content.view", "missing_permission");
@@ -219,4 +222,11 @@ export function registerStreamRoutes(app: AdminApp, ctx: ApiContext) {
       },
     );
   });
+
+  return {
+    closeAll() {
+      closing = true;
+      for (const s of [...open]) s.close();
+    },
+  };
 }
