@@ -23,7 +23,7 @@ const Settings = z.object({
 });
 type HelloSettings = z.infer<typeof Settings>;
 
-let teardownFn: (() => void) | undefined;
+let teardownFn: (() => Promise<void>) | undefined;
 
 const plugin: BeamhopPlugin<typeof Settings> = {
   name: "hello",
@@ -53,21 +53,35 @@ const plugin: BeamhopPlugin<typeof Settings> = {
     const rejectedCounter = ctx.metrics.counter("hello_rejected_total", "events rejected by the hello plugin");
     const seenGauge = ctx.metrics.gauge("hello_events_seen", "accepted events observed since the plugin started");
 
+    // rejections are buffered in memory and written in one transaction by the flush job: a flood of rejected
+    // events doesn't turn into a database write per event on the publish path
+    type Rejection = { id: string; pubkey: string; at: number; reason: string };
+    let pending: Rejection[] = [];
+    const flush = async () => {
+      if (!pending.length) return;
+      const batch = pending;
+      pending = [];
+      await db.tx(async (tx) => {
+        for (const r of batch) {
+          await tx.run("INSERT INTO plugin_hello_rejections (id, pubkey, at, reason) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING", [r.id, r.pubkey, r.at, r.reason]);
+        }
+        await tx.run(
+          "DELETE FROM plugin_hello_rejections WHERE id NOT IN (SELECT id FROM plugin_hello_rejections ORDER BY at DESC, id DESC LIMIT ?)",
+          [MAX_REJECTION_ROWS],
+        );
+      });
+    };
+    const stopFlush = ctx.jobs.every("flush-rejections", 5_000, flush);
+
     // --- write hook: reject a configurable word
-    ctx.hooks.onWrite(async (event: NostrEvent) => {
+    ctx.hooks.onWrite((event: NostrEvent) => {
       const word = settings.get().blockedWord.trim().toLowerCase();
       if (!word || !event.content.toLowerCase().includes(word)) return undefined;
       rejected++;
       rejectedCounter.add(1, { kind: String(event.kind) });
-      await db.run("INSERT INTO plugin_hello_rejections (id, pubkey, at, reason) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING", [
-        event.id, event.pubkey, Math.floor(Date.now() / 1000), `contains "${word}"`,
-      ]);
-      if (rejected % 50 === 1) {
-        await db.run(
-          "DELETE FROM plugin_hello_rejections WHERE id NOT IN (SELECT id FROM plugin_hello_rejections ORDER BY at DESC, id DESC LIMIT ?)",
-          [MAX_REJECTION_ROWS],
-        );
-      }
+      // only the newest MAX_REJECTION_ROWS would survive the prune anyway
+      if (pending.length >= MAX_REJECTION_ROWS) pending.shift();
+      pending.push({ id: event.id, pubkey: event.pubkey, at: Math.floor(Date.now() / 1000), reason: `contains "${word}"` });
       return { action: "reject", reason: `blocked: contains a forbidden word` };
     });
 
@@ -93,12 +107,14 @@ const plugin: BeamhopPlugin<typeof Settings> = {
 
     // --- admin routes: /admin/api/plugins/x/hello/* (session + RBAC applied by admin-api)
     ctx.adminHttp.get("/stats", async (c) => {
+      await flush();
       const recent = await db.all("SELECT id, pubkey, at, reason FROM plugin_hello_rejections ORDER BY at DESC LIMIT 20");
       return c.json({ seen, rejected, recent });
     });
     ctx.adminHttp.post("/reset", async (c) => {
       seen = 0;
       rejected = 0;
+      pending = [];
       await db.run("DELETE FROM plugin_hello_rejections");
       await ctx.audit.record({ actor: `plugin:${ctx.name}`, action: "hello.reset", target: null, details: {}, ip: null });
       return c.json({ ok: true });
@@ -113,17 +129,21 @@ const plugin: BeamhopPlugin<typeof Settings> = {
       logger.info("settings updated", { blockedWord: s.blockedWord });
     });
 
-    teardownFn = () => {
+    teardownFn = async () => {
       offSettings();
       stopJob();
+      stopFlush();
+      // write what is still buffered (the host awaits teardown before closing the database)
+      await flush().catch((err) => logger.warn("final flush of rejections failed", { error: String(err) }));
     };
     logger.info(`hello plugin ready (blocked word: "${settings.get().blockedWord}")`);
   },
 
-  teardown() {
+  async teardown() {
     // hooks/routes/jobs/listeners are removed by the host; this is for anything else you created
-    teardownFn?.();
+    const fn = teardownFn;
     teardownFn = undefined;
+    await fn?.();
   },
 };
 
