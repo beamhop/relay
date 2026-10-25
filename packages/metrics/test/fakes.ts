@@ -35,7 +35,8 @@ export function fakeRelay(conns: Partial<ConnectionSummary>[] = []) {
 }
 
 export function fakeBlossom(count = 0, bytes = 0) {
-  return { stats: async () => ({ count, bytes, byType: [] }) } as unknown as BlossomService;
+  const blossom = { calls: 0, stats: async () => (blossom.calls++, { count, bytes, byType: [] }) };
+  return blossom as unknown as BlossomService & { calls: number };
 }
 
 export function fakeProcess() {
