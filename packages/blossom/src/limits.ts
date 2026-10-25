@@ -92,8 +92,11 @@ export class ByteBudget {
   fits(bytes: number): boolean {
     return this.used + bytes <= this.capacity();
   }
-  /** A per-request handle: `take` reserves more (false when the budget is exhausted), `release` gives all of it back. */
-  lease(): { take(bytes: number): boolean; release(): void } {
+  /**
+   * A per-request handle: `take` reserves more (false when the budget is exhausted), `give` returns part of it,
+   * `release` gives all of it back.
+   */
+  lease(): { take(bytes: number): boolean; give(bytes: number): void; release(): void } {
     let held = 0;
     return {
       take: (bytes) => {
@@ -101,6 +104,11 @@ export class ByteBudget {
         this.used += bytes;
         held += bytes;
         return true;
+      },
+      give: (bytes) => {
+        const n = Math.min(Math.max(0, bytes), held);
+        this.used -= n;
+        held -= n;
       },
       release: () => {
         this.used -= held;

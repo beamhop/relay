@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { AuthError, authenticate, type AuthVerb, type BlossomAuth } from "./auth";
 import { SHA256_RE } from "./driver";
-import { BlossomError, clientIp, CORS_HEADERS, errorResponse, jsonResponse, parseRange, readLimited, withCors } from "./http";
+import { BlossomError, CLIENT_CLOSED, clientIp, CORS_HEADERS, errorResponse, jsonResponse, parseRange, readLimited, withCors } from "./http";
 import { blobCsp, extFromMime, normalizeMime, isMimeAllowed, isInlineSafe, SCRIPT_DESTINATIONS, servedType } from "./mime";
 import { fetchRemote } from "./mirror";
 import type { BlossomCore } from "./service";
@@ -37,8 +37,16 @@ export function createRoutes(core: BlossomCore): Hono {
       try {
         return withCors(await fn(c));
       } catch (err) {
-        if (err instanceof BlossomError) return errorResponse(err.status, err.reason);
+        if (err instanceof BlossomError) {
+          if (err.status === CLIENT_CLOSED) core.log.debug("client closed the request", { path: c.req.path });
+          return errorResponse(err.status, err.reason);
+        }
         if (err instanceof AuthError) return errorResponse(err.status, err.message);
+        // the client went away mid-request: nobody gets this answer, and it's not a server fault
+        if (c.req.raw.signal?.aborted) {
+          core.log.debug("client closed the request", { path: c.req.path, error: String(err) });
+          return errorResponse(CLIENT_CLOSED, "client closed request");
+        }
         core.log.error("blossom request failed", { path: c.req.path, error: String((err as Error)?.stack ?? err) });
         return errorResponse(500, "internal error");
       }
@@ -130,12 +138,13 @@ export function createRoutes(core: BlossomCore): Hono {
       if (notModified(c, etag)) return new Response(null, { status: 304, headers });
       const obj = await core.driver.getThumbnail(sha256, { hidden: !isPublic });
       if (!obj) throw new BlossomError(404, "thumbnail not found");
-      headers.set("Content-Length", String(obj.size));
+      // size unknown (a chunked S3 response): sent chunked
+      if (obj.size !== undefined) headers.set("Content-Length", String(obj.size));
       if (head) {
         await obj.body.cancel();
         return new Response(null, { status: 200, headers });
       }
-      core.deps.bus.emit("blob.served", { sha256, size: obj.size, ip: clientIp(c.req.raw, trustProxy, c.env) });
+      core.deps.bus.emit("blob.served", { sha256, size: obj.size ?? 0, ip: clientIp(c.req.raw, trustProxy, c.env) });
       return new Response(obj.body, { status: 200, headers });
     }),
   );
@@ -181,12 +190,14 @@ export function createRoutes(core: BlossomCore): Hono {
       }
       const obj = await core.driver.get(sha256, range, { hidden: !isPublic });
       if (!obj) throw new BlossomError(404, "blob data missing");
+      // the row knows the size when the driver couldn't tell (S3 answer without Content-Length)
+      const size = obj.size ?? row.size;
       let status = 200;
-      let length = obj.size;
+      let length = size;
       if (obj.range) {
         status = 206;
         length = obj.range.end - obj.range.start + 1;
-        headers.set("Content-Range", `bytes ${obj.range.start}-${obj.range.end}/${obj.size}`);
+        headers.set("Content-Range", `bytes ${obj.range.start}-${obj.range.end}/${size}`);
       }
       headers.set("Content-Length", String(length));
       core.deps.bus.emit("blob.served", { sha256, size: length, ip: clientIp(c.req.raw, trustProxy, c.env) });
@@ -211,8 +222,8 @@ export function createRoutes(core: BlossomCore): Hono {
       // it again. Keyed by token *and* blob so one token listing several `x` tags still deletes each of them once.
       const tokenKey = `${a.event.id}:${sha256}`;
       if (await core.isDeleteTokenUsed(tokenKey)) throw new BlossomError(401, "auth token already used");
-      if (!(await core.releaseOwnership(sha256, a.pubkey, a.pubkey, a.event.created_at))) throw new BlossomError(403, "you do not own this blob");
-      await core.markDeleteTokenUsed(tokenKey, a.expiration * 1000);
+      const token = { key: tokenKey, expiresAt: a.expiration * 1000 };
+      if (!(await core.releaseOwnership(sha256, a.pubkey, a.pubkey, a.event.created_at, token))) throw new BlossomError(403, "you do not own this blob");
       return new Response(null, { status: 200 });
     }),
   );
@@ -272,7 +283,18 @@ export function createRoutes(core: BlossomCore): Hono {
         // `strip` only takes effect when the operator opts in via `settings.blossom.stripExif` (deviates from BUD-02).
         return core.withUploadSlot(() =>
           core.ingest(
-            { data, sha256, pubkey: a.pubkey, tokenCreatedAt: a.event.created_at, declaredType: c.req.header("content-type"), ip, strip: true },
+            {
+              data,
+              sha256,
+              pubkey: a.pubkey,
+              tokenCreatedAt: a.event.created_at,
+              declaredType: c.req.header("content-type"),
+              ip,
+              strip: true,
+              // X-SHA-256 was checked above and matches the body
+              checked: shaHeader ? { refused: true, token: true } : undefined,
+              reserve: limits.reserve,
+            },
             user,
           ),
         );
@@ -338,7 +360,8 @@ export function createRoutes(core: BlossomCore): Hono {
           read = await readLimited(res.body, Math.min(max, room), len, limits);
         } catch (err) {
           if (err instanceof BlossomError && err.status === 413 && room < max) throw quotaError();
-          if (err instanceof BlossomError) throw err.status === 408 ? new BlossomError(504, "mirror source too slow") : err;
+          // a body that broke off is the origin's (or the timeout's) doing here, not our client's
+          if (err instanceof BlossomError && err.status !== CLIENT_CLOSED) throw err.status === 408 ? new BlossomError(504, "mirror source too slow") : err;
           if (signal.aborted) throw new BlossomError(504, "mirror fetch timed out");
           throw new BlossomError(502, "mirror download failed");
         }
@@ -356,6 +379,8 @@ export function createRoutes(core: BlossomCore): Hono {
               preferDeclaredType: true,
               ip,
               strip: false,
+              // every hash the token names was checked above (not the token's currency: that held for one of them)
+              checked: { refused: true },
             },
             user,
           ),
@@ -370,6 +395,7 @@ export function createRoutes(core: BlossomCore): Hono {
     LIST_PATH,
     wrap(async (c) => {
       const pubkey = c.req.param("pubkey")!;
+      core.assertListRate(clientIp(c.req.raw, trustProxy, c.env));
       // a bad token still gets the public listing
       const a = optionalAuth(c, "list");
       const includeUnapproved = !!a && (a.pubkey === pubkey || (await core.isStaff(a.pubkey)));

@@ -91,8 +91,19 @@ export async function createImageProcessor(
   const sharp: SharpFactory | undefined = loaded && ((input, o) => loaded(input, { limitInputPixels: maxPixels, ...o }));
 
   type Meta = Awaited<ReturnType<SharpInstance["metadata"]>>;
+  /**
+   * Header reads by buffer: an upload's bytes go through strip and then thumbnail, and when stripping leaves them
+   * as they are (the usual case) the thumbnail reuses the first read. Weak, so it holds nothing past the upload.
+   */
+  const metaCache = new WeakMap<Uint8Array, Meta | undefined>();
   /** header-only read; undefined when the declared size is over the decode limit */
   async function decodableMeta(data: Uint8Array): Promise<Meta | undefined> {
+    if (metaCache.has(data)) return metaCache.get(data);
+    const meta = await readMeta(data);
+    metaCache.set(data, meta);
+    return meta;
+  }
+  async function readMeta(data: Uint8Array): Promise<Meta | undefined> {
     const meta = await sharp!(data).metadata();
     const w = meta.width ?? 0;
     const h = meta.pageHeight && (meta.pages ?? 1) > 1 ? meta.pageHeight * (meta.pages ?? 1) : (meta.height ?? 0);
