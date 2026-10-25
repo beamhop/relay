@@ -19,6 +19,8 @@ import { Connection, type EventJson, serializeEvent } from "./protocol/connectio
 import {
   authReadDenied,
   cancelSub,
+  CONN_RATE_BUCKETS,
+  connBucket,
   deliverLive,
   dropAllNegSessions,
   handleAuth,
@@ -141,7 +143,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     for (const sub of [...conn.subs.values()]) cancelSub(ctx, sub);
     dropAllNegSessions(ctx, conn);
     conns.delete(conn.id);
-    for (const b of ["req", "search", "msg", "auth", "neg"]) ctx.rate.delete(`${b}:conn:${conn.id}`);
+    for (const b of CONN_RATE_BUCKETS) ctx.rate.delete(connBucket(b, conn.id));
     for (const k of countKeys(conn)) {
       const n = (ipCounts.get(k) ?? 1) - 1;
       if (n <= 0) ipCounts.delete(k);
@@ -170,7 +172,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   function overLimit(conn: Connection): boolean {
     if (conn.trusted) return false;
     if (
-      ctx.rate.take(`msg:conn:${conn.id}`, conn.messagesPerMinute) &&
+      ctx.rate.take(connBucket("msg", conn.id), conn.messagesPerMinute) &&
       (conn.ownMessageLimit || ctx.rate.take(`msg:ip:${conn.ipKey}`, MESSAGES_PER_MINUTE * MESSAGE_IP_FACTOR))
     ) {
       return false;

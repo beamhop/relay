@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { type EventSource, type NostrEvent, type RejectCode, type UserRecord, type WriteContext, isEphemeral, nowSec } from "@beamhop/sdk";
+import { IP_RATE_FACTOR } from "../constants";
 import type { RelayContext } from "../context";
 import { expirationOf } from "../nips/nip40";
 import { GroupConflict, GroupDuplicate } from "../nips/nip29/groups";
@@ -23,8 +24,6 @@ export interface WriteResult {
   status?: "saved" | "replaced" | "ephemeral" | "duplicate" | "stale" | "shadow";
 }
 
-/** IP buckets are looser than pubkey buckets (NAT, many users behind one IP). */
-const IP_RATE_FACTOR = 4;
 /**
  * NIP-62 requests to vanish per client address per minute. They skip the event buckets (a banned or flooding user
  * must still be able to vanish) but each one deletes, so they get their own small bucket.
