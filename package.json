@@ -14,7 +14,7 @@
     "build:node": "bun run --filter @beamhop/server build:node",
     "build:binary": "bun run --filter @beamhop/server build:binary",
     "test": "bun test",
-    "typecheck": "(tsc -b --noEmit || tsc --noEmit -p tsconfig.json) && tsc --noEmit -p packages/admin-ui/tsconfig.json && tsc --noEmit -p plugins/hello/ui/tsconfig.json && tsc --noEmit -p e2e/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/admin-ui/tsconfig.json && tsc --noEmit -p packages/admin-ui/tsconfig.test.json && tsc --noEmit -p plugins/hello/ui/tsconfig.json && tsc --noEmit -p e2e/tsconfig.json",
     "start": "bun packages/server/src/cli.ts start",
     "beamhop": "bun packages/server/src/cli.ts",
     "build:plugins": "bun run --filter 'beamhop-plugin-*' build:ui",
