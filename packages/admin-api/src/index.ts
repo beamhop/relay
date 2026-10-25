@@ -11,7 +11,7 @@ import { BannedEventService } from "./services/banned-events";
 import { CredentialService } from "./services/credentials";
 import { ModerationService } from "./services/moderation";
 import { ProfileService } from "./services/profiles";
-import { KeyedPushCoalescer, PushCoalescer, PushService } from "./services/push";
+import { deleteSessionDevices, KeyedPushCoalescer, PushCoalescer, PushService } from "./services/push";
 import { ReplayGuard } from "./services/replay";
 import { ReportService } from "./services/reports";
 import { RoleService } from "./services/roles";
@@ -38,7 +38,8 @@ import { registerPushRoutes } from "./routes/push";
 import { createNip86Handler } from "./routes/nip86";
 
 export type { AdminApiOptions, AdminEnv, Principal } from "./context";
-export { ADMIN_MIGRATIONS } from "./db";
+export { ADMIN_MIGRATIONS, migrateAdmin } from "./db";
+export { adminAccess, revokeAdminAccess, setAdminPassword } from "./services/moderation";
 export { hashPassword, verifyPassword } from "./util/password";
 export type { ScryptParams } from "./util/password";
 
@@ -61,8 +62,10 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
   const sessions = new SessionService(deps.stores.db, nowMs);
   // a session that simply expired takes the push devices it registered with it, like a logout does
   sessions.onExpired = (id) => (id ? push.unsubscribeSession(id) : push.pruneEndedSessions());
+  // sessions ended on purpose (logout, password change, revoked access) take their push devices with them
+  sessions.onEnded = (ended) => deleteSessionDevices(deps.stores.db, ended);
   const credentials = new CredentialService(deps.stores.db, nowSec);
-  const moderation = new ModerationService(deps, users, sessions, push, credentials);
+  const moderation = new ModerationService(deps, users, sessions, credentials);
   const reports = new ReportService(deps, profiles, users, moderation, nowSec);
   const bannedEvents = new BannedEventService(deps.stores.db, roles, nowSec, { nowMs, ttlMs: opts.bannedEventsTtlMs ?? 5000, logger });
 
