@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { BlossomService, MediaBulkResult, MediaStats, MediaStatusRequest } from "@beamhop/sdk";
+import { blobCsp, isInlineSafe, SCRIPT_DESTINATIONS, servedType } from "@beamhop/sdk/media-policy";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, forbidden, HttpError, notFound } from "../errors";
@@ -21,26 +22,6 @@ const ListQuery = z.object({
 const BulkSchema = z.object({ sha256s: z.array(SHA).min(1).max(1000), action: z.enum(["approve", "block", "delete"]) });
 const StatusSchema = z.object({ status: STATUS });
 true satisfies Same<z.output<typeof StatusSchema>, MediaStatusRequest>;
-
-/**
- * JavaScript MIME types (WHATWG MIME Sniffing "JavaScript MIME type essence match"). The admin origin allows
- * `script-src 'self'`, so a blob served from it under one of these could run as the panel's own code: they are served
- * as text/plain, which browsers refuse to execute (with nosniff).
- */
-const JS_MIME =
-  /^(?:application\/(?:x-)?(?:ecma|java)script|text\/(?:x-)?(?:ecma|java)script|text\/javascript1\.[0-5]|text\/jscript|text\/livescript)$/;
-/** Sec-Fetch-Dest values of requests that would execute (or transform with) the response: never answered with a blob */
-const SCRIPT_DESTINATIONS = new Set(["script", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet", "xslt"]);
-
-/**
- * Same rule as blossom's isInlineSafe (admin-api can't import @beamhop/blossom): passive media, plain text and PDF
- * may render inline on the admin origin; anything else — SVG, HTML, any XML type, unknown — downloads.
- */
-function isInlineSafe(mime: string): boolean {
-  if (mime.includes("xml")) return false;
-  const top = mime.split("/")[0];
-  return top === "image" || top === "video" || top === "audio" || mime === "text/plain" || mime === "application/pdf";
-}
 
 export function registerMediaRoutes(app: AdminApp, ctx: ApiContext) {
   const blossom = (): BlossomService => {
@@ -100,14 +81,14 @@ export function registerMediaRoutes(app: AdminApp, ctx: ApiContext) {
     if (!blob) throw notFound("blob not found");
     const mime = blob.type.split(";")[0].trim().toLowerCase();
     const inline = isInlineSafe(mime);
+    // same rules as Blossom's public routes: script and wasm types never go out runnable from the admin origin
+    const served = servedType(mime);
     const headers: Record<string, string> = {
-      "content-type": JS_MIME.test(mime) ? "text/plain; charset=utf-8" : blob.type,
+      "content-type": served === mime ? blob.type : served,
       "content-length": String(blob.size),
       "cache-control": "private, max-age=300",
       "x-content-type-options": "nosniff",
-      // Chromium won't play a directly-opened media document under `sandbox`; default-src 'none' still blocks scripts.
-      // XML "media" (`video/x+xml`, `audio/xml`) renders as a document, so it stays sandboxed like everything else.
-      "content-security-policy": /^(audio|video)\//.test(mime) && inline ? "default-src 'none'; media-src 'self'" : "default-src 'none'; sandbox",
+      "content-security-policy": blobCsp(mime),
     };
     if (!inline) headers["content-disposition"] = `attachment; filename="${s}"`;
     return new Response(blob.body, { headers });

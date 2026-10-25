@@ -635,10 +635,13 @@ describe("admin raw media can't become script", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
-    for (const type of ["application/javascript", "application/x-ecmascript", "text/jscript", "TEXT/JavaScript; charset=utf-8"]) {
+    for (const type of ["application/javascript", "application/x-ecmascript", "text/jscript", "TEXT/JavaScript; charset=utf-8", "application/node"]) {
       h.blossom!.blobs.get(js)!.type = type;
       expect((await h.asKey(h.owner, `/media/${js}/raw`)).headers.get("content-type")).toBe("text/plain; charset=utf-8");
     }
+    // same served type as Blossom: WebAssembly goes out as opaque bytes
+    h.blossom!.blobs.get(js)!.type = "application/wasm";
+    expect((await h.asKey(h.owner, `/media/${js}/raw`)).headers.get("content-type")).toBe("application/octet-stream");
     for (const dest of ["script", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet", "xslt"]) {
       const r = await h.asKey(h.owner, `/media/${png}/raw`, { headers: { "sec-fetch-dest": dest } });
       expect(r.status).toBe(403);

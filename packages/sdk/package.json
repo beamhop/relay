@@ -10,6 +10,7 @@
     "./admin-contract": "./src/admin-contract.ts",
     "./ui-contract": "./src/ui-contract.ts",
     "./config": "./src/config.ts",
+    "./media-policy": "./src/media-policy.ts",
     "./regex-safety": "./src/regex-safety.ts",
     "./search": "./src/search.ts",
     "./secrets": "./src/secrets.ts"
