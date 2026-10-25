@@ -27,8 +27,9 @@ export function deepMerge<T>(base: T, patch: unknown): T {
 
 /**
  * Runtime settings backed by kv("settings","runtime"). Values are cached in memory; `update()`
- * validates with RuntimeSettingsSchema (throws ZodError on invalid input), persists, audits,
- * emits bus "settings.changed" and notifies onChange listeners. No-op updates are not persisted.
+ * validates with RuntimeSettingsSchema (throws ZodError on invalid input), persists, emits bus
+ * "settings.changed", notifies onChange listeners, then audits (best effort: logged on failure).
+ * No-op updates are not persisted.
  */
 export async function createSettingsService(stores: Stores, bus: EventBus, logger?: Logger): Promise<SettingsService & StartupAlerts> {
   const log = logger?.child("settings");
@@ -61,14 +62,8 @@ export async function createSettingsService(stores: Stores, bus: EventBus, logge
     );
     if (!changed.length) return current;
     await stores.kv.set(SETTINGS_NAMESPACE, SETTINGS_KEY, next);
+    // persisted: everything that caches settings (word filters, limits, …) must follow now, whatever happens next
     current = next;
-    await stores.audit.record({
-      actor,
-      action: "settings.update",
-      target: null,
-      details: { sections: changed, patch: patch as Record<string, unknown> },
-      ip: null,
-    });
     bus.emit("settings.changed", { settings: next, actor });
     for (const fn of listeners) {
       try {
@@ -77,6 +72,16 @@ export async function createSettingsService(stores: Stores, bus: EventBus, logge
         log?.error("settings listener failed", { err: String(err) });
       }
     }
+    // best effort: a failing audit write must not turn an applied change into an error
+    await stores.audit
+      .record({
+        actor,
+        action: "settings.update",
+        target: null,
+        details: { sections: changed, patch: patch as Record<string, unknown> },
+        ip: null,
+      })
+      .catch((err) => log?.error("recording settings update failed", { err: String(err), sections: changed }));
     return next;
   };
 
