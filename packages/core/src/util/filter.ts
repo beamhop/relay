@@ -1,9 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { Filter, NostrEvent } from "@beamhop/sdk";
+import { searchTerms } from "@beamhop/sdk/search";
 
-// Tokenization mirrors @beamhop/storage parseSearch so live delivery and stored queries agree.
-const EXTENSION_TOKEN = /^[a-zA-Z_-]+:[^/\s]/;
-const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
 /** Tag values longer than this (UTF-16 units or UTF-8 bytes) aren't indexed by the store, so live matching ignores them too. */
 const MAX_MATCHED_TAG_VALUE = 1024;
 /**
@@ -19,19 +17,11 @@ function matchableValue(v: string): boolean {
   return v.length * 3 <= MAX_MATCHED_TAG_VALUE || Buffer.byteLength(v, "utf8") <= MAX_MATCHED_TAG_VALUE;
 }
 
-/** NIP-50 search terms: quoted phrases kept whole, `key:value` extensions (language:en, …) dropped. */
-function searchTerms(search: string): string[] {
-  const terms: string[] = [];
-  for (const tok of search.match(/"[^"]*"|\S+/g) ?? []) {
-    const quoted = tok.length >= 2 && tok.startsWith('"') && tok.endsWith('"');
-    if (!quoted && EXTENSION_TOKEN.test(tok)) continue;
-    const text = (quoted ? tok.slice(1, -1) : tok).replace(/"/g, " ").trim().toLowerCase();
-    if (text && HAS_WORD_CHAR.test(text)) terms.push(text);
-  }
-  return terms;
-}
-
-/** Every term / phrase occurs in the (already lowercased) content; no terms match everything. */
+/**
+ * Every term / phrase occurs in the (already lowercased) content; no terms match everything. The terms come from the
+ * stores' parseSearch, but this is a lowercased substring test while stored queries match whole FTS5 tokens with
+ * diacritics folded (Postgres: websearch_to_tsquery), so live delivery and a stored query can disagree.
+ */
 const matchTerms = (terms: readonly string[], lowered: string) => terms.every((t) => lowered.includes(t));
 
 /** NIP-01 filter matching (exact ids/authors; single-letter tag filters). */

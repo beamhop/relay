@@ -43,7 +43,7 @@ import {
   type UserStore,
 } from "@beamhop/sdk";
 import { createMemoryDb } from "@beamhop/storage";
-import { createAdminApi } from "../src/index";
+import { createAdminApi, type AdminApiOptions } from "../src/index";
 import { sha256Hex } from "../src/util/nip98";
 
 // ------------------------------------------------------------------ stores
@@ -105,6 +105,9 @@ export class FakeEventStore implements EventStore {
     const evs = await this.query(filters.map((f) => ({ ...f, limit: f.limit ?? 1e9 })), { maxLimit: 1e9 });
     return this.deleteByIds(evs.map((e) => e.id));
   }
+  async trimPubkey() {
+    return { deleted: 0, remaining: 0 };
+  }
   async deleteByPubkey(pubkey: string) {
     return this.deleteByFilter([{ authors: [pubkey] }]);
   }
@@ -113,6 +116,11 @@ export class FakeEventStore implements EventStore {
   }
   async stats() {
     return { total: this.events.size, byKind: [], sizeBytes: 0 };
+  }
+  async kindCounts(pubkey: string) {
+    const m = new Map<number, number>();
+    for (const e of this.events.values()) if (e.pubkey === pubkey) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
+    return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind - b.kind);
   }
 }
 
@@ -189,6 +197,11 @@ class FakeKv implements KvStore {
   async set(ns: string, k: string, v: unknown) {
     this.m.set(`${ns}/${k}`, v);
   }
+  async setIfAbsent(ns: string, k: string, v: unknown) {
+    if (this.m.has(`${ns}/${k}`)) return false;
+    this.m.set(`${ns}/${k}`, v);
+    return true;
+  }
   async delete(ns: string, k: string) {
     this.m.delete(`${ns}/${k}`);
   }
@@ -209,6 +222,11 @@ export class FakeAudit implements AuditLog {
       .filter((e) => (!q.actor || e.actor === q.actor) && (!q.action || e.action === q.action))
       .reverse()
       .slice(0, q.limit ?? 100);
+  }
+  async prune(before: number) {
+    const n = this.entries.length;
+    this.entries = this.entries.filter((e) => e.at >= before);
+    return n - this.entries.length;
   }
 }
 
@@ -429,6 +447,9 @@ export async function createHarness(
     reportPushIntervalMs?: number;
     importMaxBytes?: number;
     bannedEventsTtlMs?: number;
+    /** any other AdminApiOptions (budgets, intervals) */
+    apiOptions?: AdminApiOptions;
+    storedOwner?: boolean;
   } = {},
 ) {
   const owner = opts.owner ?? newKey();
@@ -443,7 +464,12 @@ export async function createHarness(
     kv: new FakeKv(),
     audit: new FakeAudit(),
   };
-  const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL, trustProxy: opts.trustProxy ?? false }, admin: { owners: [owner.pk] } });
+  const config = ConfigSchema.parse({
+    server: { publicUrl: PUBLIC_URL, trustProxy: opts.trustProxy ?? false },
+    admin: { owners: opts.storedOwner ? [] : [owner.pk] },
+  });
+  // `storedOwner`: the owner holds the role through its users row instead of the config (so it can be demoted)
+  if (opts.storedOwner) await stores.users.upsert(owner.pk, { role: "owner" });
   const settings = fakeSettings(bus);
   const relay = fakeRelay(stores, bus);
   const metrics = fakeMetrics();
@@ -471,6 +497,7 @@ export async function createHarness(
     reportPushIntervalMs: opts.reportPushIntervalMs,
     importMaxBytes: opts.importMaxBytes,
     bannedEventsTtlMs: opts.bannedEventsTtlMs,
+    ...opts.apiOptions,
   });
 
   /** absolute public URL of an admin path (what NIP-98 `u` tags must contain) */

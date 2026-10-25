@@ -12,7 +12,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { ConfirmProvider } from "@/components/confirm";
 import { PageSkeleton } from "@/components/page-skeleton";
+import { RouteError } from "@/components/route-error";
+import { installPreloadErrorReload, registerServiceWorker } from "@/lib/app-update";
 import "./index.css";
+
+// registered before the router loads any route chunk
+installPreloadErrorReload();
 
 // zod probes `new Function` for its JIT path, which the admin CSP (no unsafe-eval) reports as a violation
 z.config({ jitless: true });
@@ -24,6 +29,8 @@ const router = createRouter({
   defaultPreload: "intent",
   defaultPreloadStaleTime: 0,
   defaultPendingComponent: PageSkeleton,
+  // per page, inside the app shell (the root route keeps its own full-screen error)
+  defaultErrorComponent: RouteError,
   defaultPendingMs: 150,
   scrollRestoration: true,
 });
@@ -42,7 +49,8 @@ onUnauthorized(() => {
   // the next sign-in may be another admin with fewer permissions: drop everything this session loaded (cached
   // responses, plugin UIs) once the app shell has unmounted, so mounted queries don't refetch into more 401s
   router
-    .navigate({ to: "/login", search: { redirect: router.state.location.href } })
+    // the session is gone: unsaved edits can't be saved anyway, so no "discard changes?" prompt
+    .navigate({ to: "/login", search: { redirect: router.state.location.href }, ignoreBlocker: true })
     .finally(() => {
       queryClient.clear();
       resetPluginUis();
@@ -65,8 +73,4 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>,
 );
 
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch((e) => console.warn("SW registration failed", e));
-  });
-}
+registerServiceWorker();

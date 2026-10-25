@@ -130,7 +130,11 @@ export class CredentialService {
    * set before them, and the next password is set after them.
    */
   async deleteAll(pubkey: string): Promise<void> {
-    await this.db.run("DELETE FROM admin_passkeys WHERE pubkey = ?", [pubkey]);
+    await this.deletePasskeys(pubkey);
     await this.db.run("DELETE FROM admin_credentials WHERE pubkey = ?", [pubkey]);
+  }
+
+  async deletePasskeys(pubkey: string): Promise<void> {
+    await this.db.run("DELETE FROM admin_passkeys WHERE pubkey = ?", [pubkey]);
   }
 }

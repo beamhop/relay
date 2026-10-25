@@ -50,9 +50,9 @@ test("normalizeReason strips variable parts and truncates", () => {
 });
 
 test("isPrivateIp", () => {
-  for (const ip of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "100.64.0.1", "169.254.1.1", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "unknown", ""])
+  for (const ip of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "100.64.0.1", "169.254.1.1", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "unknown", "", "203.0.113.7", "198.18.0.1", "::ffff:a00:1", "64:ff9b::a00:1", "2002:a00:1::"])
     expect(isPrivateIp(ip)).toBe(true);
-  for (const ip of ["8.8.8.8", "203.0.113.7", "172.32.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8"]) expect(isPrivateIp(ip)).toBe(false);
+  for (const ip of ["8.8.8.8", "172.32.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8"]) expect(isPrivateIp(ip)).toBe(false);
 });
 
 test("pickStep", () => {

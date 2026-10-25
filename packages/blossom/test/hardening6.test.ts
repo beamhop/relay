@@ -185,7 +185,7 @@ describe("moderation survives the owner deleting and re-uploading", () => {
     expect((await upload(PNG_1x1)).status).toBe(201);
     expect((await h.svc.get(x))?.status).toBe("pending");
     expect((await h.request(`/${x}`)).status).toBe(404);
-    expect(await h.deps.stores.kv.get("blossom-held-status", x)).toBeUndefined(); // the row carries it again
+    expect(await h.deps.stores.db.get("SELECT 1 FROM blossom_held WHERE sha256 = ?", [x])).toBeUndefined(); // the row carries it again
     // once approved, delete + re-upload is an ordinary upload again
     await h.svc.setStatus(x, "approved", "admin");
     expect((await del(x)).status).toBe(200);

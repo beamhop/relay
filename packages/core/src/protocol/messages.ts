@@ -47,9 +47,15 @@ function echoSubId(s: unknown): string | undefined {
 const PEEK_HEAD = /^\s*\[\s*"([A-Z-]{1,16})"\s*,\s*(?:"((?:[^"\\]|\\.){1,1024}?)")?/;
 const PEEK_EVENT_ID = /(?<!\\)"id"\s*:\s*"([0-9a-f]{64})"/;
 
+/** The message type, read from the head of the raw message without parsing it (undefined if not recognizable). */
+export function peekType(data: string): string | undefined {
+  return PEEK_HEAD.exec(data.slice(0, 4096))?.[1];
+}
+
 /**
  * Best-effort extraction of the message type and its subscription/event id from a message that is
- * too large to parse, so the relay can still answer with OK / CLOSED / NEG-ERR as NIP-01 requires.
+ * too large to parse (or refused before parsing), so the relay can still answer with OK / CLOSED /
+ * NEG-ERR as NIP-01 requires.
  */
 export function peekMessage(data: string): { type?: string; subId?: string; eventId?: string } {
   const head = PEEK_HEAD.exec(data.slice(0, 4096));

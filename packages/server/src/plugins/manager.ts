@@ -17,7 +17,9 @@ import type {
   RelayEngine,
   SettingsService,
   Stores,
+  StopContext,
 } from "@beamhop/sdk";
+import { settleBy } from "@beamhop/sdk";
 import { discoverPlugins, importSpecifier, type DiscoveredPlugin } from "./discovery";
 import { fileBody } from "../static";
 
@@ -38,6 +40,28 @@ export interface PluginManagerDeps {
   /** also import every beamhop-plugin-* package found in node_modules (default false; config plugins.autoDiscoverNpm) */
   autoDiscoverNpm?: boolean;
   cwd?: string;
+  /** lifecycle budgets in ms (defaults: import 30 s, setup 30 s, teardown 5 s — also the wait for running jobs) */
+  timeouts?: { importMs?: number; setupMs?: number; teardownMs?: number };
+}
+
+type SettingsListener = (s: Record<string, unknown>) => void | Promise<void>;
+
+/** Everything one setup() run registered. Once `dead`, anything it still registers is disposed at once. */
+interface Activation {
+  dead: boolean;
+  /** setup() has resolved */
+  settled: boolean;
+  cleanups: (() => void)[];
+  /** interval cancels of ctx.jobs.every */
+  jobs: (() => void)[];
+  /** job runs in progress */
+  running: Set<Promise<void>>;
+  settingsListeners: Set<SettingsListener>;
+  http: Hono;
+  adminHttp: Hono;
+  /** aborts a pending setup() (disable/stop while enabling) */
+  cancel(reason: Error): void;
+  cancelled: Promise<never>;
 }
 
 interface Entry {
@@ -51,18 +75,35 @@ interface Entry {
   /** persisted desired state */
   enabled: boolean;
   settingsValue?: Record<string, unknown>;
-  settingsListeners: Set<(s: Record<string, unknown>) => void>;
-  cleanups: (() => void)[];
-  http?: Hono;
-  adminHttp?: Hono;
+  /** the current (pending or running) activation */
+  activation?: Activation;
   migrated: boolean;
   /** serializes enable/disable so concurrent calls can't run setup twice */
   transition?: Promise<void>;
 }
 
+/** setup() was abandoned because the plugin was disabled (or the server stopped) meanwhile. */
+class CancelledError extends Error {}
+
+/**
+ * Rejects after `ms`, or as soon as `cancelled` rejects (the operation itself keeps running; its late result or
+ * rejection is ignored).
+ */
+function bounded<T>(p: Promise<T>, ms: number, what: string, cancelled?: Promise<never>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race(cancelled ? [p, expired, cancelled] : [p, expired]).finally(() => clearTimeout(timer));
+}
+
+const noop = () => {};
+
 export interface ServerPluginManager extends PluginManager {
   /** Discover + load all plugins and enable the ones marked enabled. */
   start(): Promise<void>;
+  /** Shutdown, first phase: plugin jobs stop being scheduled; runs in progress are awaited until `ctx.deadline`. */
+  drain(ctx: StopContext): Promise<void>;
   /** Teardown all running plugins without changing their persisted enabled state. */
   stop(): Promise<void>;
   /** Discover + load plugins and apply their database migrations without enabling them. Returns how many migrated. */
@@ -153,6 +194,9 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
   const { kv } = deps.stores;
   const defaultEnabled = new Set(deps.defaultEnabled ?? []);
   const pluginConfig = redactConfigForPlugins(deps.config);
+  const importMs = deps.timeouts?.importMs ?? 30_000;
+  const setupMs = deps.timeouts?.setupMs ?? 30_000;
+  const teardownMs = deps.timeouts?.teardownMs ?? 5_000;
 
   /** Runs state transitions of one plugin one at a time. */
   const serialize = (e: Entry, fn: () => Promise<void>): Promise<void> => {
@@ -211,97 +255,148 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
     return e.settingsValue;
   }
 
-  function cleanup(e: Entry) {
-    for (const fn of e.cleanups.splice(0).reverse()) {
+  function newActivation(): Activation {
+    let cancel!: (reason: Error) => void;
+    const cancelled = new Promise<never>((_, reject) => (cancel = reject));
+    cancelled.catch(noop);
+    return { dead: false, settled: false, cleanups: [], jobs: [], running: new Set(), settingsListeners: new Set(), http: new Hono(), adminHttp: new Hono(), cancel, cancelled };
+  }
+
+  /** Removes everything an activation registered and makes later registrations of it no-ops. */
+  function dispose(e: Entry, act: Activation) {
+    act.dead = true;
+    for (const stop of act.jobs.splice(0)) stop();
+    for (const fn of act.cleanups.splice(0).reverse()) {
       try {
         fn();
       } catch (err) {
         log.warn(`cleanup failed for ${e.name}`, { error: errMsg(err) });
       }
     }
-    deps.hooks.removeOwner(OWNER(e.name));
-    e.http = undefined;
-    e.adminHttp = undefined;
-    e.settingsListeners.clear();
+    act.settingsListeners.clear();
+    if (e.activation === act) {
+      deps.hooks.removeOwner(OWNER(e.name));
+      e.activation = undefined;
+    }
+  }
+
+  /** Stops scheduling jobs and waits (bounded) for runs in progress, so teardown doesn't pull state from under them. */
+  async function drainJobs(e: Entry, act: Activation) {
+    for (const stop of act.jobs.splice(0)) stop();
+    if (!act.running.size) return;
+    await bounded(Promise.all(act.running), teardownMs, `jobs of ${e.name}`).catch((err) => log.warn(errMsg(err)));
+  }
+
+  async function runTeardown(e: Entry) {
+    try {
+      await bounded(Promise.resolve().then(() => e.plugin?.teardown?.()), teardownMs, `teardown of ${e.name}`);
+    } catch (err) {
+      log.warn(`teardown of ${e.name} failed`, { error: errMsg(err) });
+    }
   }
 
   async function activate(e: Entry) {
     const plugin = e.plugin!;
-    if (!e.migrated && plugin.migrations?.length) {
-      await deps.stores.db.migrate(OWNER(e.name), plugin.migrations);
-    }
-    e.migrated = true;
-    const settingsValue = await loadSettings(e);
+    const act = newActivation();
+    e.activation = act;
     const owner = OWNER(e.name);
     const plog = deps.logger.child(owner);
-    const http = new Hono();
-    const adminHttp = new Hono();
+    // registrations made after the activation was abandoned (setup timed out, failed or was cancelled, and kept
+    // running in the background) are undone at once
     const track = (fn: () => void) => {
-      e.cleanups.push(fn);
+      if (act.dead) {
+        try {
+          fn();
+        } catch {}
+        return noop;
+      }
+      act.cleanups.push(fn);
       return () => {
-        const i = e.cleanups.indexOf(fn);
-        if (i >= 0) e.cleanups.splice(i, 1);
+        const i = act.cleanups.indexOf(fn);
+        if (i >= 0) act.cleanups.splice(i, 1);
         fn();
       };
     };
-    const ctx: PluginContext = {
-      name: e.name,
-      logger: plog,
-      config: pluginConfig,
-      db: deps.stores.db,
-      events: deps.stores.events,
-      users: deps.stores.users,
-      kv: deps.stores.kv,
-      audit: deps.stores.audit,
-      bus: deps.bus,
-      relay: deps.relay,
-      blossom: deps.blossom,
-      metrics: deps.metrics,
-      runtimeSettings: () => deps.settings.get(),
-      settings: {
-        get: () => e.settingsValue ?? settingsValue,
-        onChange: (fn) => {
-          e.settingsListeners.add(fn);
-          return () => e.settingsListeners.delete(fn);
-        },
-      },
-      hooks: {
-        onWrite: (fn, p) => track(deps.hooks.onWrite(fn, owner, p)),
-        onQuery: (fn, p) => track(deps.hooks.onQuery(fn, owner, p)),
-        onVisibility: (fn, p) => track(deps.hooks.onVisibility(fn, owner, p)),
-        onBlobUpload: (fn, p) => track(deps.hooks.onBlobUpload(fn, owner, p)),
-      },
-      http,
-      adminHttp,
-      jobs: {
-        every(jobName, intervalMs, fn) {
-          let running = false;
-          const t = setInterval(async () => {
-            if (running) return;
-            running = true;
-            try {
-              await fn();
-            } catch (err) {
-              plog.error(`job ${jobName} failed`, { error: errMsg(err) });
-            } finally {
-              running = false;
-            }
-          }, Math.max(100, intervalMs));
-          (t as { unref?: () => void }).unref?.();
-          return track(() => clearInterval(t));
-        },
-      },
-      on: <K extends keyof BusEvents>(name: K, fn: (p: BusEvents[K]) => void) => track(deps.bus.on(name, fn)),
-    };
-    e.http = http;
-    e.adminHttp = adminHttp;
+    const on = <K extends keyof BusEvents>(name: K, fn: (p: BusEvents[K]) => unknown) => track(deps.bus.on(name, fn));
     try {
-      await plugin.setup(ctx as never);
+      if (!e.migrated && plugin.migrations?.length) {
+        await deps.stores.db.migrate(owner, plugin.migrations);
+      }
+      e.migrated = true;
+      const settingsValue = await loadSettings(e);
+      const ctx: PluginContext = {
+        name: e.name,
+        logger: plog,
+        config: pluginConfig,
+        db: deps.stores.db,
+        events: deps.stores.events,
+        users: deps.stores.users,
+        kv: deps.stores.kv,
+        audit: deps.stores.audit,
+        bus: {
+          on,
+          emit(name, payload) {
+            // core events (event.accepted, user.updated, …) drive metrics, admin SSE and caches: core emits them
+            if (name !== "alert") throw new Error(`plugins may only emit "alert" on the bus, not "${String(name)}"`);
+            deps.bus.emit("alert", payload);
+          },
+        },
+        relay: deps.relay,
+        blossom: deps.blossom,
+        metrics: deps.metrics,
+        runtimeSettings: () => deps.settings.get(),
+        settings: {
+          get: () => e.settingsValue ?? settingsValue,
+          onChange: (fn) => {
+            if (act.dead) return noop;
+            act.settingsListeners.add(fn as SettingsListener);
+            return () => act.settingsListeners.delete(fn as SettingsListener);
+          },
+        },
+        hooks: {
+          onWrite: (fn, o) => track(deps.hooks.onWrite(fn, owner, o)),
+          onQuery: (fn, o) => track(deps.hooks.onQuery(fn, owner, o)),
+          onVisibility: (fn, o) => track(deps.hooks.onVisibility(fn, owner, o)),
+          onBlobUpload: (fn, o) => track(deps.hooks.onBlobUpload(fn, owner, o)),
+        },
+        http: act.http,
+        adminHttp: act.adminHttp,
+        jobs: {
+          every(jobName, intervalMs, fn) {
+            if (act.dead) return noop;
+            let current: Promise<void> | undefined;
+            const t = setInterval(() => {
+              if (current || act.dead) return;
+              const run = (async () => {
+                try {
+                  await fn();
+                } catch (err) {
+                  plog.error(`job ${jobName} failed`, { error: errMsg(err) });
+                }
+              })().finally(() => {
+                act.running.delete(run);
+                current = undefined;
+              });
+              current = run;
+              act.running.add(run);
+            }, Math.max(100, intervalMs));
+            (t as { unref?: () => void }).unref?.();
+            const stop = () => clearInterval(t);
+            act.jobs.push(stop);
+            return track(stop);
+          },
+        },
+        on,
+      };
+      await bounded(Promise.resolve().then(() => plugin.setup(ctx as never)), setupMs, `setup of ${e.name}`, act.cancelled);
+      act.settled = true;
     } catch (err) {
-      try {
-        await plugin.teardown?.();
-      } catch {}
-      cleanup(e);
+      // a timed-out or cancelled setup keeps running: mark the activation dead first so whatever it still
+      // registers is disposed, then give the plugin its teardown
+      act.dead = true;
+      await drainJobs(e, act);
+      await runTeardown(e);
+      dispose(e, act);
       throw err;
     }
   }
@@ -315,21 +410,32 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
       e.error = undefined;
       log.info(`enabled ${e.name}@${e.plugin.version}`);
     } catch (err) {
+      if (err instanceof CancelledError) {
+        e.status = "disabled";
+        e.error = undefined;
+        log.info(`enabling ${e.name} was cancelled: ${err.message}`);
+        return;
+      }
       e.status = "error";
       e.error = errMsg(err);
       log.error(`failed to enable ${e.name}`, { error: e.error });
     }
   }
 
+  /** Aborts a setup() still in progress so disable/stop don't queue behind a hung enable. */
+  function cancelPending(e: Entry, why: string) {
+    const act = e.activation;
+    if (act && !act.settled && !act.dead) act.cancel(new CancelledError(why));
+  }
+
   async function deactivate(e: Entry) {
-    if (e.status === "running") {
-      try {
-        await e.plugin?.teardown?.();
-      } catch (err) {
-        log.warn(`teardown of ${e.name} failed`, { error: errMsg(err) });
-      }
+    const act = e.activation;
+    if (act && e.status === "running") {
+      await drainJobs(e, act);
+      await runTeardown(e);
     }
-    cleanup(e);
+    if (act) dispose(e, act);
+    deps.hooks.removeOwner(OWNER(e.name));
     if (e.status !== "error" || e.plugin) e.status = "disabled";
   }
 
@@ -338,10 +444,11 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
   adminRoutes.all("/:name/*", async (c) => {
     const name = c.req.param("name");
     const e = entries.get(name);
-    if (!e || e.status !== "running" || !e.adminHttp) return c.json({ error: `plugin ${name} is not running` }, 404);
-    return e.adminHttp.fetch(rewriteRequest(c.req.raw, name, "/x"), c.env);
+    if (!e || e.status !== "running" || !e.activation) return c.json({ error: `plugin ${name} is not running` }, 404);
+    return e.activation.adminHttp.fetch(rewriteRequest(c.req.raw, name, "/x"), c.env);
   });
 
+  let stopping = false;
   let loadedOnce: Promise<void> | undefined;
   /** Discover + import + validate plugins once (imports run module top-level code; setup only runs on enable). */
   const loadAll = () =>
@@ -359,7 +466,8 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
         const found = discoverPlugins({ dir: deps.config.plugins.dir, packages: deps.config.plugins.packages, cwd: deps.cwd, autoDiscoverNpm: deps.autoDiscoverNpm });
         for (const d of found) {
           try {
-            const mod = await import(importSpecifier(d.entry));
+            // a module whose top-level code hangs must not block startup (it keeps running, unreferenced)
+            const mod = await bounded(import(importSpecifier(d.entry)), importMs, `import of ${d.id}`);
             loaded.push({ plugin: validatePluginShape(mod), discovered: d, source: d.source, root: d.root });
           } catch (err) {
             log.error(`failed to load plugin ${d.id} (${d.entry})`, { error: errMsg(err) });
@@ -383,8 +491,6 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
           status: l.plugin ? "disabled" : "error",
           error: l.error,
           enabled: stored ?? defaultEnabled.has(name),
-          settingsListeners: new Set(),
-          cleanups: [],
           migrated: false,
         });
       }
@@ -399,8 +505,13 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
     },
 
     async start() {
+      stopping = false;
       await loadAll();
-      for (const e of entries.values()) if (e.enabled && e.plugin) await serialize(e, () => enableEntry(e));
+      // one at a time, in discovery order (hook order between equal priorities follows it); each setup is bounded
+      for (const e of entries.values()) {
+        if (stopping) break;
+        if (e.enabled && e.plugin) await serialize(e, () => enableEntry(e));
+      }
       log.info(`${entries.size} plugin(s) found, ${[...entries.values()].filter((e) => e.status === "running").length} running`);
     },
 
@@ -417,24 +528,49 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
       return n;
     },
 
+    async drain(ctx) {
+      // teardown (stop) waits for runs too, but by then the relay is closed: let them finish while it still serves
+      const runs: Promise<void>[] = [];
+      for (const e of entries.values()) {
+        const act = e.activation;
+        if (!act) continue;
+        for (const stop of act.jobs.splice(0)) stop();
+        runs.push(...act.running);
+      }
+      if (runs.length && (await settleBy(ctx.signal, Promise.all(runs))).status === "timeout") log.warn("plugin jobs still running at the shutdown deadline");
+    },
+
     async stop() {
-      for (const e of [...entries.values()].reverse()) if (e.status === "running") await serialize(e, () => deactivate(e));
+      stopping = true;
+      const all = [...entries.values()].reverse();
+      for (const e of all) cancelPending(e, "server stopping");
+      for (const e of all) if (e.status === "running" || e.activation) await serialize(e, () => deactivate(e));
     },
 
     async enable(name, actor) {
       const e = must(name);
-      e.enabled = true;
-      await kv.set(KV_NS, `enabled:${name}`, true);
-      await serialize(e, () => enableEntry(e));
+      await serialize(e, async () => {
+        await enableEntry(e);
+        // persisted only once setup succeeded: a plugin that can't start isn't retried at every boot
+        if (e.status === "running") {
+          e.enabled = true;
+          await kv.set(KV_NS, `enabled:${name}`, true);
+        }
+      });
       log.debug(`enable ${name} requested by ${actor}: ${e.status}`);
       if (e.status === "error") throw new PluginError(`plugin ${name} failed to start: ${e.error}`, 500);
+      if (e.status !== "running") throw new PluginError(`enabling ${name} was cancelled`, 409);
     },
 
     async disable(name, actor) {
       const e = must(name);
-      e.enabled = false;
-      await kv.set(KV_NS, `enabled:${name}`, false);
-      await serialize(e, () => deactivate(e));
+      // a hung setup() is abandoned instead of waited for
+      cancelPending(e, `disabled by ${actor}`);
+      await serialize(e, async () => {
+        e.enabled = false;
+        await kv.set(KV_NS, `enabled:${name}`, false);
+        await deactivate(e);
+      });
       if (e.plugin) e.error = undefined;
       log.info(`disabled ${name} (by ${actor})`);
     },
@@ -451,11 +587,13 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
       const parsed = parseSettings(e, values, true);
       await kv.set(KV_NS, `settings:${name}`, parsed);
       e.settingsValue = parsed;
-      for (const fn of [...e.settingsListeners]) {
+      const failed = (err: unknown) => log.warn(`settings listener of ${name} failed`, { error: errMsg(err) });
+      for (const fn of [...(e.activation?.settingsListeners ?? [])]) {
         try {
-          fn(parsed);
+          const r = fn(parsed);
+          if (r && typeof (r as Promise<void>).then === "function") (r as Promise<void>).then(undefined, failed);
         } catch (err) {
-          log.warn(`settings listener of ${name} failed`, { error: errMsg(err) });
+          failed(err);
         }
       }
       log.debug(`settings of ${name} updated by ${actor}`);
@@ -464,8 +602,8 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
 
     async handlePublic(name, req, env) {
       const e = entries.get(name);
-      if (!e || e.status !== "running" || !e.http) return undefined;
-      return e.http.fetch(stripAdminIdentity(rewriteRequest(req, name, "/plugins")), env);
+      if (!e || e.status !== "running" || !e.activation) return undefined;
+      return e.activation.http.fetch(stripAdminIdentity(rewriteRequest(req, name, "/plugins")), env);
     },
 
     uiBundle(name) {

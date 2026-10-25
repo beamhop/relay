@@ -3,7 +3,7 @@ import type {
   AuditView, GroupView, InviteView, IpRuleInput, IpRule, PluginView, SettingsPatch, SettingsResponse,
 } from "@beamhop/sdk/admin-contract";
 import { api, enc, HttpError } from "@/lib/api";
-import { useApiMutation } from "./client";
+import { LIST_QUERY_OPTIONS, useApiMutation } from "./client";
 
 // invites
 export const useInvites = () =>
@@ -93,5 +93,6 @@ export function useAudit(q: AuditQuery) {
     queryFn: ({ pageParam }) => api.get<{ items: AuditView[] }>("/audit", { ...q, before: pageParam || undefined, limit }).then((r) => r.items ?? []),
     initialPageParam: 0,
     getNextPageParam: (last) => (last.length < limit ? undefined : last[last.length - 1].id),
+    ...LIST_QUERY_OPTIONS,
   });
 }

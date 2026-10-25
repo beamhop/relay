@@ -51,6 +51,11 @@ export function stubStores(): Stores & { db: ReturnType<typeof stubDb>; auditEnt
   const kv: KvStore = {
     async get<T>(ns: string, k: string) { return kvData.get(`${ns}/${k}`) as T | undefined; },
     async set(ns, k, v) { kvData.set(`${ns}/${k}`, structuredClone(v)); },
+    async setIfAbsent(ns, k, v) {
+      if (kvData.has(`${ns}/${k}`)) return false;
+      kvData.set(`${ns}/${k}`, structuredClone(v));
+      return true;
+    },
     async delete(ns, k) { kvData.delete(`${ns}/${k}`); },
     async list<T>(ns: string) {
       const out: Record<string, T> = {};
@@ -72,6 +77,7 @@ export function stubStores(): Stores & { db: ReturnType<typeof stubDb>; auditEnt
     audit: {
       async record(e) { auditEntries.push({ id: auditEntries.length + 1, at: e.at ?? 0, ...e }); },
       async list() { return auditEntries; },
+      async prune() { return 0; },
     },
     users: {
       async get(pk) { return users.get(pk); },
@@ -84,8 +90,9 @@ export function stubStores(): Stores & { db: ReturnType<typeof stubDb>; auditEnt
     events: {
       async init() {}, async save() { return { status: "saved" }; }, async query() { return []; }, async count() { return 0; },
       async getById() { return undefined; }, async queryIdsForSync() { return []; }, async applyDeletion() { return 0; },
-      async deleteByIds() { return 0; }, async deleteByFilter() { return 0; }, async deleteByPubkey() { return 0; },
+      async deleteByIds() { return 0; }, async deleteByFilter() { return 0; }, async trimPubkey() { return { deleted: 0, remaining: 0 }; }, async deleteByPubkey() { return 0; },
       async purgeExpired() { return 0; }, async stats() { return { total: 0, byKind: [], sizeBytes: 0 }; },
+      async kindCounts() { return []; },
     },
     invites: { async create() { throw new Error("stub"); }, async list() { return []; }, async redeem() { return false; }, async revoke() {} },
     ipRules: { async list() { return []; }, async add() {}, async remove() {} },

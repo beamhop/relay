@@ -1,30 +1,41 @@
-import type { Logger } from "@beamhop/sdk";
+import { type Logger, whenAborted } from "@beamhop/sdk";
 
 type Timer = ReturnType<typeof setInterval>;
+/** A job gets the scheduler's signal: it fires at shutdown, so long jobs stop at their next safe point. */
+export type Job = (signal: AbortSignal) => Promise<unknown> | unknown;
 
 /** Interval jobs with overlap protection; timers are unref'd so they never keep the process alive. */
 export class Scheduler {
   private timers = new Map<string, Timer>();
-  private running = new Set<string>();
+  private running = new Map<string, Promise<void>>();
+  private ac = new AbortController();
+  private draining = false;
   constructor(private readonly logger: Logger) {}
 
-  every(name: string, intervalMs: number, fn: () => Promise<unknown> | unknown): void {
+  every(name: string, intervalMs: number, fn: Job): void {
     this.cancel(name);
+    if (this.draining) return;
     const t = setInterval(() => void this.runNow(name, fn), intervalMs);
     (t as { unref?: () => void }).unref?.();
     this.timers.set(name, t);
   }
 
-  async runNow(name: string, fn: () => Promise<unknown> | unknown): Promise<void> {
-    if (this.running.has(name)) return;
-    this.running.add(name);
-    try {
-      await fn();
-    } catch (err) {
-      this.logger.error(`job ${name} failed`, { err: String(err) });
-    } finally {
-      this.running.delete(name);
-    }
+  runNow(name: string, fn: Job): Promise<void> {
+    if (this.draining) return Promise.resolve();
+    const current = this.running.get(name);
+    if (current) return current.then(() => {});
+    const signal = this.ac.signal;
+    const run = (async () => {
+      try {
+        await fn(signal);
+      } catch (err) {
+        this.logger.error(`job ${name} failed`, { err: String(err) });
+      } finally {
+        this.running.delete(name);
+      }
+    })();
+    this.running.set(name, run);
+    return run;
   }
 
   cancel(name: string) {
@@ -35,5 +46,26 @@ export class Scheduler {
 
   stopAll() {
     for (const name of [...this.timers.keys()]) this.cancel(name);
+  }
+
+  /**
+   * Shutdown: no new runs, running jobs are signalled to stop and awaited until `signal` aborts (their names are
+   * logged then). Never rejects. `resume()` undoes it (a relay started again).
+   */
+  async drain(signal?: AbortSignal): Promise<boolean> {
+    this.draining = true;
+    this.stopAll();
+    this.ac.abort(new Error("shutting down"));
+    if (!this.running.size) return true;
+    const all = Promise.all(this.running.values()).then(() => true);
+    const done = signal ? await Promise.race([all, whenAborted(signal).then(() => false)]) : await all;
+    if (!done) this.logger.warn("jobs still running at the shutdown deadline", { jobs: [...this.running.keys()] });
+    return done;
+  }
+
+  resume() {
+    if (!this.draining) return;
+    this.draining = false;
+    this.ac = new AbortController();
   }
 }

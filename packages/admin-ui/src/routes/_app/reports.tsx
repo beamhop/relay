@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useInFlight } from "@/hooks/use-in-flight";
+import { usePagedItems, useSelection, useStableCallback } from "@/hooks/use-list-page";
 import { createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, Ban, CheckCheck, Flag, MoreHorizontal, ShieldX, Trash2, X } from "lucide-react";
 import type { ReportStatus, ReportView, ResolveReportRequest } from "@beamhop/sdk/admin-contract";
@@ -65,18 +66,19 @@ function ReportsPage() {
   const status = search.status ?? "open";
   const q = useReports(status, search.type);
   const linked = useReport(search.id);
-  const items = React.useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
-  const total = q.data?.pages[0]?.total;
+  const { items, total } = usePagedItems(q.data);
   const { one, bulk } = useResolveReports();
   const confirm = useConfirm();
   const can = useCan();
   const mobile = useIsMobile();
   const canResolve = can("reports.resolve") && status === "open";
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  React.useEffect(() => setSelected(new Set()), [status, search.type]);
+  // resolved reports leave the open queue: their ids are dropped from the selection with them
+  const sel = useSelection(items, (r) => r.id, `${status}|${search.type ?? ""}`);
+  const { selected } = sel;
 
   const once = useInFlight();
-  const resolve = (ids: string[], action: Action, target?: Report) => once(() => resolveNow(ids, action, target));
+  const resolve = useStableCallback((ids: string[], action: Action, target?: Report) => once(() => resolveNow(ids, action, target)));
+  const resolveOne = useStableCallback((r: Report, action: Action) => resolve([r.id], action, r));
   const resolveNow = async (ids: string[], action: Action, target?: Report) => {
     let note: string | undefined;
     if (DESTRUCTIVE.includes(action)) {
@@ -99,7 +101,7 @@ function ReportsPage() {
     }
     const ok = ids.length === 1 ? await tryMutate(one, { id: ids[0], action, note }) : await tryMutate(bulk, { ids, action, note });
     if (!ok) return false;
-    setSelected(new Set());
+    sel.clear();
   };
   const busy = one.isPending || bulk.isPending;
 
@@ -131,7 +133,7 @@ function ReportsPage() {
         </Select>
         {canResolve && items.length > 0 && !mobile && (
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Checkbox checked={items.every((r) => selected.has(r.id))} onCheckedChange={(v) => setSelected(v === true ? new Set(items.map((r) => r.id)) : new Set())} />
+            <Checkbox checked={sel.allSelected} onCheckedChange={(v) => sel.setAll(v === true)} />
             Select all
           </label>
         )}
@@ -149,14 +151,7 @@ function ReportsPage() {
           ) : linked.isError ? (
             <ErrorState error={linked.error} retry={() => linked.refetch()} />
           ) : linked.data ? (
-            <ReportCard
-              r={linked.data}
-              canResolve={can("reports.resolve") && linked.data.status === "open"}
-              busy={busy}
-              selected={false}
-              onSelect={() => {}}
-              onAction={(a) => resolve([linked.data!.id], a, linked.data)}
-            />
+            <ReportCard r={linked.data} canResolve={can("reports.resolve") && linked.data.status === "open"} busy={busy} selected={false} onSelect={noop} onAction={resolveOne} />
           ) : null}
         </div>
       )}
@@ -171,39 +166,19 @@ function ReportsPage() {
           <EmptyState icon={status === "open" ? CheckCheck : Flag} title={status === "open" ? "Inbox zero" : `No ${status} reports`} description={status === "open" ? "No reports waiting for review." : undefined} />
         ) : (
           <div className="space-y-3">
-            {items.map((r) => {
-              const card = (
-                <ReportCard
-                  r={r}
-                  canResolve={canResolve}
-                  busy={busy}
-                  selected={selected.has(r.id)}
-                  onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(r.id); else n.delete(r.id); return n; })}
-                  onAction={(a) => resolve([r.id], a, r)}
-                />
-              );
-              return mobile && canResolve ? (
-                <SwipeRow
-                  key={r.id}
-                  right={{ label: "Dismiss", icon: X, className: "bg-emerald-600 text-white", onTrigger: () => resolve([r.id], "dismiss", r) }}
-                  left={
-                    r.targetEventId
-                      ? { label: "Delete & ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => resolve([r.id], "delete-and-ban", r) }
-                      : { label: "Ban user", icon: ShieldX, className: "bg-red-600 text-white", onTrigger: () => resolve([r.id], "ban-user", r) }
-                  }
-                >
-                  {card}
-                </SwipeRow>
+            {items.map((r) =>
+              mobile && canResolve ? (
+                <SwipeReportCard key={r.id} r={r} canResolve={canResolve} busy={busy} selected={selected.has(r.id)} onSelect={sel.toggle} onAction={resolveOne} />
               ) : (
-                <React.Fragment key={r.id}>{card}</React.Fragment>
-              );
-            })}
+                <ReportCard key={r.id} r={r} canResolve={canResolve} busy={busy} selected={selected.has(r.id)} onSelect={sel.toggle} onAction={resolveOne} />
+              ),
+            )}
           </div>
         )}
         <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
 
-      <SelectionBar count={selected.size} busy={busy} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={busy} onClear={sel.clear}>
         <Button size="sm" variant="ghost" className="rounded-full" onClick={() => resolve([...selected], "dismiss")}>
           <X /> Dismiss
         </Button>
@@ -218,10 +193,29 @@ function ReportsPage() {
   );
 }
 
-type ReportCardProps = { r: Report; canResolve: boolean; busy?: boolean; selected: boolean; onSelect: (v: boolean) => void; onAction: (a: Action) => void };
+const noop = () => {};
+
+/** callbacks take the report, so the list passes the same (stable) functions to every card and cards can be memoised */
+type ReportCardProps = { r: Report; canResolve: boolean; busy?: boolean; selected: boolean; onSelect: (id: string, on: boolean) => void; onAction: (r: Report, a: Action) => void };
+
+const SwipeReportCard = React.memo(function SwipeReportCard(props: ReportCardProps) {
+  const { r, onAction } = props;
+  return (
+    <SwipeRow
+      right={{ label: "Dismiss", icon: X, className: "bg-emerald-600 text-white", onTrigger: () => onAction(r, "dismiss") }}
+      left={
+        r.targetEventId
+          ? { label: "Delete & ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => onAction(r, "delete-and-ban") }
+          : { label: "Ban user", icon: ShieldX, className: "bg-red-600 text-white", onTrigger: () => onAction(r, "ban-user") }
+      }
+    >
+      <ReportCard {...props} />
+    </SwipeRow>
+  );
+});
 
 /** Reports carry attacker-chosen content: a card that fails to render must not hide the rest of the queue. */
-function ReportCard(props: ReportCardProps) {
+const ReportCard = React.memo(function ReportCard(props: ReportCardProps) {
   return (
     <ErrorBoundary
       key={props.r.id}
@@ -229,7 +223,7 @@ function ReportCard(props: ReportCardProps) {
         <div className="space-y-2 rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm sm:p-4">
           <p className="font-medium">Report {String(props.r.id).slice(0, 12)}… can’t be displayed</p>
           {props.canResolve && (
-            <Button size="sm" variant="outline" onClick={() => props.onAction("dismiss")}>
+            <Button size="sm" variant="outline" onClick={() => props.onAction(props.r, "dismiss")}>
               <X /> Dismiss
             </Button>
           )}
@@ -239,9 +233,11 @@ function ReportCard(props: ReportCardProps) {
       <ReportCardInner {...props} />
     </ErrorBoundary>
   );
-}
+});
 
-function ReportCardInner({ r, canResolve, busy, selected, onSelect, onAction }: ReportCardProps) {
+function ReportCardInner({ r, canResolve, busy, selected, onSelect: select, onAction: act }: ReportCardProps) {
+  const onSelect = (on: boolean) => select(r.id, on);
+  const onAction = (a: Action) => act(r, a);
   const mobile = useIsMobile();
   // touch screens can't hover: the first tap on the blurred media un-blurs it instead of opening it
   const [revealed, setRevealed] = React.useState(false);

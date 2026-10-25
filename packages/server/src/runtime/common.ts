@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
-import { parseCidr, parseIp } from "@beamhop/core";
 import { DEFAULT_TRUSTED_PROXIES } from "@beamhop/sdk";
+import { normalizeIp, parseCidr, parseIp } from "@beamhop/sdk/net";
 
 export interface RunningServer {
   runtime: "bun" | "node";
@@ -8,8 +8,32 @@ export interface RunningServer {
   port: number;
   /** stop accepting new connections (open sockets stay up) */
   stopAccepting(): void;
-  /** force-close everything that is still open */
+  /**
+   * Waits (at most STOP_GRACE_MS, or until `signal` aborts) for the websocket close handshakes relay.stop() started,
+   * so clients see a clean 1001 instead of 1006.
+   */
+  settle(signal?: AbortSignal): Promise<void>;
+  /** settle(), then force-close everything that is still open */
   stop(): Promise<void>;
+}
+
+/** How long stopping waits for websocket close handshakes before cutting the sockets. */
+export const STOP_GRACE_MS = 1_000;
+
+/** Resolves once every one of `waits` settled, `ms` passed or `signal` aborted, whichever comes first. */
+export function graceFor(waits: Promise<unknown>[], ms: number = STOP_GRACE_MS, signal?: AbortSignal): Promise<void> {
+  if (!waits.length || signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    (timer as { unref?: () => void }).unref?.();
+    signal?.addEventListener("abort", done, { once: true });
+    Promise.allSettled(waits).then(done);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 }
 
 export interface ServeOptions {
@@ -17,15 +41,7 @@ export interface ServeOptions {
   port?: number;
 }
 
-/** Strips IPv4-mapped IPv6 prefix and brackets/ports. */
-export function normalizeIp(ip: string | undefined | null): string {
-  if (!ip) return "unknown";
-  let s = ip.trim();
-  if (s.startsWith("[")) s = s.slice(1, s.indexOf("]"));
-  else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(s)) s = s.slice(0, s.lastIndexOf(":"));
-  if (s.toLowerCase().startsWith("::ffff:") && s.includes(".")) s = s.slice(7);
-  return s || "unknown";
-}
+export { normalizeIp };
 
 type HeaderGetter = (name: string) => string | null | undefined;
 
@@ -92,6 +108,17 @@ export function lastForwardedHop(xff: string | null | undefined): string | undef
   if (!xff) return undefined;
   const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
   return hops[hops.length - 1];
+}
+
+/** Websocket close reasons are limited to 123 UTF-8 bytes (`ws` throws on longer ones): cut on a character boundary. */
+export function closeReason(reason: string | undefined): string | undefined {
+  if (!reason) return reason;
+  const bytes = Buffer.from(reason, "utf8");
+  if (bytes.length <= 123) return reason;
+  let end = 123;
+  // back off continuation bytes (10xxxxxx) so a multi-byte character isn't split
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf8");
 }
 
 /**

@@ -1,7 +1,9 @@
+import * as React from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { ConnectionView, DashboardSnapshot, GeoResponse, Profile, SeriesResponse } from "@beamhop/sdk/admin-contract";
 import { api } from "@/lib/api";
 import { nowSec } from "@/lib/format";
+import { useLiveSnapshot, useLiveStatus } from "@/lib/live";
 
 export type RangeKey = "1h" | "24h" | "7d" | "30d";
 export const RANGES: Record<RangeKey, { seconds: number; step: number; label: string }> = {
@@ -11,21 +13,43 @@ export const RANGES: Record<RangeKey, { seconds: number; step: number; label: st
   "30d": { seconds: 30 * 86400, step: 6 * 3600, label: "30 days" },
 };
 
-/** Range aligned to step so query keys stay stable for a while. */
+/**
+ * The window ending now, aligned to its step (so buckets line up). Computed when a query runs, not in render: the key
+ * is just the range, and each refetch (interval, focus, invalidation) moves the window forward.
+ */
 function rangeParams(r: RangeKey) {
   const { seconds, step } = RANGES[r];
   const to = Math.ceil(nowSec() / step) * step;
   return { from: to - seconds, to, step };
 }
 
-export const useSnapshot = () =>
-  useQuery({ queryKey: ["snapshot"], queryFn: () => api.get<DashboardSnapshot>("/dashboard/snapshot"), refetchInterval: 30_000 });
+/**
+ * Current relay snapshot: the live stream's while it is open, else the polled one. The last snapshot a dropped stream
+ * delivered is never shown in place of fresh data, and the API is only polled while the stream isn't delivering.
+ */
+export function useSnapshot() {
+  const open = useLiveStatus() === "open";
+  const liveSnap = useLiveSnapshot();
+  const q = useQuery({
+    queryKey: ["snapshot"],
+    queryFn: () => api.get<DashboardSnapshot>("/dashboard/snapshot"),
+    refetchInterval: open ? false : 30_000,
+  });
+  // the cached value is the stream's last snapshot when it just dropped: replace it now, not a poll interval later
+  const wasOpen = React.useRef(open);
+  const { refetch } = q;
+  React.useEffect(() => {
+    if (wasOpen.current && !open) refetch();
+    wasOpen.current = open;
+  }, [open, refetch]);
+  return { data: open && liveSnap ? liveSnap : q.data, live: open };
+}
 
 export function useSeries(names: string[], range: RangeKey) {
-  const p = rangeParams(range);
   return useQuery({
-    queryKey: ["series", names, range, p.to],
+    queryKey: ["series", names, range],
     queryFn: async () => {
+      const p = rangeParams(range);
       // unknown series names come back as empty points, so any rejection here is a real error and must surface
       const res = await Promise.all(names.map((name) => api.get<SeriesResponse>("/metrics/series", { name, ...p })));
       const byT = new Map<number, Record<string, number>>();
@@ -42,10 +66,9 @@ export function useSeries(names: string[], range: RangeKey) {
 }
 
 function metricList<T>(path: string, range: RangeKey, extra?: Record<string, number>) {
-  const p = rangeParams(range);
   return {
-    queryKey: ["metrics", path, range, p.to, extra],
-    queryFn: () => api.get<{ items: T[] }>(path, { ...p, ...extra }).then((r) => r.items ?? []),
+    queryKey: ["metrics", path, range, extra],
+    queryFn: () => api.get<{ items: T[] }>(path, { ...rangeParams(range), ...extra }).then((r) => r.items ?? []),
     placeholderData: keepPreviousData,
     refetchInterval: 120_000,
   };

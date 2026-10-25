@@ -1,4 +1,4 @@
-import type { AdminApiDeps, AdminRole, BanRequest, BlobRecord, UserRecord, UserStatus, UserView } from "@beamhop/sdk";
+import type { AdminApiDeps, AdminRole, BlobRecord, UserRecord, UserStatus, UserView } from "@beamhop/sdk";
 import { forbidden } from "../errors";
 import type { ProfileService } from "./profiles";
 import { ROLE_RANK, type RoleService } from "./roles";
@@ -81,9 +81,16 @@ export class UserService {
    * or above the actor (never the actor itself). One query per role instead of a lookup per author.
    */
   async protectedAuthors(actor: Actor): Promise<ReadonlyMap<string, AdminRole>> {
+    if (actor.role === "owner") return new Map();
+    const out = await this.staffFrom(actor.role ? ROLE_RANK[actor.role] : 0);
+    for (const pk of this.roles.owners) out.set(pk, "owner");
+    out.delete(actor.pubkey);
+    return out;
+  }
+
+  /** Stored staff (any status) whose role ranks at least `rank`, with their role: one paged query per role. */
+  private async staffFrom(rank: number): Promise<Map<string, AdminRole>> {
     const out = new Map<string, AdminRole>();
-    if (actor.role === "owner") return out;
-    const rank = actor.role ? ROLE_RANK[actor.role] : 0;
     for (const role of Object.keys(ROLE_RANK) as AdminRole[]) {
       if (ROLE_RANK[role] < rank) continue;
       for (let offset = 0; ; offset += STAFF_PAGE) {
@@ -92,9 +99,21 @@ export class UserService {
         if (items.length < STAFF_PAGE || offset + items.length >= total) break;
       }
     }
-    for (const pk of this.roles.owners) out.set(pk, "owner");
-    out.delete(actor.pubkey);
     return out;
+  }
+
+  /**
+   * assertCanModerate for many targets (bulk actions): the staff the actor can't moderate are loaded once, then each
+   * target is checked without a lookup. Same verdicts, as of when it was built.
+   */
+  async moderationCheck(actor: Actor): Promise<(target: string) => void> {
+    const above = await this.staffFrom(actor.role ? ROLE_RANK[actor.role] : 0);
+    return (target) => {
+      if (target === actor.pubkey) throw forbidden("cannot moderate yourself");
+      if (this.roles.isConfigOwner(target)) throw forbidden("cannot moderate a configured owner");
+      const role = above.get(target);
+      if (role) throw forbidden(`cannot moderate a user with role ${role}`);
+    };
   }
 
   /**
@@ -149,26 +168,5 @@ export class UserService {
     if (status === "banned") patch.banReason = banReason ?? null;
     else patch.banReason = null;
     return this.update(pubkey, patch, actor);
-  }
-
-  async ban(pubkey: string, req: BanRequest, actor: string) {
-    const user = await this.setStatus(pubkey, "banned", actor, req.reason ?? null);
-    let deletedEvents = 0;
-    let deletedMedia = 0;
-    let disconnected = 0;
-    if (req.deleteEvents) deletedEvents = await this.deps.stores.events.deleteByPubkey(pubkey);
-    if (req.deleteMedia && this.deps.blossom) deletedMedia = await this.deps.blossom.deleteByPubkey(pubkey, actor);
-    if (req.disconnect ?? true) disconnected = this.deps.relay.disconnect({ pubkey });
-    return { user, deletedEvents, deletedMedia, disconnected };
-  }
-
-  /** Removes the user record and everything they stored here. Not a ban: they can connect again later. */
-  async delete(pubkey: string, actor: string) {
-    const disconnected = this.deps.relay.disconnect({ pubkey });
-    const deletedEvents = await this.deps.stores.events.deleteByPubkey(pubkey);
-    const deletedMedia = this.deps.blossom ? await this.deps.blossom.deleteByPubkey(pubkey, actor) : 0;
-    await this.deps.stores.users.delete(pubkey);
-    this.deps.bus.emit("user.deleted", { pubkey, actor });
-    return { deletedEvents, deletedMedia, disconnected };
   }
 }

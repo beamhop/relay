@@ -4,7 +4,7 @@ import { getRequestListener } from "@hono/node-server";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Beamhop } from "../app";
 import { makeEnv } from "../app";
-import { clientIp, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, closeReason, graceFor, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
 
 const PING_INTERVAL_MS = 30_000;
 const header = (req: IncomingMessage) => (n: string) => {
@@ -13,9 +13,6 @@ const header = (req: IncomingMessage) => (n: string) => {
 };
 
 /** node:http + `ws` adapter. Also works under Bun (used in tests), but Bun prefers serveBun. */
-/** How long stop() waits for websocket close handshakes before terminating sockets. */
-const STOP_GRACE_MS = 1_000;
-
 export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Promise<RunningServer> {
   const { config, relay, settings, logger } = beamhop;
   const log = logger.child("http");
@@ -45,7 +42,8 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: wsMaxPayload(settings.get().limits.maxMessageBytes),
-    perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 }, concurrencyLimit: 10 },
+    // no context takeover: each message is compressed on its own, so an idle connection doesn't pin a zlib window
+    perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 }, concurrencyLimit: 10, serverNoContextTakeover: true, clientNoContextTakeover: true },
   });
   const unsub = settings.onChange((s) => {
     (wss.options as { maxPayload?: number }).maxPayload = wsMaxPayload(s.limits.maxMessageBytes);
@@ -59,6 +57,11 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
       socket.destroy();
       return;
     }
+    if (!beamhop.lifecycle.accepting) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 5\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const ip = clientIp(req.socket.remoteAddress, header(req), trustProxy, proxyIpHeader, trustedProxies);
     wss.handleUpgrade(req, socket, head, (ws) => {
       alive.set(ws, true);
@@ -68,10 +71,20 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
       ws.on("message", (data, isBinary) => {
         alive.set(ws, true);
         const text = isBinary ? Buffer.from(data as Buffer).toString("utf8") : data.toString();
-        handle?.onMessage(text);
+        try {
+          handle?.onMessage(text);
+        } catch (err) {
+          // an exception in an EventEmitter listener would be uncaught: contain it to this connection
+          log.error("websocket message handler failed", { error: err });
+          ws.close(1011, "internal error");
+        }
       });
       ws.on("close", () => {
-        handle?.onClose();
+        try {
+          handle?.onClose();
+        } catch (err) {
+          log.error("websocket close handler failed", { error: err });
+        }
         handle = undefined;
       });
       try {
@@ -80,7 +93,7 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
             send: (d) => {
               if (ws.readyState === ws.OPEN) ws.send(d);
             },
-            close: (code, reason) => ws.close(code, reason),
+            close: (code, reason) => ws.close(code, closeReason(reason)),
             bufferedAmount: () => ws.bufferedAmount,
           },
           { ip, userAgent: req.headers["user-agent"], origin: req.headers.origin },
@@ -131,15 +144,17 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
       server.close();
       server.closeIdleConnections?.();
     },
+    settle(signal) {
+      // relay.stop() has started a 1001 close (after its shutdown NOTICE) on every socket: give those handshakes a
+      // moment to finish, so clients see a clean close instead of 1006
+      const pending = [...wss.clients].filter((ws) => ws.readyState !== ws.CLOSED);
+      const closed = (ws: WebSocket) => new Promise<void>((resolve) => (ws.readyState === ws.CLOSED ? resolve() : ws.once("close", () => resolve())));
+      return graceFor(pending.map(closed), undefined, signal);
+    },
     async stop() {
       running.stopAccepting();
-      // relay.stop() has started a 1001 close (after its shutdown NOTICE) on every socket: give those handshakes a
-      // moment to finish, so clients see a clean close instead of 1006, then cut whatever is left
-      const pending = [...wss.clients].filter((ws) => ws.readyState !== ws.CLOSED);
-      await Promise.race([
-        Promise.all(pending.map((ws) => new Promise<void>((resolve) => (ws.readyState === ws.CLOSED ? resolve() : ws.once("close", () => resolve()))))),
-        new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS).unref?.()),
-      ]);
+      await running.settle();
+      // then cut whatever is left
       for (const ws of wss.clients) ws.terminate();
       wss.close();
       server.closeAllConnections?.();

@@ -1,14 +1,27 @@
 import { z } from "zod";
-import type { EventView, Filter, ImportResult, NostrEvent } from "@beamhop/sdk";
+import type {
+  EventBanLiftRequest,
+  EventBanListQuery,
+  EventBanListResponse,
+  EventDeleteOneRequest,
+  EventDeleteRequest,
+  EventQueryRequest,
+  EventView,
+  Filter,
+  ImportResult,
+  NostrEvent,
+} from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, forbidden, HttpError, notFound } from "../errors";
 import { IMPORT_MAX_BYTES, requirePermission } from "../middleware/auth";
-import { auditLists } from "../util/audit";
+import { audited, auditLists } from "../util/audit";
 import { FiltersSchema, isConstrained, parseFiltersParam } from "../util/filters";
 import { isNostrEventShape, isValidSignedEvent } from "../util/nip98";
 import { parseEventId } from "../util/pubkey";
-import { readBody } from "../util/request";
+import { BAN_LIST_MAX } from "../services/banned-events";
+import type { Same, SameFields } from "../util/contract";
+import { readBody, readQuery } from "../util/request";
 
 const MAX_QUERY_LIMIT = 500;
 const EXPORT_CAP = 1_000_000;
@@ -19,7 +32,10 @@ const MAX_IMPORT_ERRORS = 100;
 const AFFECTED_CAP = 10_000;
 /** filter deletes below owner resolve matches page by page within this budget, then report `truncated` */
 const DELETE_MAX_PAGES = 10;
+/** time budget of a filter delete's selection and of its direct deletes, each; past it the response says `truncated` */
 const DELETE_BUDGET_MS = 10_000;
+/** events selected and deleted at a time by a direct filter delete */
+const DIRECT_PAGE = 1000;
 /**
  * max full events loaded for a single second when more than a page shares one created_at (export and
  * filter delete); the store can't page within a second, so beyond this export warns and delete reports `truncated`
@@ -28,26 +44,27 @@ const SAME_SECOND_CAP = 10_000;
 
 const QuerySchema = z.object({ filters: FiltersSchema, limit: z.number().int().min(1).optional() });
 const DeleteOne = z.object({ reason: z.string().max(1000).optional() });
+const BanLift = DeleteOne;
+true satisfies Same<z.output<typeof BanLift>, EventBanLiftRequest>;
+const BanListQuery = z.object({ limit: z.coerce.number().int().min(1).max(BAN_LIST_MAX).default(1000) });
+true satisfies SameFields<z.output<typeof BanListQuery>, EventBanListQuery>;
 const DeleteMany = z
   .object({ ids: z.array(z.string()).max(10_000).optional(), filters: FiltersSchema.optional(), reason: z.string().max(1000).optional() })
   .refine((b) => (b.ids?.length ?? 0) > 0 || (b.filters?.length ?? 0) > 0, "ids or filters required");
+true satisfies Same<z.output<typeof QuerySchema>, EventQueryRequest> &
+  Same<z.output<typeof DeleteOne>, EventDeleteOneRequest> &
+  Same<z.output<typeof DeleteMany>, EventDeleteRequest>;
 
 export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
   const { stores, relay, bus } = ctx.deps;
 
   async function toViews(events: NostrEvent[]): Promise<EventView[]> {
     if (!events.length) return [];
-    const ids = events.map((e) => e.id);
-    const [profiles, reports] = await Promise.all([
+    // report counts per event: one grouped query on the report index (reports naming the event as their target)
+    const [profiles, counts] = await Promise.all([
       ctx.profiles.getMany(events.map((e) => e.pubkey)),
-      stores.events.query([{ kinds: [1984], "#e": ids }], { maxLimit: 5000 }),
+      ctx.reports.countsForEvents(events.map((e) => e.id)),
     ]);
-    const idSet = new Set(ids);
-    const counts = new Map<string, number>();
-    for (const r of reports) {
-      const targets = new Set(r.tags.filter((t) => t[0] === "e" && idSet.has(t[1])).map((t) => t[1]));
-      for (const t of targets) counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
     return events.map((event) => ({ event, author: profiles.get(event.pubkey), reports: counts.get(event.id) ?? 0 }));
   }
 
@@ -178,6 +195,8 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       if (bypass) {
         if (!isValidSignedEvent(ev)) return err(n, "invalid: bad id or signature");
         const r = await stores.events.save(ev);
+        // stored without going through the relay, so without its "report.created": the queue indexes it here
+        if ((r.status === "saved" || r.status === "replaced") && ev.kind === 1984) await ctx.reports.index([ev]);
         if (r.status === "saved" || r.status === "replaced") result.imported++;
         else if (r.status === "duplicate" || r.status === "stale") result.duplicates++;
         else err(n, r.message ?? r.status);
@@ -258,18 +277,18 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
     const ids = (body.ids ?? []).map((id) => parseEventId(id));
     const filters = body.filters ?? [];
     if (!filters.every(isConstrained)) throw badRequest("every filter must constrain at least one field");
-    // every rank check runs before anything is deleted, so a refused request deletes nothing
-    if (ids.length && actor.role !== "owner") {
-      await ctx.users.assertCanDeleteEventsOf(actor, (await stores.events.query([{ ids }], { maxLimit: ids.length })).map((e) => e.pubkey));
-    }
+    // every rank check runs before anything is deleted, so a refused request deletes nothing. The ids asked for that are
+    // stored are what gets deleted (and reported)
+    const stored = ids.length ? await stores.events.query([{ ids }], { maxLimit: ids.length }) : [];
+    if (stored.length && actor.role !== "owner") await ctx.users.assertCanDeleteEventsOf(actor, stored.map((e) => e.pubkey));
     /** filters the store deletes directly (owner, or naming only deletable authors) */
     const direct: Filter[] = [];
     /** ids resolved from the other filters (below owner) */
     const matched: string[] = [];
     if (actor.role === "owner") direct.push(...filters);
     else if (filters.length) {
-      // below owner a filter could match a superior's events: filters naming only deletable authors go
-      // straight to the store (expired events included); others are resolved page by page, rank-checked
+      // below owner a filter could match a superior's events: filters naming only deletable authors are deleted
+      // directly (below); others are resolved page by page, rank-checked
       // against the staff set and deleted by id. Past the page/time budget `truncated` asks to repeat.
       const prot = await ctx.users.protectedAuthors(actor);
       const started = performance.now();
@@ -333,34 +352,78 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       }
     }
 
-    const affected = [...ids];
-    if (ids.length) deleted += await stores.events.deleteByIds(ids);
-    if (direct.length) {
-      // one query per filter so each keeps its own `limit` — the same rows deleteByFilter removes
-      // (newest first); without limit it's capped, so the emitted id list may be partial for huge deletes
-      for (const f of direct) {
-        const found = await stores.events.query([{ ...f, limit: Math.min(f.limit ?? AFFECTED_CAP, AFFECTED_CAP) }], { maxLimit: AFFECTED_CAP });
-        affected.push(...found.map((e) => e.id));
-      }
-      deleted += await stores.events.deleteByFilter(direct);
-    }
-    const unique = [...new Set(matched)];
-    if (unique.length) {
-      deleted += await stores.events.deleteByIds(unique);
-      affected.push(...unique);
-    }
-    const affectedIds = [...new Set(affected)].slice(0, AFFECTED_CAP);
-    if (affectedIds.length) bus.emit("event.deleted", { ids: affectedIds, actor: actor.pubkey, reason: body.reason });
-    // the targets: the ids asked for and the ids the filters matched (lists capped, counts exact)
+    // what is deleted is exactly what was selected (deleted by id), so the ids announced and audited are the ids
+    // deleted — never a separate, possibly different, look at the same filter
     const explicit = new Set(ids);
-    const matchedIds = affectedIds.filter((id) => !explicit.has(id));
-    await ctx.audit(c, "event.delete", null, {
-      ...auditLists(matchedIds.length ? { ids, matchedIds } : { ids }),
-      filters: body.filters,
-      deleted,
-      reason: body.reason,
-    });
+    const matchedIds: string[] = [];
+    /** announces deleted ids (in chunks the bus listeners can take) */
+    const announce = (list: string[]) => {
+      for (let i = 0; i < list.length; i += AFFECTED_CAP) bus.emit("event.deleted", { ids: list.slice(i, i + AFFECTED_CAP), actor: actor.pubkey, reason: body.reason });
+    };
+    const deleteSelected = async (selected: string[]) => {
+      const n = await stores.events.deleteByIds(selected);
+      deleted += n;
+      for (const id of selected) if (!explicit.has(id)) matchedIds.push(id);
+      announce(selected);
+      return n;
+    };
+    // audited however it ends: a store failure halfway still records what was deleted until then
+    await audited(
+      (details) => ctx.audit(c, "event.delete", null, details),
+      () => ({
+        // the targets: the ids asked for and the ids the filters matched (lists capped, counts exact)
+        ...auditLists(matchedIds.length ? { ids, matchedIds } : { ids }),
+        filters: body.filters,
+        deleted,
+        reason: body.reason,
+        ...(truncated ? { truncated } : {}),
+      }),
+      async () => {
+        if (stored.length) {
+          deleted += await stores.events.deleteByIds(stored.map((e) => e.id));
+          announce(stored.map((e) => e.id));
+        }
+        // direct filters: select the newest page, delete exactly it, repeat (each filter keeps its own `limit`)
+        const started = performance.now();
+        for (const f of direct) {
+          let remaining = f.limit ?? Number.POSITIVE_INFINITY;
+          while (remaining > 0) {
+            if (performance.now() - started > DELETE_BUDGET_MS) {
+              truncated = true;
+              break;
+            }
+            const size = Math.min(remaining, DIRECT_PAGE);
+            const page = await stores.events.query([{ ...f, limit: size }], { maxLimit: size });
+            if (!page.length) break;
+            const n = await deleteSelected(page.map((e) => e.id));
+            remaining -= page.length;
+            // fewer than a page left, or nothing deletable (a store that keeps them): done
+            if (page.length < size || n === 0) break;
+          }
+        }
+        const unique = [...new Set(matched)];
+        if (unique.length) await deleteSelected(unique);
+      },
+    );
     return c.json(truncated ? { deleted, truncated } : { deleted });
+  });
+
+  // event bans (placed with NIP-86 banevent): listed and lifted with the same rank rule as NIP-86 unbanevent
+  app.get("/events/bans", requirePermission("content.view"), async (c) => {
+    const { limit } = readQuery(c, BanListQuery);
+    const body: EventBanListResponse = { items: await ctx.bannedEvents.list(limit) };
+    return c.json(body);
+  });
+
+  app.delete("/events/bans/:id", requirePermission("content.delete"), async (c) => {
+    const id = parseEventId(c.req.param("id"));
+    const { reason } = await readBody(c, BanLift);
+    const role = await ctx.bannedEvents.liftBlockedBy(id, principalOf(c).role!);
+    if (role) throw forbidden(`this event was banned by a user with role ${role}`, "forbidden_target");
+    // lifts the write block only; the deleted event is not restored
+    if (!(await ctx.bannedEvents.lift(id))) throw notFound("event ban not found");
+    await ctx.audit(c, "event.unban", id, { reason: reason ?? "" });
+    return c.json({ ok: true });
   });
 
   app.get("/events/:id", requirePermission("content.view"), async (c) => {

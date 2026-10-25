@@ -124,11 +124,8 @@ describe("durability across a restart", () => {
     }
   });
 
-  test("an upload cut off by the shutdown leaves no blob, descriptor or temp file; the same blob uploads fine after restart", async () => {
-    const ownerSk = generateSecretKey();
-    const first = await bootGap({ ownerSk });
-    await relaxed(first);
-    const u = newUser();
+  /** A 2 MiB PDF upload whose body stalls halfway until `release()`. */
+  function stalledUpload(http: string, sk: Uint8Array) {
     const bytes = new Uint8Array(Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(2 * 1024 * 1024, 7), Buffer.from(`\n%${Math.random()}\n%%EOF\n`)]));
     const sha = sha256(bytes);
     let sent = 0;
@@ -143,36 +140,67 @@ describe("durability across a restart", () => {
         ctrl.enqueue(chunk);
       },
     });
-    const req = fetch(`${first.http}/upload`, {
+    const outcome = fetch(`${http}/upload`, {
       method: "PUT",
-      headers: { "Content-Type": "application/pdf", "Content-Length": String(bytes.byteLength), Authorization: bauth(u.sk, "upload", { hashes: [sha] }) },
+      headers: { "Content-Type": "application/pdf", "Content-Length": String(bytes.byteLength), Authorization: bauth(sk, "upload", { hashes: [sha] }) },
       body,
       duplex: "half",
     } as RequestInit).then(
       (res) => res.status,
       () => "error" as const,
     );
-    await until(() => sent >= bytes.byteLength / 2);
+    return { bytes, sha, outcome, release, halfway: () => sent >= bytes.byteLength / 2 };
+  }
+
+  test("an upload in flight when the stop lands is finished (the shutdown waits for it) and served after a restart", async () => {
+    const ownerSk = generateSecretKey();
+    const first = await bootGap({ ownerSk });
+    await relaxed(first);
+    const u = newUser();
+    const up = stalledUpload(first.http, u.sk);
+    await until(up.halfway);
     const stopping = first.stop(false);
-    release();
-    const outcome = await req;
+    up.release();
+    expect(await up.outcome).toBe(201);
     await stopping;
+    expect(walk(join(first.dir, "blobs")).filter((p) => p.endsWith(".tmp"))).toEqual([]);
+
+    const second = await bootGap({ dir: first.dir, ownerSk });
+    try {
+      const got = await fetch(`${second.http}/${up.sha}`);
+      expect(sha256(new Uint8Array(await got.arrayBuffer()))).toBe(up.sha);
+    } finally {
+      await second.stop();
+    }
+  }, 30_000);
+
+  test("an upload cut off by the shutdown deadline leaves no blob, descriptor or temp file; the same blob uploads fine after restart", async () => {
+    const ownerSk = generateSecretKey();
+    const first = await bootGap({ ownerSk, overrides: { server: { shutdownTimeoutMs: 1_000 } } });
+    await relaxed(first);
+    const u = newUser();
+    const up = stalledUpload(first.http, u.sk);
+    await until(up.halfway);
+    // never released: the drain gives up on it and the connection is cut at the end of the shutdown
+    await first.stop(false);
+    const outcome = await up.outcome;
+    up.release();
     // the upload must not have been reported as stored
     expect(outcome === "error" || (typeof outcome === "number" && outcome >= 400)).toBe(true);
     const leftovers = walk(join(first.dir, "blobs"));
     expect(leftovers.filter((p) => p.endsWith(".tmp"))).toEqual([]);
-    expect(leftovers.filter((p) => p.includes(sha))).toEqual([]);
+    expect(leftovers.filter((p) => p.includes(up.sha))).toEqual([]);
 
     const second = await bootGap({ dir: first.dir, ownerSk });
     try {
       await relaxed(second);
-      expect((await fetch(`${second.http}/${sha}`)).status).toBe(404);
+      expect((await fetch(`${second.http}/${up.sha}`)).status).toBe(404);
       const list = await fetch(`${second.http}/list/${u.pubkey}`, { headers: { Authorization: bauth(u.sk, "list") } });
-      expect((await list.json()).map((d: { sha256: string }) => d.sha256)).not.toContain(sha);
-      const again = await upload(second.http, u.sk, bytes, { type: "application/pdf" });
+      expect((await list.json()).map((d: { sha256: string }) => d.sha256)).not.toContain(up.sha);
+      const again = await upload(second.http, u.sk, up.bytes, { type: "application/pdf" });
       expect(again.status).toBe(201);
-      const got = await fetch(`${second.http}/${sha}`);
-      expect(sha256(new Uint8Array(await got.arrayBuffer()))).toBe(sha);
+      const got = await fetch(`${second.http}/${up.sha}`);
+      expect(sha256(new Uint8Array(await got.arrayBuffer()))).toBe(up.sha);
     } finally {
       await second.stop();
     }

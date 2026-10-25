@@ -6,7 +6,7 @@ import type {
   Paged, ReportBulkResult, ReportStatus, ReportView, ResolveReportRequest,
 } from "@beamhop/sdk/admin-contract";
 import { api, enc } from "@/lib/api";
-import { useApiMutation } from "./client";
+import { LIST_QUERY_OPTIONS, nextOffset, useApiMutation } from "./client";
 
 // ------------------------------------------------------------- events
 export function useEventQuery(filters: Filter[], limit = 50, enabled = true) {
@@ -34,6 +34,7 @@ export function useEventQuery(filters: Filter[], limit = 50, enabled = true) {
       return { ...data, pages: data.pages.map((p) => p.filter((v) => !seen.has(v.event.id) && (seen.add(v.event.id), true))) };
     },
     placeholderData: keepPreviousData,
+    ...LIST_QUERY_OPTIONS,
   });
 }
 
@@ -68,10 +69,8 @@ export function useReports(status: ReportStatus, type?: string) {
     queryKey: ["reports", status, type],
     queryFn: ({ pageParam }) => api.get<Paged<ReportView>>("/reports", { status, type, limit: 30, offset: pageParam }),
     initialPageParam: 0,
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
-      return loaded < last.total && last.items.length ? loaded : undefined;
-    },
+    getNextPageParam: nextOffset,
+    ...LIST_QUERY_OPTIONS,
   });
 }
 
@@ -108,10 +107,8 @@ export function useMedia(q: MediaQuery) {
     queryKey: ["media", q],
     queryFn: ({ pageParam }) => api.get<Paged<MediaItem>>("/media", { ...q, limit: 48, offset: pageParam }),
     initialPageParam: 0,
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
-      return loaded < last.total && last.items.length ? loaded : undefined;
-    },
+    getNextPageParam: nextOffset,
+    ...LIST_QUERY_OPTIONS,
     placeholderData: keepPreviousData,
   });
 }

@@ -30,6 +30,30 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
+function sameId(ids: Uint8Array, a: number, b: number): boolean {
+  for (let i = 0; i < ID_SIZE; i++) if (ids[a + i] !== ids[b + i]) return false;
+  return true;
+}
+
+/** Whether the first `n` (timestamp, id) items are in non-decreasing order (O(n), no allocation). */
+function inOrder(ts: Float64Array, ids: Uint8Array, n: number): boolean {
+  for (let k = 1; k < n; k++) {
+    if (ts[k] !== ts[k - 1]) {
+      if (ts[k] < ts[k - 1]) return false;
+      continue;
+    }
+    const a = (k - 1) * ID_SIZE;
+    const b = k * ID_SIZE;
+    for (let i = 0; i < ID_SIZE; i++) {
+      if (ids[a + i] !== ids[b + i]) {
+        if (ids[a + i] > ids[b + i]) return false;
+        break;
+      }
+    }
+  }
+  return true;
+}
+
 // ------------------------------------------------------------------ byte buffers
 
 class WriteBuffer {
@@ -145,6 +169,17 @@ export class NegentropyStorage {
     return this.n;
   }
 
+  /** Item slots allocated before seal() (what the storage holds in memory while items are inserted). */
+  get capacity(): number {
+    return this.timestamps.length;
+  }
+
+  /** Makes room for `extra` more items, exactly (rather than doubling), e.g. before inserting a page of known size. */
+  reserve(extra: number): void {
+    if (this.sealed) throw new Error("already sealed");
+    if (this.n + extra > this.timestamps.length) this.resize(this.n + extra);
+  }
+
   insert(timestamp: number, idHex: string): void {
     if (this.sealed) throw new Error("already sealed");
     if (idHex.length !== ID_SIZE * 2) throw new Error("bad id size");
@@ -174,18 +209,22 @@ export class NegentropyStorage {
     const n = this.n;
     const ts = this.timestamps;
     const ids = this.ids;
-    // sort an index by (timestamp, id bytes); the first 4 id bytes settle almost every tie
-    const head = new Uint32Array(n);
-    for (let i = 0; i < n; i++) {
-      const o = i * ID_SIZE;
-      head[i] = ((ids[o] << 24) | (ids[o + 1] << 16) | (ids[o + 2] << 8) | ids[o + 3]) >>> 0;
-    }
     const order = new Uint32Array(n);
     for (let i = 0; i < n; i++) order[i] = i;
-    order.sort((a, b) => ts[a] - ts[b] || head[a] - head[b] || compareBytes(ids.subarray(a * ID_SIZE + 4, (a + 1) * ID_SIZE), ids.subarray(b * ID_SIZE + 4, (b + 1) * ID_SIZE)));
+    // one filter's ids are listed in (timestamp, id) order already: then the sort is skipped
+    const sorted = inOrder(ts, ids, n);
+    if (!sorted) {
+      // sort an index by (timestamp, id bytes); the first 4 id bytes settle almost every tie
+      const head = new Uint32Array(n);
+      for (let i = 0; i < n; i++) {
+        const o = i * ID_SIZE;
+        head[i] = ((ids[o] << 24) | (ids[o + 1] << 16) | (ids[o + 2] << 8) | ids[o + 3]) >>> 0;
+      }
+      order.sort((a, b) => ts[a] - ts[b] || head[a] - head[b] || compareBytes(ids.subarray(a * ID_SIZE + 4, (a + 1) * ID_SIZE), ids.subarray(b * ID_SIZE + 4, (b + 1) * ID_SIZE)));
+    }
     const at = (k: number) => ids.subarray(order[k] * ID_SIZE, (order[k] + 1) * ID_SIZE);
     const keep = new Uint8Array(n).fill(1);
-    for (let k = 1; k < n; k++) if (ts[order[k]] === ts[order[k - 1]] && compareBytes(at(k), at(k - 1)) === 0) keep[k] = 0;
+    for (let k = 1; k < n; k++) if (ts[order[k]] === ts[order[k - 1]] && sameId(ids, order[k] * ID_SIZE, order[k - 1] * ID_SIZE)) keep[k] = 0;
     for (const it of exclude) {
       const id = new Uint8Array(ID_SIZE);
       if (it.id.length !== ID_SIZE * 2) continue;
@@ -203,15 +242,20 @@ export class NegentropyStorage {
     }
     let count = 0;
     for (let k = 0; k < n; k++) count += keep[k];
-    const outTs = new Float64Array(count);
-    const outIds = new Uint8Array(count * ID_SIZE);
+    // in order with nothing left out: the inserted arrays are kept (trimmed to size) instead of copied
+    const same = sorted && count === n;
+    const exact = ts.length === n;
+    const outTs = same ? (exact ? ts : ts.slice(0, n)) : new Float64Array(count);
+    const outIds = same ? (exact ? ids : ids.slice(0, n * ID_SIZE)) : new Uint8Array(count * ID_SIZE);
     const prefix = new Uint32Array((count + 1) * LIMBS);
-    const view = new DataView(outIds.buffer);
+    const view = new DataView(outIds.buffer, outIds.byteOffset, outIds.byteLength);
     let j = 0;
     for (let k = 0; k < n; k++) {
       if (!keep[k]) continue;
-      outTs[j] = ts[order[k]];
-      outIds.set(at(k), j * ID_SIZE);
+      if (!same) {
+        outTs[j] = ts[order[k]];
+        outIds.set(at(k), j * ID_SIZE);
+      }
       // prefix[j + 1] = prefix[j] + id (mod 2^256), limb by limb with carry
       let carry = 0;
       for (let l = 0; l < LIMBS; l++) {
@@ -228,11 +272,14 @@ export class NegentropyStorage {
   }
 
   private grow() {
-    const cap = this.timestamps.length * 2;
+    this.resize(this.timestamps.length * 2);
+  }
+
+  private resize(cap: number) {
     const ts = new Float64Array(cap);
-    ts.set(this.timestamps);
+    ts.set(this.timestamps.subarray(0, this.n));
     const ids = new Uint8Array(cap * ID_SIZE);
-    ids.set(this.ids);
+    ids.set(this.ids.subarray(0, this.n * ID_SIZE));
     this.timestamps = ts;
     this.ids = ids;
   }

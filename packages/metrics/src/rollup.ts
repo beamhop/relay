@@ -1,4 +1,5 @@
 import type { Db, GeoPoint, TimeRange } from "@beamhop/sdk";
+import { upsertRows } from "@beamhop/sdk";
 import type { GeoInfo } from "./geo";
 
 const MINUTE = 60;
@@ -132,7 +133,6 @@ export const DEFAULT_MAX_REJECTION_REASONS = 500;
 const UNCAPPED: HourCaps = { maxPubkeys: Number.MAX_SAFE_INTEGER, maxRejectionReasons: Number.MAX_SAFE_INTEGER };
 
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
-const CHUNK = 200;
 
 /**
  * A batch the database rejects for its content (e.g. a value postgres can't store) would fail forever;
@@ -147,32 +147,15 @@ function isPermanentDbError(err: unknown): boolean {
 /** Even retryable failures stop being re-queued after this many consecutive attempts. */
 const MAX_FLUSH_ATTEMPTS = 10;
 
-/** Orders rows by their key columns so concurrent upserts (several instances) lock rows in the same order. */
-function sortByKeys(cols: string[], keys: string[], rows: unknown[][]): unknown[][] {
-  const idx = keys.map((k) => cols.indexOf(k));
-  return [...rows].sort((a, b) => {
-    for (const i of idx) {
-      const x = a[i] as string | number;
-      const y = b[i] as string | number;
-      if (x < y) return -1;
-      if (x > y) return 1;
-    }
-    return 0;
-  });
-}
+/**
+ * Hourly breakdowns (top pubkeys, rejections, geo) over ranges longer than a day aggregate up to ~1000 rows per hour
+ * (30 days of metrics_pubkeys: ~300 ms on SQLite). Their results are cached per (query, first hour, last hour, limit)
+ * for this long; shorter ranges are always read fresh.
+ */
+export const LONG_RANGE_CACHE_MS = 5 * 60_000;
+const LONG_RANGE_SEC = 24 * HOUR;
+const LONG_RANGE_CACHE_SIZE = 32;
 
-/** multi-row upsert in chunks (keys must be unique per call) */
-async function upsert(db: Db, table: string, cols: string[], keys: string[], update: string, rows: unknown[][]) {
-  rows = sortByKeys(cols, keys, rows);
-  const one = `(${cols.map(() => "?").join(", ")})`;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK);
-    const sql =
-      `INSERT INTO ${table} (${cols.join(", ")}) VALUES ${chunk.map(() => one).join(", ")} ` +
-      `ON CONFLICT (${keys.join(", ")}) DO UPDATE SET ${update}`;
-    await db.run(sql, chunk.flat());
-  }
-}
 
 /**
  * In-memory minute/hour accumulators + persistence and query helpers.
@@ -188,12 +171,20 @@ export class Rollup {
   /** Consecutive failed flushes of re-queued data. */
   private failedFlushes = 0;
   private lastTrimmedHour = 0;
+  private longRangeCache = new Map<string, { at: number; value: Promise<unknown> }>();
   readonly gaugeNames = new Set<string>(BUILTIN_GAUGES);
 
   constructor(
     private db: Db,
     nowSec: number,
-    private opts: { maxPubkeysPerBucket: number; topPubkeysPerHour: number; maxRejectionReasonsPerHour?: number; onDropped?: (message: string) => void },
+    private opts: {
+      maxPubkeysPerBucket: number;
+      topPubkeysPerHour: number;
+      maxRejectionReasonsPerHour?: number;
+      onDropped?: (message: string) => void;
+      /** clock in unix ms (long-range cache expiry) */
+      now?: () => number;
+    },
   ) {
     this.current = new MinuteAcc(minuteOf(nowSec));
     this.hour = this.newHour(hourOf(nowSec));
@@ -239,9 +230,30 @@ export class Rollup {
    * a batch dropped here (permanent DB error) is reported, since nobody awaits this flush's error.
    */
   private flushForRead(): Promise<void> {
+    // nothing to write: only wait for a flush in progress (no write transaction per dashboard read)
+    if (!this.pendingMinutes.length && !this.pendingHours.length && this.hour.empty) return this.flushChain;
     return this.flush({ countFailure: false }).catch((err) => {
       if (String(err).includes("metrics batch dropped")) this.opts.onDropped?.(String(err));
     });
+  }
+
+  /** See LONG_RANGE_CACHE_MS. */
+  private cachedLongRange<T>(name: string, range: TimeRange, limit: number, read: () => Promise<T>): Promise<T> {
+    if (range.to - range.from <= LONG_RANGE_SEC) return read();
+    const now = (this.opts.now ?? Date.now)();
+    const key = `${name}:${hourOf(range.from)}:${hourOf(range.to)}:${limit}`;
+    const hit = this.longRangeCache.get(key);
+    if (hit && now - hit.at < LONG_RANGE_CACHE_MS) return hit.value as Promise<T>;
+    const value = read();
+    this.longRangeCache.delete(key);
+    this.longRangeCache.set(key, { at: now, value });
+    value.catch(() => this.longRangeCache.delete(key));
+    // oldest first (insertion order)
+    for (const k of this.longRangeCache.keys()) {
+      if (this.longRangeCache.size <= LONG_RANGE_CACHE_SIZE) break;
+      this.longRangeCache.delete(k);
+    }
+    return value;
   }
 
   private async doFlush(countFailure: boolean) {
@@ -274,18 +286,18 @@ export class Rollup {
     try {
       await this.db.tx(async (db) => {
         const S = ["name", "bucket", "value"];
-        await upsert(db, "metrics_series", S, ["name", "bucket"], "value = metrics_series.value + excluded.value", counters);
-        await upsert(db, "metrics_series", S, ["name", "bucket"], "value = excluded.value", gauges);
-        await upsert(db, "metrics_kinds", ["bucket", "kind", "count"], ["bucket", "kind"], "count = metrics_kinds.count + excluded.count", kinds);
-        await upsert(
+        await upsertRows(db, "metrics_series", S, ["name", "bucket"], "value = metrics_series.value + excluded.value", counters);
+        await upsertRows(db, "metrics_series", S, ["name", "bucket"], "value = excluded.value", gauges);
+        await upsertRows(db, "metrics_kinds", ["bucket", "kind", "count"], ["bucket", "kind"], "count = metrics_kinds.count + excluded.count", kinds);
+        await upsertRows(
           db, "metrics_pubkeys", ["bucket", "pubkey", "events", "rejected"], ["bucket", "pubkey"],
           "events = metrics_pubkeys.events + excluded.events, rejected = metrics_pubkeys.rejected + excluded.rejected", pubkeys,
         );
-        await upsert(
+        await upsertRows(
           db, "metrics_rejections", ["bucket", "code", "reason", "count"], ["bucket", "code", "reason"],
           "count = metrics_rejections.count + excluded.count", rejections,
         );
-        await upsert(
+        await upsertRows(
           db, "metrics_geo", ["bucket", "country", "country_name", "city", "lat", "lon", "connections", "events"], ["bucket", "country", "city"],
           "connections = metrics_geo.connections + excluded.connections, events = metrics_geo.events + excluded.events", geo,
         );
@@ -385,27 +397,36 @@ export class Rollup {
     return rows.map((r) => ({ kind: num(r.kind), count: num(r.count) }));
   }
 
-  async topPubkeys(range: TimeRange, limit = 20) {
-    await this.flushForRead();
-    const rows = await this.db.all<{ pubkey: string; events: unknown; rejected: unknown }>(
-      `SELECT pubkey, SUM(events) AS events, SUM(rejected) AS rejected FROM metrics_pubkeys
-       WHERE bucket >= ? AND bucket <= ? GROUP BY pubkey ORDER BY events DESC, rejected DESC, pubkey LIMIT ?`,
-      [hourOf(range.from), range.to, Math.max(1, Math.min(1000, Math.floor(limit)))],
-    );
-    return rows.map((r) => ({ pubkey: r.pubkey, events: num(r.events), rejected: num(r.rejected) }));
+  topPubkeys(range: TimeRange, limit = 20) {
+    const lim = Math.max(1, Math.min(1000, Math.floor(limit)));
+    return this.cachedLongRange("pubkeys", range, lim, async () => {
+      await this.flushForRead();
+      const rows = await this.db.all<{ pubkey: string; events: unknown; rejected: unknown }>(
+        `SELECT pubkey, SUM(events) AS events, SUM(rejected) AS rejected FROM metrics_pubkeys
+         WHERE bucket >= ? AND bucket <= ? GROUP BY pubkey ORDER BY events DESC, rejected DESC, pubkey LIMIT ?`,
+        [hourOf(range.from), range.to, lim],
+      );
+      return rows.map((r) => ({ pubkey: r.pubkey, events: num(r.events), rejected: num(r.rejected) }));
+    });
   }
 
-  async rejections(range: TimeRange, limit = 100) {
-    await this.flushForRead();
-    const rows = await this.db.all<{ code: string; reason: string; count: unknown }>(
-      `SELECT code, reason, SUM(count) AS count FROM metrics_rejections
-       WHERE bucket >= ? AND bucket <= ? GROUP BY code, reason ORDER BY count DESC, code, reason LIMIT ?`,
-      [hourOf(range.from), range.to, limit],
-    );
-    return rows.map((r) => ({ code: r.code, reason: r.reason, count: num(r.count) }));
+  rejections(range: TimeRange, limit = 100) {
+    return this.cachedLongRange("rejections", range, limit, async () => {
+      await this.flushForRead();
+      const rows = await this.db.all<{ code: string; reason: string; count: unknown }>(
+        `SELECT code, reason, SUM(count) AS count FROM metrics_rejections
+         WHERE bucket >= ? AND bucket <= ? GROUP BY code, reason ORDER BY count DESC, code, reason LIMIT ?`,
+        [hourOf(range.from), range.to, limit],
+      );
+      return rows.map((r) => ({ code: r.code, reason: r.reason, count: num(r.count) }));
+    });
   }
 
-  async geo(range: TimeRange): Promise<GeoPoint[]> {
+  geo(range: TimeRange): Promise<GeoPoint[]> {
+    return this.cachedLongRange("geo", range, 0, () => this.readGeo(range));
+  }
+
+  private async readGeo(range: TimeRange): Promise<GeoPoint[]> {
     await this.flushForRead();
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT country, MAX(country_name) AS country_name, city, MAX(lat) AS lat, MAX(lon) AS lon,

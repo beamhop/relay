@@ -1,6 +1,8 @@
 import { z } from "zod";
+import type { AuditListQuery } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { requirePermission } from "../middleware/auth";
+import type { SameFields } from "../util/contract";
 import { tryParsePubkey } from "../util/pubkey";
 import { readQuery } from "../util/request";
 
@@ -11,6 +13,7 @@ const Query = z.object({
   before: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
+true satisfies SameFields<z.output<typeof Query>, AuditListQuery>;
 
 export function registerAuditRoutes(app: AdminApp, ctx: ApiContext) {
   app.get("/audit", requirePermission("audit.view"), async (c) => {

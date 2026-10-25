@@ -10,6 +10,12 @@ const MANIFEST = (self as unknown as { __WB_MANIFEST: PrecacheEntry[] }).__WB_MA
 
 const VERSION = hash(MANIFEST.map((e) => `${e.url}@${e.revision ?? ""}`).join("|"));
 const CACHE = `beamhop-shell-${VERSION}`;
+/**
+ * Large chunks only some admins ever load (the world map: maplibre and its worker) stay out of the precache
+ * (vite.config.ts globIgnores) and are cached here the first time they're fetched; same lifecycle as the shell cache.
+ */
+const LAZY_CACHE = `beamhop-lazy-${VERSION}`;
+const LAZY_ASSET = /\/assets\/(world-map|maplibre-gl)[^/]*\.(m?js|css)$/;
 const SCOPE: string = sw.registration.scope; // e.g. https://host/admin/
 const OFFLINE_URL = new URL("offline.html", SCOPE).href;
 const INDEX_URL = new URL("index.html", SCOPE).href;
@@ -43,7 +49,8 @@ sw.addEventListener("activate", (event: any) => {
       // explicitly, since the newest other cache may be one whose install failed and was never used.
       const meta = await caches.open(META_CACHE);
       const previous = await (await meta.match(ACTIVE_KEY))?.text();
-      const stale = (await caches.keys()).filter((k) => k.startsWith("beamhop-shell-") && k !== CACHE && k !== previous);
+      const keep = new Set([CACHE, LAZY_CACHE, previous, previous?.replace("beamhop-shell-", "beamhop-lazy-")]);
+      const stale = (await caches.keys()).filter((k) => /^beamhop-(shell|lazy)-/.test(k) && !keep.has(k));
       await Promise.all(stale.map((k) => caches.delete(k)));
       await meta.put(ACTIVE_KEY, new Response(CACHE));
       await sw.clients.claim();
@@ -78,7 +85,14 @@ sw.addEventListener("fetch", (event: any) => {
       const cache = await caches.open(CACHE);
       // current version first; then the kept previous version, for hashed chunks of a bundle that's still open
       const hit = (await cache.match(req, { ignoreSearch: false })) || (await caches.match(req, { ignoreSearch: false }));
-      return hit || fetch(req);
+      if (hit) return hit;
+      const res = await fetch(req);
+      // hashed file names: a fetched lazy chunk never changes, keep it for later visits and offline use
+      if (res.ok && LAZY_ASSET.test(url.pathname)) {
+        const copy = res.clone();
+        event.waitUntil(caches.open(LAZY_CACHE).then((c) => c.put(req, copy)).catch(() => {}));
+      }
+      return res;
     })(),
   );
 });

@@ -1,45 +1,5 @@
-/** Minimal LRU cache with optional TTL (ms). */
-export class LruCache<K, V> {
-  private map = new Map<K, { v: V; exp: number }>();
-  constructor(
-    private readonly max: number,
-    private readonly ttlMs = 0,
-    private readonly now: () => number = Date.now,
-  ) {}
-
-  get(key: K): V | undefined {
-    const e = this.map.get(key);
-    if (!e) return undefined;
-    if (e.exp && e.exp < this.now()) {
-      this.map.delete(key);
-      return undefined;
-    }
-    this.map.delete(key);
-    this.map.set(key, e);
-    return e.v;
-  }
-  has(key: K): boolean {
-    return this.get(key) !== undefined;
-  }
-  set(key: K, v: V): void {
-    this.map.delete(key);
-    this.map.set(key, { v, exp: this.ttlMs ? this.now() + this.ttlMs : 0 });
-    while (this.map.size > this.max) {
-      const first = this.map.keys().next();
-      if (first.done) break;
-      this.map.delete(first.value);
-    }
-  }
-  delete(key: K): void {
-    this.map.delete(key);
-  }
-  clear(): void {
-    this.map.clear();
-  }
-  get size() {
-    return this.map.size;
-  }
-}
+/** The LRU (with optional TTL) lives in @beamhop/sdk/util; re-exported under this package's old name. */
+export { Lru as LruCache } from "@beamhop/sdk/util";
 
 /**
  * Map of short-lived single-use tokens (challenges, NIP-98 replay ids).

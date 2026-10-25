@@ -1,12 +1,14 @@
 import { z } from "zod";
-import type { ConnectionView } from "@beamhop/sdk";
+import type { ConnectionView, DisconnectRequest } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { badRequest, notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
+import type { Same } from "../util/contract";
 import { tryParsePubkey } from "../util/pubkey";
 import { readBody } from "../util/request";
 
 const DisconnectSchema = z.object({ pubkey: z.string().optional(), ip: z.string().max(64).optional() });
+true satisfies Same<z.output<typeof DisconnectSchema>, DisconnectRequest>;
 
 export function registerConnectionRoutes(app: AdminApp, ctx: ApiContext) {
   const { relay, metrics } = ctx.deps;

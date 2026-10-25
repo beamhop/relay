@@ -9,6 +9,17 @@ export const SOFT_BUFFER_LIMIT = 1 << 20; // 1 MiB
 /** Above this the connection is considered a stuck slow consumer and closed. */
 const HARD_BUFFER_LIMIT = 8 << 20; // 8 MiB
 
+/** An event's JSON and its UTF-8 size (serialized once per broadcast, shared by all recipients). */
+export interface EventJson {
+  json: string;
+  bytes: number;
+}
+
+export function serializeEvent(event: NostrEvent): EventJson {
+  const json = JSON.stringify(event);
+  return { json, bytes: Buffer.byteLength(json) };
+}
+
 export interface Subscription {
   conn: Connection;
   id: string;
@@ -47,6 +58,8 @@ export class Connection implements ConnectionInfo {
   queue: Promise<unknown> = Promise.resolve();
   /** EVENTs received but not yet answered with OK */
   inflightEvents = 0;
+  /** the same EVENTs by id, so a shutdown can answer them before the socket closes (see answerPending) */
+  readonly awaitingOk = new Set<{ id: string; answered: boolean }>();
   /** sum of the weights of open subscriptions */
   filterWeight = 0;
   /** NEG-OPENs being prepared (not yet in negSessions) */
@@ -59,6 +72,9 @@ export class Connection implements ConnectionInfo {
   ownMessageLimit = false;
   /** EVENTs that may await their OK at once */
   maxInflightEvents: number;
+  /** messages refused by the inbound message limit since `refusedSince` (a one-minute window) */
+  refused = 0;
+  refusedSince = 0;
   /** stored queries running (incl. streaming their results); further REQs wait for a slot */
   readonly queries = new Gate(MAX_QUERIES_PER_CONN);
   /** estimated bytes of stored results materialized but not yet sent */
@@ -84,6 +100,21 @@ export class Connection implements ConnectionInfo {
   send(msg: unknown[]): void {
     if (this.closed) return;
     const json = JSON.stringify(msg);
+    this.write(String(msg[0]), json, Buffer.byteLength(json));
+  }
+
+  /**
+   * Sends ["EVENT", subId, event] given the event's JSON `body` and its UTF-8 size: fan-out serializes an
+   * event once for all its recipients and only splices in each subscription id.
+   */
+  sendEventRaw(subId: string, body: string, bodyBytes: number): void {
+    if (this.closed) return;
+    const sid = JSON.stringify(subId);
+    // `["EVENT",` + sid + `,` + body + `]`
+    this.write("EVENT", `["EVENT",${sid},${body}]`, bodyBytes + Buffer.byteLength(sid) + 11);
+  }
+
+  private write(type: string, json: string, bytes: number): void {
     try {
       this.socket.send(json);
     } catch {
@@ -91,18 +122,22 @@ export class Connection implements ConnectionInfo {
       return;
     }
     this.messagesOut++;
-    this.bus.emit("message.out", { connId: this.id, type: String(msg[0]), bytes: Buffer.byteLength(json) });
+    this.bus.emit("message.out", { connId: this.id, type, bytes });
   }
 
-  /** Live delivery with backpressure handling. Returns true if sent. */
-  sendLive(subId: string, event: NostrEvent): boolean {
+  /**
+   * Live delivery with backpressure handling. Returns true if sent. `serialized` supplies the event's
+   * JSON when it is shared with other recipients.
+   */
+  sendLive(subId: string, event: NostrEvent, serialized?: () => EventJson): boolean {
     const buffered = this.socket.bufferedAmount?.() ?? 0;
     if (buffered > HARD_BUFFER_LIMIT) {
       this.close(1008, "slow consumer");
       return false;
     }
     if (buffered > SOFT_BUFFER_LIMIT) return false;
-    this.send(["EVENT", subId, event]);
+    const e = serialized ? serialized() : serializeEvent(event);
+    this.sendEventRaw(subId, e.json, e.bytes);
     return true;
   }
 
@@ -112,6 +147,15 @@ export class Connection implements ConnectionInfo {
 
   ok(id: string, accepted: boolean, message: string) {
     this.send(["OK", id, accepted, message]);
+  }
+
+  /** OK false for every EVENT still awaiting its OK (their processing may still finish, but can't answer any more). */
+  answerPending(message: string) {
+    for (const p of this.awaitingOk) {
+      if (p.answered) continue;
+      p.answered = true;
+      this.ok(p.id, false, message);
+    }
   }
 
   closedSub(subId: string, message: string) {

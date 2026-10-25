@@ -1,9 +1,9 @@
 import { createReadStream } from "node:fs";
-import { mkdir, open, rename, rm, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readdir, rename, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
-import { assertSha256, thumbnailKey, type BlobData, type BlobDriver, type BlobObject, type ByteRange } from "./types";
+import { assertSha256, thumbnailKey, type BlobDriver, type BlobObject, type ByteRange } from "./types";
 
 const BunRt = (globalThis as unknown as { Bun?: { file(p: string): Blob } }).Bun;
 
@@ -20,31 +20,29 @@ function fileStream(path: string, range?: ByteRange): ReadableStream<Uint8Array>
   return Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 }
 
+/** `.<key>.<random>.tmp`: a write in progress, or one cut off by a crash */
+const TEMP_RE = /^\..+\.tmp$/;
+const SHARD_RE = /^[0-9a-f]{2}$/;
+
 /**
  * Filesystem driver. Layout: `<root>/ab/cd/<sha256>` (+ `<sha256>.thumb.webp`).
- * Writes go to a temp file in the same directory and are atomically renamed into place.
+ * Writes go to a temp file in the same directory, are fsynced and atomically renamed into place (then the directory
+ * is fsynced, best effort), so a crash leaves either the whole blob or a temp file that `sweepTempFiles` removes.
  */
 export function createFsDriver(root: string): BlobDriver {
   const dirOf = (sha256: string) => join(root, sha256.slice(0, 2), sha256.slice(2, 4));
   const pathOf = (sha256: string, key = sha256) => join(dirOf(sha256), key);
 
-  async function writeAtomic(sha256: string, key: string, data: BlobData) {
+  async function writeAtomic(sha256: string, key: string, data: Uint8Array) {
     const dir = dirOf(sha256);
     await mkdir(dir, { recursive: true });
     const target = join(dir, key);
     const tmp = join(dir, `.${key}.${randomBytes(6).toString("hex")}.tmp`);
     const fh = await open(tmp, "wx");
     try {
-      if (data instanceof Uint8Array) {
-        await fh.writeFile(data);
-      } else {
-        const reader = data.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value?.byteLength) await fh.write(value);
-        }
-      }
+      await fh.writeFile(data);
+      // the bytes must be on disk before the rename makes them the blob, or a power cut can leave a short file
+      await fh.sync();
       await fh.close();
       await rename(tmp, target);
     } catch (err) {
@@ -52,7 +50,31 @@ export function createFsDriver(root: string): BlobDriver {
       await unlink(tmp).catch(() => {});
       throw err;
     }
+    await syncDir(dir);
   }
+
+  /** Persists the rename itself. Best effort: some platforms/filesystems (Windows) can't fsync a directory. */
+  async function syncDir(dir: string) {
+    try {
+      const dh = await open(dir, "r");
+      try {
+        await dh.sync();
+      } finally {
+        await dh.close();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const listDir = async (dir: string): Promise<string[]> => {
+    try {
+      return await readdir(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw err;
+    }
+  };
 
   async function read(path: string, range?: ByteRange): Promise<BlobObject | undefined> {
     let size: number;
@@ -77,10 +99,11 @@ export function createFsDriver(root: string): BlobDriver {
       assertSha256(sha256);
       return read(pathOf(sha256), range);
     },
-    async has(sha256) {
+    async has(sha256, opts) {
       assertSha256(sha256);
       try {
-        return (await stat(pathOf(sha256))).isFile();
+        const st = await stat(pathOf(sha256));
+        return st.isFile() && (opts?.size === undefined || st.size === opts.size);
       } catch {
         return false;
       }
@@ -97,6 +120,27 @@ export function createFsDriver(root: string): BlobDriver {
     async getThumbnail(sha256) {
       assertSha256(sha256);
       return read(pathOf(sha256, thumbnailKey(sha256)));
+    },
+    async sweepTempFiles(maxAgeMs) {
+      const cutoff = Date.now() - maxAgeMs;
+      let removed = 0;
+      for (const a of await listDir(root)) {
+        if (!SHARD_RE.test(a)) continue;
+        for (const b of await listDir(join(root, a))) {
+          if (!SHARD_RE.test(b)) continue;
+          const dir = join(root, a, b);
+          for (const name of await listDir(dir)) {
+            if (!TEMP_RE.test(name)) continue;
+            const p = join(dir, name);
+            try {
+              if ((await stat(p)).mtimeMs < cutoff) (await unlink(p), removed++);
+            } catch {
+              // gone already (finished or cleaned up by its writer)
+            }
+          }
+        }
+      }
+      return removed;
     },
   };
 }

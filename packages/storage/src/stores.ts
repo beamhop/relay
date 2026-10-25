@@ -1,5 +1,5 @@
 import type { BeamhopConfig, Db, Logger, Migration, Stores } from "@beamhop/sdk";
-import { createDb } from "./db";
+import { createDb, type SqliteOptions } from "./db";
 import { SqlEventStore } from "./events";
 import { FTS_MIGRATION_ID, NAMESPACE, sqliteFtsReady, sqliteHasFts5, storageMigrations } from "./migrations";
 import { SqlAuditLog, SqlInviteStore, SqlIpRuleStore, SqlKvStore } from "./misc";
@@ -12,6 +12,8 @@ export interface CreateStoresOptions {
   /** reuse an existing Db (otherwise created from config.database) */
   db?: Db;
   users?: UserStoreOptions;
+  /** sqlite transaction watchdog / yielding (when the Db is created here) */
+  sqlite?: Omit<SqliteOptions, "logger">;
 }
 
 export interface StorageStores extends Stores {
@@ -66,7 +68,7 @@ class ManagedDb implements Db {
 
 export async function createStores(config: BeamhopConfig, logger: Logger, opts: CreateStoresOptions = {}): Promise<StorageStores> {
   const log = logger.child("storage");
-  const raw = opts.db ?? (await createDb(config));
+  const raw = opts.db ?? (await createDb(config, { ...opts.sqlite, logger: log.child("db") }));
   let fts = raw.dialect === "postgres";
   if (raw.dialect === "sqlite") {
     const available = await sqliteHasFts5(raw);

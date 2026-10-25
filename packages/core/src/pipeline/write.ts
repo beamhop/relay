@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { type EventSource, type NostrEvent, type RejectCode, type UserRecord, type WriteContext, isEphemeral, nowSec } from "@beamhop/sdk";
+import { IP_RATE_FACTOR } from "../constants";
 import type { RelayContext } from "../context";
 import { expirationOf } from "../nips/nip40";
 import { GroupConflict, GroupDuplicate } from "../nips/nip29/groups";
@@ -23,8 +24,6 @@ export interface WriteResult {
   status?: "saved" | "replaced" | "ephemeral" | "duplicate" | "stale" | "shadow";
 }
 
-/** IP buckets are looser than pubkey buckets (NAT, many users behind one IP). */
-const IP_RATE_FACTOR = 4;
 /**
  * NIP-62 requests to vanish per client address per minute. They skip the event buckets (a banned or flooding user
  * must still be able to vanish) but each one deletes, so they get their own small bucket.
@@ -203,9 +202,19 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     }
   }
 
-  await special.after?.();
+  // derived events (relay-signed group metadata, notifications) failing doesn't undo the stored, committed event:
+  // it is still relayed and answered OK
+  if (special.after) {
+    try {
+      await special.after();
+    } catch (err) {
+      ctx.logger.error("post-store step failed", { id: event.id, kind: event.kind, err: String(err) });
+    }
+  }
   const recipients = ctx.broadcast(event);
   ctx.bus.emit("event.broadcast", { event, recipients });
+  // stored and relayed, yet refused (NIP-29: a closed group's join request awaiting approval)
+  if (special.pending) return reject(special.pending);
   ctx.bus.emit("event.accepted", { event, status, connId: conn?.id, ip: conn?.ip, source });
   if (report) {
     ctx.bus.emit("alert", {
@@ -214,7 +223,10 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
       message: `${report} matched event ${event.id} (kind ${event.kind}) by ${event.pubkey}`,
     });
     // off the OK path, like the NIP-56 auto-ban check
-    if (status !== "ephemeral") void fileRelayReport(ctx, event, report).catch((err) => ctx.logger.warn("filing word-filter report failed", { err: String(err) }));
+    if (status !== "ephemeral") {
+      const filing = fileRelayReport(ctx, event, report).catch((err) => ctx.logger.warn("filing word-filter report failed", { err: String(err) }));
+      ctx.tasks?.track("word-filter report", filing);
+    }
   }
   return { ok: true, message: "", status };
 }

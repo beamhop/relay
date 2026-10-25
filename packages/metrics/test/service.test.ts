@@ -27,7 +27,7 @@ describe("live snapshot", () => {
     expect(s.eventsInPerSec).toBe(4);
     expect(s.eventsOutPerSec).toBe(1);
     expect(s.rejectedPerSec).toBe(1);
-    expect(s.totalEvents).toBe(42);
+    expect(s.totalEvents).toBe(42 + 40); // the last COUNT plus the events stored since
     expect(s.dbBytes).toBe(4096);
     expect(s.mediaCount).toBe(7);
     expect(s.mediaBytes).toBe(700);
@@ -62,21 +62,38 @@ describe("live snapshot", () => {
     expect(events.calls).toBe(calls + 1);
   });
 
-  test("store stats refresh within statsDirtyMs after events or blobs change", async () => {
-    const { bus, events, run } = await setup({ options: { statsIntervalMs: 60_000, statsDirtyMs: 5_000 } });
+  test("stored events update the total in memory; the event COUNT still runs only every statsIntervalMs", async () => {
+    const { metrics, bus, events, run } = await setup({ options: { statsIntervalMs: 60_000, statsDirtyMs: 5_000 } });
     run(1);
     await new Promise((r) => setTimeout(r, 0));
+    run(1);
     const calls = events.calls;
+    expect(metrics.snapshot().totalEvents).toBe(42);
     bus.emit("event.accepted", { event: ev(20001), status: "ephemeral", source: "ws" });
-    run(6);
+    bus.emit("event.accepted", { event: ev(0), status: "replaced", source: "ws" });
+    for (let i = 0; i < 3; i++) bus.emit("event.accepted", { event: ev(1), status: "saved", source: "ws" });
+    bus.emit("event.deleted", { ids: ["x"], actor: "a" });
+    run(5);
     expect(events.calls).toBe(calls);
-    bus.emit("event.accepted", { event: ev(1), status: "saved", source: "ws" });
-    run(1);
-    expect(events.calls).toBe(calls + 1);
+    expect(metrics.snapshot().totalEvents).toBe(45);
+    run(54);
     await new Promise((r) => setTimeout(r, 0));
+    expect(events.calls).toBe(calls + 1);
+    run(1);
+    expect(metrics.snapshot().totalEvents).toBe(42); // the COUNT is authoritative again
+  });
+
+  test("media stats refresh within statsDirtyMs after blobs change, without an event COUNT", async () => {
+    const blossom = fakeBlossom(7, 700);
+    const { bus, events, run } = await setup({ blossom, options: { statsIntervalMs: 60_000, statsDirtyMs: 5_000 } });
+    run(1);
+    await new Promise((r) => setTimeout(r, 0));
+    const [eventCalls, mediaCalls] = [events.calls, blossom.calls];
     bus.emit("blob.deleted", { sha256: "x", actor: "a" });
     run(5);
-    expect(events.calls).toBe(calls + 2);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(blossom.calls).toBe(mediaCalls + 1);
+    expect(events.calls).toBe(eventCalls);
   });
 });
 

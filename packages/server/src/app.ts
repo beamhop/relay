@@ -4,6 +4,7 @@ import { generateSecretKey } from "nostr-tools/pure";
 import {
   EventBus,
   HookRegistry,
+  TaskTracker,
   createLogger,
   type AdminApi,
   type BeamhopConfig,
@@ -14,6 +15,7 @@ import {
   type CreateBlossom,
   type CreateMetrics,
   type CreateRelay,
+  type HookIncident,
   type Logger,
   type MetricsService,
   type RelayEngine,
@@ -24,7 +26,8 @@ import type { ServerExtras } from "./config";
 import { createPluginManager, PluginError, type ServerPluginManager } from "./plugins/manager";
 import { PROMETHEUS_CONTENT_TYPE } from "@beamhop/metrics";
 import { createAssetSource, serveAdminAsset, type AssetSource } from "./static";
-import { proxyMatcher } from "./runtime/common";
+import { proxyMatcher, type RunningServer } from "./runtime/common";
+import { Lifecycle, runShutdown, shutdownBudgets } from "./lifecycle";
 import { LANDING_CSP, renderLanding } from "./landing";
 import { VERSION } from "./version";
 
@@ -75,12 +78,20 @@ export interface Beamhop {
   assets: AssetSource;
   app: Hono<{ Bindings: ServerEnv }>;
   version: string;
-  /** HTTP entry point for runtime adapters */
+  /** background work started off request paths (bus handlers, report filing, pushes, prunes) */
+  tasks: TaskTracker;
+  /** phase (starting → ready → draining → stopping → stopped) and in-flight HTTP requests */
+  lifecycle: Lifecycle;
+  /** HTTP entry point for runtime adapters (counts in-flight requests; 503 while shutting down) */
   fetch(req: Request, env?: Partial<ServerEnv>): Response | Promise<Response>;
   /** starts relay jobs, metrics and plugins */
   start(): Promise<void>;
-  /** relay.stop → plugins teardown → metrics.stop → db.close (idempotent) */
-  stop(): Promise<void>;
+  /**
+   * Graceful shutdown (idempotent; see runShutdown): drain in-flight requests, queued EVENTs, jobs and background
+   * tasks → relay.stop (close handshakes) → plugins teardown → admin/blossom/metrics → db.close → `server` force-stop.
+   * Bounded by `config.server.shutdownTimeoutMs` (or `timeoutMs`).
+   */
+  stop(opts?: { reason?: string; server?: RunningServer; timeoutMs?: number }): Promise<void>;
 }
 
 export const isWebSocketUpgrade = (req: Request) => (req.headers.get("upgrade") ?? "").toLowerCase() === "websocket";
@@ -145,14 +156,8 @@ export async function ensureSecrets(config: BeamhopConfig, stores: Stores, logge
   let k = await stores.kv.get<string>(NS, KEY);
   if (!k) {
     const fresh = Buffer.from(generateSecretKey()).toString("hex");
-    if (stores.kv.setIfAbsent) {
-      if (await stores.kv.setIfAbsent(NS, KEY, fresh)) logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
-      k = await stores.kv.get<string>(NS, KEY);
-    } else {
-      await stores.kv.set(NS, KEY, fresh);
-      logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
-      k = fresh;
-    }
+    if (await stores.kv.setIfAbsent(NS, KEY, fresh)) logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
+    k = await stores.kv.get<string>(NS, KEY);
     if (!k) throw new Error("relay secret key could not be stored in kv server/relaySecretKey");
   }
   config.relaySecretKey = k;
@@ -170,7 +175,9 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
   const extras: ServerExtras = { pluginsEnabled: [], prometheus: true, ...overrides.extras };
   const logger = overrides.logger ?? createLogger(config.logLevel);
   const log = logger.child("server");
-  const bus = new EventBus();
+  const tasks = new TaskTracker({ logger: logger.child("tasks") });
+  const lifecycle = new Lifecycle();
+  const bus = new EventBus({ logger: logger.child("bus"), tasks });
   const hooks = new HookRegistry();
   const f = await loadFactories(overrides.factories ?? {}, config.blossom.enabled, config.admin.enabled);
 
@@ -179,10 +186,11 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
   try {
     await ensureSecrets(config, stores, log);
     const settings = await f.createSettingsService(stores, bus, logger.child("settings"));
-    const base = { config, stores, settings, hooks, bus };
+    const base = { config, stores, settings, hooks, bus, tasks };
     const relay = await f.createRelay({ ...base, logger: logger.child("relay") });
     const blossom = config.blossom.enabled ? await f.createBlossom({ ...base, logger: logger.child("blossom") }) : undefined;
     const metrics = await f.createMetrics({ ...base, logger: logger.child("metrics"), relay, blossom });
+    hooks.onIncident(hookIncidentReporter({ bus, metrics, logger: logger.child("hooks") }));
     const plugins = createPluginManager({
       ...base,
       logger,
@@ -207,15 +215,15 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
       );
     }
 
-    const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, checkHealth: () => stores.db.get("SELECT 1 AS ok") });
+    const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, lifecycle, checkHealth: () => stores.db.get("SELECT 1 AS ok") });
 
     let started = false;
     let stopping: Promise<void> | undefined;
     const beamhop: Beamhop = {
-      config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION,
+      config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION, tasks, lifecycle,
       fetch(req, env) {
         const ip = env?.ip ?? "127.0.0.1";
-        return app.fetch(req, { ...makeEnv(ip), ...env } as ServerEnv);
+        return lifecycle.handle(req, () => app.fetch(req, { ...makeEnv(ip), ...env } as ServerEnv));
       },
       async start() {
         if (started) return;
@@ -223,23 +231,72 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
         await relay.start();
         await metrics.start();
         await plugins.start();
+        if (lifecycle.phase === "starting") lifecycle.phase = "ready";
         // raised while settings loaded, before admin/metrics/plugin listeners existed: emit it again now
         const startupAlert = (settings as Partial<{ takeStartupAlert(): BusEvents["alert"] | undefined }>).takeStartupAlert?.();
         if (startupAlert) bus.emit("alert", startupAlert);
       },
-      stop() {
+      stop(opts = {}) {
         stopping ??= (async () => {
-          const step = async (name: string, fn: () => Promise<void> | void) => {
-            try {
-              await fn();
-            } catch (err) {
-              log.error(`shutdown: ${name} failed`, { error: (err as Error).message });
-            }
-          };
-          await step("relay", () => relay.stop());
-          await step("plugins", () => plugins.stop());
-          await step("metrics", () => metrics.stop());
-          await step("db", () => stores.db.close());
+          const totalMs = opts.timeoutMs ?? config.server.shutdownTimeoutMs;
+          const budget = shutdownBudgets(totalMs);
+          const server = opts.server;
+          await runShutdown({
+            reason: opts.reason ?? "shutdown",
+            totalMs,
+            logger: log,
+            lifecycle,
+            steps: [
+              {
+                // in parallel, while probes still answer (503 "draining"): no new work, finish what is in flight
+                name: "drain",
+                phase: "draining",
+                ms: budget.drain,
+                run: {
+                  http: (sc) => lifecycle.idle(sc.signal),
+                  relay: relay.drain && ((sc) => relay.drain!(sc)),
+                  admin: adminApi?.drain && ((sc) => adminApi.drain!(sc)),
+                  blossom: blossom?.drain && ((sc) => blossom.drain!(sc)),
+                  plugins: (sc) => plugins.drain(sc),
+                  tasks: (sc) => tasks.idle(sc.signal),
+                },
+              },
+              {
+                // NOTICE + close 1001 on every socket, then a moment for the close handshakes
+                name: "relay",
+                phase: "stopping",
+                ms: budget.relay,
+                run: {
+                  relay: async (sc) => {
+                    await relay.stop(sc);
+                    server?.stopAccepting();
+                    await server?.settle(sc.signal);
+                  },
+                },
+              },
+              { name: "plugins", ms: budget.plugins, run: { plugins: () => plugins.stop() } },
+              {
+                name: "services",
+                ms: budget.services,
+                run: {
+                  admin: adminApi?.stop && ((sc) => adminApi.stop!(sc)),
+                  blossom: blossom?.stop && ((sc) => blossom.stop!(sc)),
+                  metrics: () => metrics.stop(),
+                },
+              },
+              // last: whatever is still running past its deadline finds the database closed, not half-closed
+              {
+                name: "db",
+                run: {
+                  db: () => {
+                    tasks.close();
+                    return stores.db.close();
+                  },
+                },
+              },
+              { name: "http", run: { http: server && (() => server.stop()) } },
+            ],
+          });
         })();
         return stopping;
       },
@@ -249,6 +306,54 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
     for (const fn of cleanupOnFail) await fn().catch(() => {});
     throw err;
   }
+}
+
+/** One log line / alert per key per this window; the rest are counted and reported with the next one. */
+const INCIDENT_WINDOW_MS = 60_000;
+
+/**
+ * Hook timeouts and errors: every one is counted (`hook_incidents_total`); logs are coalesced per (owner, kind,
+ * type) and timeouts raise a bus alert at most once a minute per owner.
+ */
+export function hookIncidentReporter(d: { bus: EventBus; metrics: Pick<MetricsService, "counter">; logger: Logger; now?: () => number }) {
+  const counter = d.metrics.counter("hook_incidents_total", "plugin hook timeouts and errors");
+  const now = d.now ?? Date.now;
+  const logged = new Map<string, { at: number; suppressed: number }>();
+  const alerted = new Map<string, { at: number; suppressed: number }>();
+  /** returns how many were swallowed since the last pass, or -1 while still inside the window */
+  const pass = (m: Map<string, { at: number; suppressed: number }>, key: string) => {
+    const t = now();
+    const prev = m.get(key);
+    if (prev && t - prev.at < INCIDENT_WINDOW_MS) {
+      prev.suppressed++;
+      return -1;
+    }
+    m.set(key, { at: t, suppressed: 0 });
+    return prev?.suppressed ?? 0;
+  };
+  return (i: HookIncident) => {
+    counter.add(1, { kind: i.kind, owner: i.owner, type: i.type });
+    const effect =
+      i.type === "error" ? "the request was refused"
+      : i.kind === "write" ? "the event was processed without its verdict"
+      : "the request was refused";
+    const what = i.type === "timeout" ? `did not answer within ${i.timeoutMs} ms` : "failed";
+    const logSkipped = pass(logged, `${i.owner}|${i.kind}|${i.type}`);
+    if (logSkipped >= 0) {
+      d.logger.warn(`${i.kind} hook of ${i.owner} ${what}; ${effect}`, {
+        ...(i.error !== undefined ? { error: i.error } : {}),
+        ...(logSkipped ? { suppressedSinceLastLog: logSkipped } : {}),
+      });
+    }
+    if (i.type !== "timeout") return;
+    const alertSkipped = pass(alerted, i.owner);
+    if (alertSkipped < 0) return;
+    d.bus.emit("alert", {
+      level: "warning",
+      title: `Plugin hook timed out: ${i.owner}`,
+      message: `A ${i.kind} hook of ${i.owner} did not answer within ${i.timeoutMs} ms; ${effect}.` + (alertSkipped ? ` ${alertSkipped} more timeout(s) since the last alert.` : ""),
+    });
+  };
 }
 
 interface AppDeps {
@@ -266,7 +371,12 @@ interface AppDeps {
   version?: string;
   /** throws when the server isn't ready (e.g. database unreachable) */
   checkHealth?: () => Promise<unknown>;
+  /** phase for /health (absent: always "ready") */
+  lifecycle?: Pick<Lifecycle, "phase">;
 }
+
+/** /health answers 503 when the database check takes longer than this (a hung pool must not hang the probe) */
+const HEALTH_TIMEOUT_MS = 2_000;
 
 /** Root router — order follows docs/ARCHITECTURE.md "Request routing". */
 export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
@@ -329,15 +439,29 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
   app.all("/plugins/:name", pluginRoute);
   app.all("/plugins/:name/*", pluginRoute);
 
-  // liveness / readiness probe (Docker HEALTHCHECK, load balancers)
+  // liveness: the process answers (Docker HEALTHCHECK — a restart wouldn't fix a slow database, and must not cut a
+  // graceful shutdown short)
+  app.get("/health/live", (c) => c.json({ ok: true, status: d.lifecycle?.phase ?? "ready", version: d.version }, 200, { "cache-control": "no-store" }));
+
+  // readiness (load balancers): 503 while starting or shutting down, or when the database doesn't answer in time
   app.get("/health", async (c) => {
+    const status = d.lifecycle?.phase ?? "ready";
+    if (status !== "ready") return c.json({ ok: false, status }, 503, { "cache-control": "no-store", "retry-after": "5" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await d.checkHealth?.();
-      return c.json({ ok: true, version: d.version }, 200, { "cache-control": "no-store" });
+      await Promise.race([
+        Promise.resolve(d.checkHealth?.()),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`database check took longer than ${HEALTH_TIMEOUT_MS} ms`)), HEALTH_TIMEOUT_MS);
+        }),
+      ]);
+      return c.json({ ok: true, status, version: d.version }, 200, { "cache-control": "no-store" });
     } catch (err) {
       // the probe is public: log the cause, don't leak driver errors (hosts, paths, credentials in DSNs)
       d.logger.warn("health check failed", { error: (err as Error)?.message ?? String(err) });
-      return c.json({ ok: false, error: "unavailable" }, 503, { "cache-control": "no-store" });
+      return c.json({ ok: false, status, error: "unavailable" }, 503, { "cache-control": "no-store" });
+    } finally {
+      clearTimeout(timer);
     }
   });
 

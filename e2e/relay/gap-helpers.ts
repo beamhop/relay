@@ -7,9 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
-import { createBeamhop } from "../../packages/server/src/app";
-import { loadConfig } from "../../packages/server/src/config";
-import { serve } from "../../packages/server/src/server";
+import { createBeamhop, loadConfig, serve } from "@beamhop/server";
 import { freePort } from "../harness/relay";
 
 export interface GapRelay {
@@ -19,7 +17,7 @@ export interface GapRelay {
   dir: string;
   runtime: "bun" | "node";
   owner: { sk: Uint8Array; pubkey: string };
-  /** graceful stop (same order as the CLI): stop accepting → beamhop.stop → close sockets. Keeps the dir unless `rm`. */
+  /** graceful stop, as the CLI does it (drain → relay → plugins → services → db → sockets). Keeps the dir unless `rm`. */
   stop(rm?: boolean): Promise<void>;
 }
 
@@ -74,9 +72,7 @@ export async function bootGap(opts: GapBootOptions = {}): Promise<GapRelay> {
     async stop(rm = true) {
       if (!stopped) {
         stopped = true;
-        server.stopAccepting();
-        await beamhop.stop();
-        await server.stop();
+        await beamhop.stop({ server });
       }
       if (rm) rmSync(dir, { recursive: true, force: true });
     },

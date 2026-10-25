@@ -5,7 +5,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useFieldArray, useForm, useWatch, type Control, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FlaskConical, Plus, Save, Trash2, Undo2 } from "lucide-react";
-import { RuntimeSettingsSchema } from "@beamhop/sdk-config";
+import { RuntimeSettingsSchema } from "@beamhop/sdk/config";
 import type { RuntimeSettings } from "@beamhop/sdk/admin-contract";
 import { compileRegexFilter, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { ListInput } from "@/components/list-input";
 import { BytesField, ListField, NumberField, SelectField, SwitchField, TextField } from "@/components/form-fields";
 import { useSaveSettings, useSettings } from "@/queries/misc";
 import { useCan } from "@/queries/auth";
+import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { SETTINGS_SECTIONS, type SectionKey } from "@/lib/settings-sections";
 import { kindName, parsePubkey, shortNpub } from "@/lib/nostr";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,7 @@ function SectionForm<K extends SectionKey>({ sectionKey, title, description, val
     if (await tryMutate(save, { [sectionKey]: values } as any)) form.reset(values);
   });
   const dirty = form.formState.isDirty;
+  useUnsavedGuard(dirty && editable);
   return (
     <Form {...form}>
       <form onSubmit={onSubmit} noValidate className="space-y-4">
@@ -232,6 +234,11 @@ function LimitsFields({ control }: { control: Control<any> }) {
         <NumberField control={control} name="reqPerMinute" label="REQs / minute" min={0} />
         <NumberField control={control} name="connectionsPerIp" label="Connections per IP" min={1} />
       </Grid>
+      <SubHeading hint="Relay-wide. 0 connections means unlimited; filter weight caps how many live subscriptions everyone together may hold.">Capacity</SubHeading>
+      <Grid cols={3}>
+        <NumberField control={control} name="maxConnections" label="Max connections" min={0} />
+        <NumberField control={control} name="maxTotalFilterWeight" label="Max total filter weight" min={0} />
+      </Grid>
     </>
   );
 }
@@ -379,7 +386,10 @@ function RetentionFields({ control, disabled }: { control: Control<any>; disable
   };
   return (
     <>
-      <NumberField control={control} name="intervalMinutes" label="Run every" suffix="min" min={1} className="sm:max-w-xs" />
+      <Grid>
+        <NumberField control={control} name="intervalMinutes" label="Run every" suffix="min" min={1} />
+        <NumberField control={control} name="auditLogDays" label="Keep audit log" suffix="days" min={0} description="0 = keep forever; older entries are deleted daily" />
+      </Grid>
       <SubHeading hint="Rules run periodically; deleted events cannot be recovered.">Rules</SubHeading>
       <div className="space-y-3">
         {fields.map((f, i) => (

@@ -1,5 +1,5 @@
-import type { BeamhopConfig, Db, Dialect, Migration } from "@beamhop/sdk";
-import { isBun } from "@beamhop/sdk";
+import type { BeamhopConfig, Db, Dialect, Logger, Migration } from "@beamhop/sdk";
+import { isBun, yieldToEventLoop } from "@beamhop/sdk";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -105,6 +105,9 @@ abstract class BaseDb implements Db {
     for (const m of pending) {
       const sql = typeof m.up === "string" ? m.up : m.up[this.dialect];
       await this.tx(async (db) => {
+        // another process (a second instance, `beamhop migrate`) may have applied it since the read above; the
+        // sqlite write lock taken by the transaction makes this re-check authoritative
+        if (await db.get("SELECT 1 AS x FROM _migrations WHERE namespace = ? AND id = ?", [namespace, m.id])) return;
         await db.exec(sql);
         await db.run("INSERT INTO _migrations (namespace, id, applied_at) VALUES (?, ?, ?)", [
           namespace,
@@ -116,6 +119,42 @@ abstract class BaseDb implements Db {
   }
 }
 
+export interface SqliteOptions {
+  /** warns (once per transaction) when a transaction is still open after this long; default 5 s */
+  txWarnMs?: number;
+  /**
+   * rolls back a transaction still open after this long and rejects its tx() call; default 60 s. Statements the
+   * abandoned transaction issues afterwards reject instead of running outside of it.
+   */
+  txTimeoutMs?: number;
+  /** transactions running longer than this yield a macrotask turn after committing; default 20 ms */
+  longTxMs?: number;
+  /** close() waits at most this long for queued statements and the open transaction; default 3 s */
+  closeWaitMs?: number;
+  logger?: Logger;
+}
+
+export const SQLITE_TX_WARN_MS = 5_000;
+export const SQLITE_TX_TIMEOUT_MS = 60_000;
+const SQLITE_LONG_TX_MS = 20;
+const SQLITE_CLOSE_WAIT_MS = 3_000;
+
+/** Rejection of a statement or tx() issued by a transaction the watchdog already rolled back. */
+export class TxAbortedError extends Error {
+  constructor(message = "sqlite transaction was rolled back by the watchdog (open too long)") {
+    super(message);
+    this.name = "TxAbortedError";
+  }
+}
+
+/** Rejection of a statement issued after the database started closing (work that outlived shutdown). */
+export class DbClosedError extends Error {
+  constructor(message = "database is closed") {
+    super(message);
+    this.name = "DbClosedError";
+  }
+}
+
 class SqliteDb extends BaseDb {
   readonly dialect = "sqlite" as const;
   private chain: Promise<unknown> = Promise.resolve();
@@ -123,17 +162,29 @@ class SqliteDb extends BaseDb {
   private txContext = new AsyncLocalStorage<object>();
   /** Token of the transaction open on the (single) connection, if any. */
   private openTx: object | null = null;
-  constructor(private d: SqliteDriver) {
+  /** Tokens of transactions the watchdog rolled back: their late statements must not run outside of them. */
+  private abandoned = new WeakSet<object>();
+  /** set by close(): new work from outside the open transaction is refused, queued work still runs */
+  private closing = false;
+  private closed = false;
+  constructor(
+    private d: SqliteDriver,
+    private opts: SqliteOptions = {},
+  ) {
     super();
   }
   /**
    * There is one connection: a statement issued from outside the open transaction's async context
    * would run inside it (seeing uncommitted data, and being rolled back with it). Such statements
    * wait until the transaction finishes. Work started inside a transaction that outlives it (fire and
-   * forget) keeps a stale token and is treated like any other outside caller.
+   * forget) keeps a stale token and is treated like any other outside caller, except for a transaction
+   * the watchdog rolled back: its statements reject.
    */
   private op<T>(fn: () => T): Promise<T> {
-    if (this.openTx === null || this.txContext.getStore() === this.openTx) {
+    const ctx = this.txContext.getStore();
+    if (ctx !== undefined && this.abandoned.has(ctx)) return Promise.reject(new TxAbortedError());
+    if (this.closed || (this.closing && (ctx === undefined || ctx !== this.openTx))) return Promise.reject(new DbClosedError());
+    if (this.openTx === null || ctx === this.openTx) {
       try {
         return Promise.resolve(fn());
       } catch (e) {
@@ -163,28 +214,97 @@ class SqliteDb extends BaseDb {
    * reuse it (concurrent unrelated callers wait their turn).
    */
   tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
-    if (this.openTx !== null && this.txContext.getStore() === this.openTx) return fn(this);
-    const next = this.chain.then(() => {
-      const token = {};
-      return this.txContext.run(token, async () => {
-        this.d.exec("BEGIN IMMEDIATE");
-        this.openTx = token;
-        try {
-          const r = await fn(this);
-          this.d.exec("COMMIT");
-          return r;
-        } catch (e) {
-          this.d.exec("ROLLBACK");
-          throw e;
-        } finally {
-          this.openTx = null;
-        }
-      });
-    });
+    const ctx = this.txContext.getStore();
+    if (ctx !== undefined && this.abandoned.has(ctx)) return Promise.reject(new TxAbortedError());
+    if (this.openTx !== null && ctx === this.openTx) return fn(this);
+    if (this.closing || this.closed) return Promise.reject(new DbClosedError());
+    const next = this.chain.then(() => this.runTx(fn));
     this.chain = next.catch(() => {});
     return next;
   }
+
+  /**
+   * One transaction on the connection. A watchdog bounds how long it may stay open: everything else on the
+   * database waits for it, so a transaction awaiting something that never settles (a hung plugin, a network call)
+   * would otherwise freeze the relay. After `txTimeoutMs` it is rolled back and the tx() call rejects.
+   */
+  private runTx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+    const token = {};
+    const warnMs = this.opts.txWarnMs ?? SQLITE_TX_WARN_MS;
+    const timeoutMs = this.opts.txTimeoutMs ?? SQLITE_TX_TIMEOUT_MS;
+    const started = performance.now();
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const warn = setTimeout(
+        () => this.opts.logger?.warn("sqlite transaction still open", { ms: Math.round(performance.now() - started) }),
+        warnMs,
+      );
+      const kill = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.abandoned.add(token);
+        this.rollback();
+        if (this.openTx === token) this.openTx = null;
+        this.opts.logger?.error("sqlite transaction rolled back: open too long", { ms: timeoutMs });
+        reject(new TxAbortedError(`sqlite transaction rolled back after ${timeoutMs} ms`));
+      }, timeoutMs);
+      (warn as { unref?: () => void }).unref?.();
+      (kill as { unref?: () => void }).unref?.();
+      const finish = () => {
+        clearTimeout(warn);
+        clearTimeout(kill);
+        if (this.openTx === token) this.openTx = null;
+      };
+      void this.txContext.run(token, async () => {
+        let result: T;
+        try {
+          this.d.exec("BEGIN IMMEDIATE");
+          this.openTx = token;
+          result = await fn(this);
+          if (settled) return; // rolled back by the watchdog meanwhile
+          this.d.exec("COMMIT");
+        } catch (e) {
+          if (settled) return;
+          if (this.openTx === token) this.rollback();
+          settled = true;
+          finish();
+          reject(e);
+          return;
+        }
+        settled = true;
+        finish();
+        // a long transaction kept timers and sockets waiting: let them run before the next queued one starts
+        if (performance.now() - started > (this.opts.longTxMs ?? SQLITE_LONG_TX_MS)) await yieldToEventLoop();
+        resolve(result);
+      });
+    });
+  }
+
+  /** ROLLBACK that never replaces the error being handled (fails e.g. when the transaction is already gone). */
+  private rollback() {
+    try {
+      this.d.exec("ROLLBACK");
+    } catch (err) {
+      this.opts.logger?.debug("sqlite ROLLBACK failed", { err: String(err) });
+    }
+  }
+  /**
+   * Refuses new work, lets what is already queued (and the open transaction) finish for up to `closeWaitMs`, then
+   * closes the connection. Later calls reject with DbClosedError instead of a driver error.
+   */
   async close() {
+    if (this.closing) return;
+    this.closing = true;
+    const waitMs = this.opts.closeWaitMs ?? SQLITE_CLOSE_WAIT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      this.chain.then(() => true),
+      new Promise<false>((r) => (timer = setTimeout(() => r(false), waitMs))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) this.opts.logger?.warn("closing the database with work still queued", { waitMs });
+    if (this.openTx !== null) this.rollback();
+    this.closed = true;
     this.d.close();
   }
 }
@@ -265,7 +385,7 @@ class PostgresDb extends BaseDb {
   }
 }
 
-export async function createDb(config: Pick<BeamhopConfig, "database">): Promise<Db> {
+export async function createDb(config: Pick<BeamhopConfig, "database">, sqliteOpts: SqliteOptions = {}): Promise<Db> {
   const { driver, sqlitePath, postgresUrl } = config.database;
   if (driver === "postgres") {
     if (!postgresUrl) throw new Error("database.postgresUrl is required for postgres driver");
@@ -284,8 +404,8 @@ export async function createDb(config: Pick<BeamhopConfig, "database">): Promise
   }
   const d = await openSqlite(sqlitePath);
   d.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-  return new SqliteDb(d);
+  return new SqliteDb(d, sqliteOpts);
 }
 
 /** Convenience for tests: in-memory SQLite. */
-export const createMemoryDb = () => createDb({ database: { driver: "sqlite", sqlitePath: ":memory:" } });
+export const createMemoryDb = (opts: SqliteOptions = {}) => createDb({ database: { driver: "sqlite", sqlitePath: ":memory:" } }, opts);

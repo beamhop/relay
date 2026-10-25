@@ -1,5 +1,6 @@
 import {
   type AuditLog,
+  type TaskTracker,
   type BeamhopConfig,
   ConfigSchema,
   type CoreDeps,
@@ -124,6 +125,9 @@ export class FakeEventStore implements EventStore {
     for (const e of [...this.events.values()]) if (filters.some((f) => matchFilter(f, e)) && this.events.delete(e.id)) n++;
     return n;
   }
+  async trimPubkey() {
+    return { deleted: 0, remaining: 0 };
+  }
   async deleteByPubkey(pk: string, until?: number) {
     return this.deleteByFilter([until === undefined ? { authors: [pk] } : { authors: [pk], until }]);
   }
@@ -137,6 +141,11 @@ export class FakeEventStore implements EventStore {
   }
   async stats() {
     return { total: this.events.size, byKind: [], sizeBytes: 0 };
+  }
+  async kindCounts(pubkey: string) {
+    const m = new Map<number, number>();
+    for (const e of this.events.values()) if (e.pubkey === pubkey) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
+    return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind - b.kind);
   }
 }
 
@@ -218,6 +227,11 @@ export class FakeKv implements KvStore {
   async set(ns: string, key: string, value: unknown) {
     this.data.set(`${ns}/${key}`, value);
   }
+  async setIfAbsent(ns: string, key: string, value: unknown) {
+    if (this.data.has(`${ns}/${key}`)) return false;
+    this.data.set(`${ns}/${key}`, value);
+    return true;
+  }
   async delete(ns: string, key: string) {
     this.data.delete(`${ns}/${key}`);
   }
@@ -228,7 +242,7 @@ export class FakeKv implements KvStore {
   }
 }
 
-const fakeAudit: AuditLog = { async record() {}, async list() { return []; } };
+const fakeAudit: AuditLog = { async record() {}, async list() { return []; }, async prune() { return 0; } };
 
 function deepMerge<T>(base: T, patch: unknown): T {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return patch as T;
@@ -324,13 +338,13 @@ export const PUBLIC_URL = "https://relay.example.com";
 /** Relay key for tests (the server normally generates and persists one; core requires it in config). */
 export const RELAY_SECRET_KEY = "7f".repeat(32);
 
-export async function setup(opts: { settings?: DeepPartial<RuntimeSettings>; config?: Record<string, unknown> } = {}) {
+export async function setup(opts: { settings?: DeepPartial<RuntimeSettings>; config?: Record<string, unknown>; tasks?: TaskTracker } = {}) {
   const config: BeamhopConfig = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, relaySecretKey: RELAY_SECRET_KEY, ...(opts.config ?? {}) });
   const stores = await createFakeStores();
   const settings = new FakeSettings(opts.settings);
   const bus = new EventBus();
   const hooks = new HookRegistry();
-  const deps: CoreDeps = { config, stores, settings, hooks, bus, logger: silentLogger };
+  const deps: CoreDeps = { config, stores, settings, hooks, bus, logger: silentLogger, tasks: opts.tasks };
   const relay = await createRelay(deps);
 
   /** Opens a client connection; returns helpers. */

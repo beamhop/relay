@@ -16,13 +16,20 @@ export class SubscriptionIndex {
   private index = new Map<string, Set<Entry>>();
   private broad = new Set<Entry>();
   private entries = new Map<Subscription, { entry: Entry; keys: string[] }[]>();
+  /** sum of the weights (filterWeight) of the indexed subscriptions */
+  private totalWeight = 0;
 
   get size() {
     return this.entries.size;
   }
 
+  get weight() {
+    return this.totalWeight;
+  }
+
   add(sub: Subscription): void {
     this.remove(sub);
+    this.totalWeight += sub.weight;
     const regs: { entry: Entry; keys: string[] }[] = [];
     for (const filter of sub.filters) {
       const entry: Entry = { sub, filter: compileFilter(filter) };
@@ -41,6 +48,7 @@ export class SubscriptionIndex {
   remove(sub: Subscription): void {
     const regs = this.entries.get(sub);
     if (!regs) return;
+    this.totalWeight -= sub.weight;
     for (const { entry, keys } of regs) {
       if (keys.length === 0) this.broad.delete(entry);
       for (const k of keys) {

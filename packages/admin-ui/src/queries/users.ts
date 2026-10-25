@@ -3,7 +3,7 @@ import type {
   AdminRole, BanRequest, BulkResult, BulkUserRequest, DeleteUserResult, NostrEvent, Paged, UserDetail, UserListQuery, UserPatch, UserView,
 } from "@beamhop/sdk/admin-contract";
 import { api, enc } from "@/lib/api";
-import { useApiMutation } from "./client";
+import { LIST_QUERY_OPTIONS, nextOffset, useApiMutation } from "./client";
 
 const PAGE = 50;
 
@@ -13,10 +13,8 @@ export function useUsers(q: Omit<UserListQuery, "limit" | "offset">) {
     queryFn: ({ pageParam, signal }) =>
       api.get<Paged<UserView>>("/users", { ...q, allowed: q.allowed, limit: PAGE, offset: pageParam }, signal),
     initialPageParam: 0,
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
-      return loaded < last.total && last.items.length > 0 ? loaded : undefined;
-    },
+    getNextPageParam: nextOffset,
+    ...LIST_QUERY_OPTIONS,
     placeholderData: keepPreviousData,
   });
 }
@@ -68,7 +66,8 @@ export function useUserActions() {
   const bulk = useApiMutation({
     fn: (body: BulkUserRequest) => api.post<BulkResult>("/users/bulk", body),
     invalidate: contentKeys(),
-    success: (r) => `${r?.ok ?? 0} updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}`,
+    success: (r) =>
+      `${r?.ok ?? 0} updated${r?.failed?.length ? `, ${r.failed.length} failed` : ""}${r?.remaining?.length ? `, ${r.remaining.length} not done (time limit) — run again for the rest` : ""}`,
   });
   const add = useApiMutation({
     fn: (body: { pubkey: string; allowed?: boolean; notes?: string; tags?: string[] }) => api.post<UserView>("/users", body),

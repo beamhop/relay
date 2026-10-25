@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { isInlineSafe } from "../mime";
-import { assertSha256, streamToBytes, thumbnailKey, type BlobDriver, type BlobObject, type ByteRange, type LocateOptions } from "./types";
+import { assertSha256, thumbnailKey, type BlobDriver, type BlobObject, type ByteRange, type LocateOptions } from "./types";
 
 export interface S3DriverConfig {
   endpoint: string;
@@ -15,6 +15,37 @@ export interface S3DriverConfig {
   fetch?: typeof fetch;
   /** warning sink (403s treated as "missing" are logged so real permission problems are visible) */
   warn?: (msg: string, meta?: Record<string, unknown>) => void;
+  /**
+   * How long a request may wait for the response headers, ms (default 30 s). A GET's body then streams without a
+   * limit; a PUT gets this plus its size at `putBytesPerSec`, a server-side COPY four times this.
+   */
+  timeoutMs?: number;
+  /** slowest upload rate a PUT is given time for, bytes/s (default 512 KiB/s) */
+  putBytesPerSec?: number;
+  /** tries per request on network errors, timeouts, 429 and 5xx (default 3; 1 = no retries) */
+  maxAttempts?: number;
+  /** first retry delay, ms; doubles per try, with full jitter (default 250) */
+  retryBaseMs?: number;
+  /**
+   * How long an object this process stored (or saw with HEAD) is assumed to still be there, ms (default 5 min):
+   * re-uploads of a blob don't HEAD the bucket every time. 0 = always ask.
+   */
+  presenceCacheMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_PUT_RATE = 512 * 1024;
+const PRESENCE_CACHE_MAX = 10_000;
+
+/** Statuses worth another try: throttling and server-side failures. */
+const retryable = (status: number) => status === 429 || status >= 500;
+
+/** Rejects with an AbortError-like error: aborts are retried like other network errors. */
+class S3TimeoutError extends Error {
+  constructor(op: string, key: string, ms: number) {
+    super(`s3 ${op} ${key} timed out after ${ms} ms`);
+    this.name = "TimeoutError";
+  }
 }
 
 /**
@@ -34,6 +65,18 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     service: "s3",
   });
   const doFetch = cfg.fetch ?? fetch;
+  const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const putRate = cfg.putBytesPerSec ?? DEFAULT_PUT_RATE;
+  const maxAttempts = Math.max(1, cfg.maxAttempts ?? 3);
+  const retryBaseMs = cfg.retryBaseMs ?? 250;
+  const presenceMs = cfg.presenceCacheMs ?? 5 * 60_000;
+  /** sha256 → { size, until }: objects known to be stored (see `presenceCacheMs`) */
+  const present = new Map<string, { size: number; until: number }>();
+  const notePresent = (sha256: string, size: number) => {
+    if (presenceMs <= 0) return;
+    if (present.size >= PRESENCE_CACHE_MAX) present.delete(present.keys().next().value!);
+    present.set(sha256, { size, until: Date.now() + presenceMs });
+  };
   const base = `${cfg.endpoint.replace(/\/+$/, "")}/${encodeURIComponent(cfg.bucket)}`;
   const publicBase = cfg.publicUrl?.replace(/\/+$/, "");
   const hiddenKey = (sha256: string) => `quarantine-${createHmac("sha256", cfg.secretAccessKey).update(sha256).digest("hex")}`;
@@ -41,13 +84,41 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
   const keysOf = (sha256: string): [string, string] => [sha256, publicBase ? hiddenKey(sha256) : sha256];
   const thumbKeysOf = (sha256: string): [string, string] => keysOf(sha256).map(thumbnailKey) as [string, string];
 
-  async function request(method: string, key: string, init: { headers?: Record<string, string>; body?: Uint8Array } = {}): Promise<Response> {
-    const signed = await client.sign(`${base}/${encodeURIComponent(key)}`, {
-      method,
-      headers: init.headers,
-      body: init.body as BodyInit | undefined,
-    });
-    return doFetch(signed);
+  /**
+   * One signed request, retried (fresh signature each time) on network errors, timeouts, 429 and 5xx: every
+   * operation here is idempotent (content-addressed PUTs, DELETE, HEAD/GET, a COPY that `moveKey` tolerates
+   * repeating). The timeout only covers waiting for the response headers, so a long download isn't cut off.
+   * After the last try the final response is returned (callers report it) or the network error thrown.
+   */
+  async function request(
+    method: string,
+    key: string,
+    init: { headers?: Record<string, string>; body?: Uint8Array; timeoutMs?: number } = {},
+  ): Promise<Response> {
+    const ms = init.timeoutMs ?? timeoutMs;
+    for (let attempt = 1; ; attempt++) {
+      const signed = await client.sign(`${base}/${encodeURIComponent(key)}`, {
+        method,
+        headers: init.headers,
+        body: init.body as BodyInit | undefined,
+      });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(new S3TimeoutError(method, key, ms)), ms);
+      let res: Response | undefined;
+      let error: unknown;
+      try {
+        res = await doFetch(signed, { signal: ctrl.signal });
+      } catch (err) {
+        error = ctrl.signal.aborted ? ctrl.signal.reason : err;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (res && (!retryable(res.status) || attempt >= maxAttempts)) return res;
+      if (!res && attempt >= maxAttempts) throw error;
+      await res?.body?.cancel().catch(() => {});
+      // full jitter: concurrent retries after a provider hiccup don't come back in lockstep
+      await new Promise((r) => setTimeout(r, Math.random() * retryBaseMs * 2 ** (attempt - 1)));
+    }
   }
 
   async function fail(res: Response, op: string, key: string): Promise<never> {
@@ -59,7 +130,7 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     const safe = !!type && isInlineSafe(type);
     const headers: Record<string, string> = { "content-type": safe ? type : "application/octet-stream", "content-length": String(body.byteLength) };
     if (!safe) headers["content-disposition"] = "attachment";
-    const res = await request("PUT", key, { body, headers });
+    const res = await request("PUT", key, { body, headers, timeoutMs: timeoutMs + Math.ceil((body.byteLength / putRate) * 1000) });
     if (!res.ok) await fail(res, "PUT", key);
     await res.body?.cancel();
   }
@@ -77,10 +148,11 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     cfg.warn("s3 answered 403; treating the object as missing (normal on AWS without s3:ListBucket, otherwise check credentials/policy)", { op, key });
   };
 
-  async function headKey(key: string): Promise<boolean> {
+  /** Size of the object at `key`, false when it's missing (-1: there, size not reported). */
+  async function headKey(key: string): Promise<number | false> {
     const res = await request("HEAD", key);
     await res.body?.cancel();
-    if (res.ok) return true;
+    if (res.ok) return sizeHeader(res) ?? -1;
     if (absent(res.status)) {
       if (res.status === 403) note403("HEAD", key);
       return false;
@@ -88,12 +160,21 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     return fail(res, "HEAD", key);
   }
 
+  const sizeHeader = (res: Response): number | undefined => {
+    const v = res.headers.get("content-length");
+    return v !== null && /^\d+$/.test(v.trim()) ? Number(v.trim()) : undefined;
+  };
+
   /**
    * Server-side copy then delete. Idempotent: a missing source with the destination already present (a retry
    * after a move that copied but failed later) counts as done. Returns false when neither exists.
    */
   async function moveKey(from: string, to: string): Promise<boolean> {
-    const res = await request("PUT", to, { headers: { "x-amz-copy-source": `/${encodeURIComponent(cfg.bucket)}/${encodeURIComponent(from)}` } });
+    const res = await request("PUT", to, {
+      headers: { "x-amz-copy-source": `/${encodeURIComponent(cfg.bucket)}/${encodeURIComponent(from)}` },
+      // the provider copies before it answers: give big objects longer
+      timeoutMs: timeoutMs * 4,
+    });
     let missing = absent(res.status);
     let denied = res.status === 403;
     if (missing) await res.body?.cancel();
@@ -110,8 +191,8 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     if (missing) {
       // a denied copy of a source that *is* there (KMS key, bucket policy, signature/clock skew) is a failure,
       // not "already moved": the bytes would stay where they are while the caller flips the blob's status
-      if (denied && (await headKey(from))) throw new Error(`s3 COPY ${from} -> ${to} denied (403) while the source exists`);
-      return headKey(to);
+      if (denied && (await headKey(from)) !== false) throw new Error(`s3 COPY ${from} -> ${to} denied (403) while the source exists`);
+      return (await headKey(to)) !== false;
     }
     await deleteKey(from);
     return true;
@@ -134,7 +215,8 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
       return undefined;
     }
     if (!res.ok || !res.body) await fail(res, "GET", key);
-    let size = Number(res.headers.get("content-length") ?? 0);
+    // no Content-Length (chunked): unknown, the caller has the size from the blob's row
+    let size = res.status === 206 ? undefined : sizeHeader(res);
     let served: ByteRange | undefined;
     if (res.status === 206) {
       const m = /bytes (\d+)-(\d+)\/(\d+)/.exec(res.headers.get("content-range") ?? "");
@@ -159,7 +241,8 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     name: "s3",
     async put(sha256, data, type, opts) {
       assertSha256(sha256);
-      await putKey(keysOf(sha256)[opts?.hidden ? 1 : 0], data instanceof Uint8Array ? data : await streamToBytes(data), type);
+      await putKey(keysOf(sha256)[opts?.hidden ? 1 : 0], data, type);
+      notePresent(sha256, data.byteLength);
     },
     async get(sha256, range, opts) {
       assertSha256(sha256);
@@ -167,12 +250,25 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     },
     async has(sha256, opts) {
       assertSha256(sha256);
-      for (const key of new Set(ordered(keysOf(sha256), opts))) if (await headKey(key)) return true;
+      const known = present.get(sha256);
+      if (known && known.until > Date.now() && (opts?.size === undefined || known.size === opts.size)) return true;
+      for (const key of new Set(ordered(keysOf(sha256), opts))) {
+        const size = await headKey(key);
+        if (size === false) continue;
+        // a size the provider didn't report can't be checked: count it as there
+        if (opts?.size !== undefined && size !== -1 && size !== opts.size) return false;
+        notePresent(sha256, size === -1 ? (opts?.size ?? -1) : size);
+        return true;
+      }
+      present.delete(sha256);
       return false;
     },
     async delete(sha256) {
       assertSha256(sha256);
-      for (const key of new Set([...keysOf(sha256), ...thumbKeysOf(sha256)])) await deleteKey(key);
+      present.delete(sha256);
+      const results = await Promise.allSettled([...new Set([...keysOf(sha256), ...thumbKeysOf(sha256)])].map(deleteKey));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) throw failed.reason;
     },
     async putThumbnail(sha256, data, opts) {
       assertSha256(sha256);

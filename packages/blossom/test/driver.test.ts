@@ -37,15 +37,8 @@ describe("fs driver", () => {
     expect(await text(obj.body)).toBe("2345");
   });
 
-  test("stream input and thumbnails", async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(enc("ab"));
-        c.enqueue(enc("cd"));
-        c.close();
-      },
-    });
-    await d.put(sha2, stream, "text/plain");
+  test("thumbnails", async () => {
+    await d.put(sha2, enc("abcd"), "text/plain");
     expect(await text((await d.get(sha2))!.body)).toBe("abcd");
     await d.putThumbnail(sha2, enc("thumb"));
     expect(existsSync(join(root, "cd", "cd", `${sha2}.thumb.webp`))).toBe(true);

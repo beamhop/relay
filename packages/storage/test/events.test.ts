@@ -233,7 +233,9 @@ describe("deletion", () => {
     expect(await stores.events.deleteByPubkey(a.pubkey)).toBe(1);
     const stats = await stores.events.stats();
     expect(stats.total).toBe(1);
-    expect(stats.byKind).toEqual([{ kind: 1, count: 1 }]);
+    // byKind is a full scan: only on request
+    expect(stats.byKind).toBeUndefined();
+    expect((await stores.events.stats({ byKind: true })).byKind).toEqual([{ kind: 1, count: 1 }]);
     expect(stats.sizeBytes).toBeGreaterThan(0);
   });
 });

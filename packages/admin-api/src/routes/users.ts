@@ -1,15 +1,18 @@
 import { z } from "zod";
-import type { AdminRole, BulkResult, BulkUserRequest, RoleRequest, UserDetail, UserRecord } from "@beamhop/sdk";
+import type { AddUserRequest, AdminRole, BanRequest, BulkResult, BulkUserRequest, RoleRequest, UserDetail, UserEventsQuery, UserListQuery, UserPatch, UserRecord } from "@beamhop/sdk";
 import type { AdminApp, AdminContext, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, conflict, forbidden } from "../errors";
 import { assertPermission, requirePermission } from "../middleware/auth";
-import { auditLists } from "../util/audit";
-import type { Same } from "../util/contract";
+import { emptyBanOutcome, emptyDeleteOutcome } from "../services/moderation";
+import { audited, auditLists } from "../util/audit";
+import type { Same, SameFields } from "../util/contract";
 import { parsePubkey, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
 const ROLES = ["owner", "admin", "moderator", "viewer"] as const;
+/** a bulk action stops starting new targets after this long and returns the rest as `remaining` */
+export const BULK_BUDGET_MS = 20_000;
 const boolStr = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1");
 
 const ListQuery = z.object({
@@ -22,6 +25,7 @@ const ListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
   offset: z.coerce.number().int().min(0).max(10_000_000).default(0),
 });
+true satisfies SameFields<z.output<typeof ListQuery>, UserListQuery>;
 
 const Tags = z.array(z.string().trim().min(1).max(64)).max(50);
 const Nip05Name = z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{1,64}$/, "invalid nip05 name");
@@ -40,12 +44,14 @@ const UserPatchSchema = z
     denied: z.boolean().optional(),
   })
   .strict();
+true satisfies Same<z.output<typeof UserPatchSchema>, UserPatch>;
 const BanSchema = z.object({
   reason: z.string().max(1000).optional(),
   deleteEvents: z.boolean().optional(),
   deleteMedia: z.boolean().optional(),
   disconnect: z.boolean().optional(),
 });
+true satisfies Same<z.output<typeof BanSchema>, BanRequest>;
 const RoleSchema = z.object({ role: z.enum(ROLES).nullable() });
 true satisfies Same<z.output<typeof RoleSchema>, RoleRequest>;
 const BulkSchema = z.object({
@@ -54,12 +60,15 @@ const BulkSchema = z.object({
   reason: z.string().max(1000).optional(),
   tag: z.string().trim().min(1).max(64).optional(),
 });
+true satisfies Same<z.output<typeof BulkSchema>, BulkUserRequest>;
 const AddUserSchema = z.object({ pubkey: z.string(), allowed: z.boolean().optional(), notes: z.string().max(10_000).optional(), tags: Tags.optional() });
+true satisfies Same<z.output<typeof AddUserSchema>, AddUserRequest>;
 const EventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
   until: z.coerce.number().int().min(0).optional(),
   kinds: z.string().regex(/^\d+(,\d+)*$/).optional(),
 });
+true satisfies SameFields<z.output<typeof EventsQuery>, UserEventsQuery>;
 
 const BULK_PERMISSION = {
   ban: "users.ban",
@@ -77,23 +86,7 @@ const BULK_PERMISSION = {
 } as const;
 
 export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
-  const { stores } = ctx.deps;
-
-  async function kindStats(pubkey: string): Promise<{ kind: number; count: number }[]> {
-    try {
-      const rows = await stores.db.all<{ kind: number; count: number }>(
-        "SELECT kind, COUNT(*) AS count FROM events WHERE pubkey = ? GROUP BY kind ORDER BY count DESC",
-        [pubkey],
-      );
-      return rows.map((r) => ({ kind: Number(r.kind), count: Number(r.count) }));
-    } catch {
-      // fall back to a capped scan through the EventStore API
-      const evs = await stores.events.query([{ authors: [pubkey], limit: 5000 }], { maxLimit: 5000 });
-      const m = new Map<number, number>();
-      for (const e of evs) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
-      return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count);
-    }
-  }
+  const { stores, bus } = ctx.deps;
 
   /** Pubkeys matching a search by npub/hex or by profile name (kind-0 full-text search). */
   async function searchPubkeys(search: string): Promise<string[]> {
@@ -112,18 +105,12 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   }
 
   /**
-   * Ends whatever admin access `pubkey` had: sessions, push devices and login factors (password, TOTP, passkeys), so a
-   * role granted again later can't be used with credentials from before (possibly the reason it was removed).
+   * Deleting a user takes their role with the record: for staff that is a role change, which needs admins.manage.
+   * `check`: a bulk action's moderationCheck (else the target is looked up).
    */
-  async function revokeAdminAccess(pubkey: string): Promise<void> {
-    await ctx.sessions.destroyAllFor(pubkey);
-    await ctx.push.unsubscribeAllFor(pubkey);
-    await ctx.credentials.deleteAll(pubkey);
-  }
-
-  /** Deleting a user takes their role with the record: for staff that is a role change, which needs admins.manage. */
-  async function assertCanDeleteUser(c: AdminContext, pubkey: string): Promise<AdminRole | null> {
-    await ctx.users.assertCanModerate(principalOf(c), pubkey);
+  async function assertCanDeleteUser(c: AdminContext, pubkey: string, check?: (pk: string) => void): Promise<AdminRole | null> {
+    if (check) check(pubkey);
+    else await ctx.users.assertCanModerate(principalOf(c), pubkey);
     const role = (await stores.users.get(pubkey))?.role ?? null;
     if (role) assertPermission(c, "admins.manage");
     return role;
@@ -150,13 +137,13 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/users", requirePermission("users.edit"), async (c) => {
     const body = await readBody(c, AddUserSchema);
     const pubkey = parsePubkey(body.pubkey);
-    const patch: Partial<UserRecord> = {};
+    const patch: UserPatch = {};
     if (body.allowed !== undefined) patch.allowed = body.allowed;
     if (body.notes !== undefined) patch.notes = body.notes;
     if (body.tags !== undefined) patch.tags = body.tags;
     await ctx.users.assertCanEdit(principalOf(c), pubkey, patch);
     const user = await ctx.users.update(pubkey, patch, principalOf(c).pubkey);
-    await ctx.audit(c, "user.create", pubkey, patch);
+    await ctx.audit(c, "user.create", pubkey, { ...patch });
     return c.json(await ctx.users.toView(user), 201);
   });
 
@@ -174,77 +161,104 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   });
 
   app.post("/users/bulk", requirePermission("users.view"), async (c) => {
-    const body = (await readBody(c, BulkSchema)) as BulkUserRequest;
+    const body = await readBody(c, BulkSchema);
     assertPermission(c, BULK_PERMISSION[body.action]);
     if ((body.action === "add-tag" || body.action === "remove-tag") && !body.tag) throw badRequest("tag required");
     const actor = principalOf(c);
     const result: BulkResult = { ok: 0, failed: [] };
     const done: string[] = [];
-    for (const raw of body.pubkeys) {
-      let pubkey = raw;
-      try {
-        pubkey = parsePubkey(raw);
-        switch (body.action) {
-          case "ban":
-            await ctx.users.assertCanModerate(actor, pubkey);
-            await ctx.users.ban(pubkey, { reason: body.reason, disconnect: true }, actor.pubkey);
-            break;
-          case "mute":
-            await ctx.users.assertCanModerate(actor, pubkey);
-            await ctx.users.setStatus(pubkey, "muted", actor.pubkey);
-            break;
-          case "unban":
-          case "unmute":
-            await ctx.users.assertCanModerate(actor, pubkey);
-            if ((await ctx.users.getOrDefault(pubkey)).status === (body.action === "unban" ? "banned" : "muted"))
-              await ctx.users.setStatus(pubkey, "active", actor.pubkey);
-            break;
-          case "allow":
-          case "disallow": {
-            const patch = { allowed: body.action === "allow" };
-            await ctx.users.assertCanEdit(actor, pubkey, patch);
-            await ctx.users.update(pubkey, patch, actor.pubkey);
-            break;
-          }
-          case "deny":
-          case "undeny":
-            await ctx.users.assertCanModerate(actor, pubkey);
-            await ctx.users.update(pubkey, { denied: body.action === "deny" }, actor.pubkey);
-            break;
-          case "delete-events":
-            await ctx.users.assertCanModerate(actor, pubkey);
-            await stores.events.deleteByPubkey(pubkey);
-            break;
-          case "delete":
-            await assertCanDeleteUser(c, pubkey);
-            await ctx.users.delete(pubkey, actor.pubkey);
-            await revokeAdminAccess(pubkey);
-            break;
-          case "add-tag":
-          case "remove-tag": {
-            await ctx.users.assertCanEdit(actor, pubkey);
-            const u = await ctx.users.getOrDefault(pubkey);
-            const tags = new Set(u.tags);
-            if (body.action === "add-tag") tags.add(body.tag!);
-            else tags.delete(body.tag!);
-            await ctx.users.update(pubkey, { tags: [...tags] }, actor.pubkey);
-            break;
-          }
+    // the rank checks need the staff set once, not a lookup per target
+    const moderate = await ctx.users.moderationCheck(actor);
+    const prot = body.action === "delete-events" ? await ctx.users.protectedAuthors(actor) : undefined;
+    const canEdit = async (pubkey: string, patch?: UserPatch) =>
+      pubkey === actor.pubkey ? ctx.users.assertCanEdit(actor, pubkey, patch) : moderate(pubkey);
+    const signal = c.req.raw.signal;
+    const started = performance.now();
+    let deletedEvents = 0;
+    let error: string | undefined;
+    try {
+      for (let i = 0; i < body.pubkeys.length; i++) {
+        // heavy actions (deletes) on many users can take long: past the budget, or once the client is gone, stop and
+        // report the rest as `remaining` (to resend)
+        if (signal.aborted || performance.now() - started > (ctx.opts.bulkBudgetMs ?? BULK_BUDGET_MS)) {
+          result.remaining = body.pubkeys.slice(i);
+          break;
         }
-        result.ok++;
-        done.push(pubkey);
-      } catch (err) {
-        result.failed.push({ pubkey, error: (err as Error).message });
+        const raw = body.pubkeys[i];
+        let pubkey = raw;
+        try {
+          pubkey = parsePubkey(raw);
+          switch (body.action) {
+            case "ban":
+              moderate(pubkey);
+              await ctx.moderation.banUser(pubkey, { reason: body.reason, disconnect: true }, actor.pubkey);
+              break;
+            case "mute":
+              moderate(pubkey);
+              await ctx.users.setStatus(pubkey, "muted", actor.pubkey);
+              break;
+            case "unban":
+              moderate(pubkey);
+              await ctx.moderation.unbanUser(pubkey, actor.pubkey);
+              break;
+            case "unmute":
+              moderate(pubkey);
+              if ((await ctx.users.getOrDefault(pubkey)).status === "muted") await ctx.users.setStatus(pubkey, "active", actor.pubkey);
+              break;
+            case "allow":
+            case "disallow": {
+              const patch = { allowed: body.action === "allow" };
+              await canEdit(pubkey, patch);
+              await ctx.users.update(pubkey, patch, actor.pubkey);
+              break;
+            }
+            case "deny":
+            case "undeny":
+              moderate(pubkey);
+              await ctx.users.update(pubkey, { denied: body.action === "deny" }, actor.pubkey);
+              break;
+            case "delete-events":
+              // the same ranks as any other event delete (your own events, non-staff and lower-ranked staff)
+              await ctx.users.assertCanDeleteEventsOf(actor, [pubkey], prot);
+              deletedEvents += await stores.events.deleteByPubkey(pubkey);
+              break;
+            case "delete":
+              await assertCanDeleteUser(c, pubkey, moderate);
+              await ctx.moderation.deleteUser(pubkey, actor.pubkey);
+              break;
+            case "add-tag":
+            case "remove-tag": {
+              await canEdit(pubkey);
+              const u = await ctx.users.getOrDefault(pubkey);
+              const tags = new Set(u.tags);
+              if (body.action === "add-tag") tags.add(body.tag!);
+              else tags.delete(body.tag!);
+              await ctx.users.update(pubkey, { tags: [...tags] }, actor.pubkey);
+              break;
+            }
+          }
+          result.ok++;
+          done.push(pubkey);
+        } catch (err) {
+          result.failed.push({ pubkey, error: (err as Error).message });
+        }
       }
+    } catch (err) {
+      error = String((err as Error).message ?? err);
+      throw err;
+    } finally {
+      if (deletedEvents) bus.emit("event.deleted", { ids: [], actor: actor.pubkey, reason: `events of ${done.length} users deleted (${deletedEvents} events)` });
+      // the targets (no per-user entries are written for bulk actions), split into applied, refused and not reached
+      await ctx.audit(c, `user.bulk.${body.action}`, null, {
+        ...auditLists({ pubkeys: done, failed: result.failed, ...(result.remaining?.length ? { remaining: result.remaining } : {}) }),
+        count: body.pubkeys.length,
+        ok: result.ok,
+        ...(body.action === "delete-events" ? { deletedEvents } : {}),
+        ...(body.reason ? { reason: body.reason } : {}),
+        ...(body.tag ? { tag: body.tag } : {}),
+        ...(error ? { error } : {}),
+      });
     }
-    // the targets (no per-user entries are written for bulk actions), split into applied and refused
-    await ctx.audit(c, `user.bulk.${body.action}`, null, {
-      ...auditLists({ pubkeys: done, failed: result.failed }),
-      count: body.pubkeys.length,
-      ok: result.ok,
-      ...(body.reason ? { reason: body.reason } : {}),
-      ...(body.tag ? { tag: body.tag } : {}),
-    });
     return c.json(result);
   });
 
@@ -254,7 +268,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     const [view, eventCount, kinds, usage, reportsAgainst, reportsFiled] = await Promise.all([
       ctx.users.toView(user),
       stores.events.count([{ authors: [pubkey] }]),
-      kindStats(pubkey),
+      stores.events.kindCounts(pubkey),
       ctx.deps.blossom ? ctx.deps.blossom.usage(pubkey) : Promise.resolve({ count: 0, bytes: 0 }),
       stores.events.count([{ kinds: [1984], "#p": [pubkey] }]),
       stores.events.count([{ kinds: [1984], authors: [pubkey] }]),
@@ -270,12 +284,12 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     const pubkey = parsePubkey(c.req.param("pubkey"));
     const patch = await readBody(c, UserPatchSchema);
     if (patch.denied !== undefined) await ctx.users.assertCanModerate(principalOf(c), pubkey);
-    else await ctx.users.assertCanEdit(principalOf(c), pubkey, patch as Partial<UserRecord>);
+    else await ctx.users.assertCanEdit(principalOf(c), pubkey, patch);
     if (patch.nip05Name) {
       const holder = await stores.users.getByNip05(patch.nip05Name);
       if (holder && holder.pubkey !== pubkey) throw conflict("nip05 name already taken");
     }
-    const user = await ctx.users.update(pubkey, patch as Partial<UserRecord>, principalOf(c).pubkey);
+    const user = await ctx.users.update(pubkey, patch, principalOf(c).pubkey);
     await ctx.audit(c, "user.update", pubkey, patch);
     return c.json(await ctx.users.toView(user));
   });
@@ -287,31 +301,43 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     await ctx.users.assertCanModerate(actor, pubkey);
     if (body.deleteEvents) assertPermission(c, "content.delete");
     if (body.deleteMedia) assertPermission(c, "media.moderate");
-    const r = await ctx.users.ban(pubkey, body, actor.pubkey);
-    await ctx.audit(c, "user.ban", pubkey, {
-      ...body,
-      deletedEvents: r.deletedEvents,
-      deletedMedia: r.deletedMedia,
-      disconnected: r.disconnected,
-    });
-    return c.json(await ctx.users.toView(r.user));
+    // like NIP-86 banpubkey, the ban also takes the user off the allow list (`unallowed` in the audit entry)
+    const r = emptyBanOutcome();
+    await audited(
+      (details) => ctx.audit(c, "user.ban", pubkey, details),
+      () => ({ ...body, deletedEvents: r.deletedEvents, deletedMedia: r.deletedMedia, disconnected: r.disconnected, ...(r.unallowed ? { unallowed: true } : {}) }),
+      () => ctx.moderation.banUser(pubkey, body, actor.pubkey, r),
+    );
+    return c.json(await ctx.users.toView(r.user!));
   });
 
   app.delete("/users/:pubkey", requirePermission("users.delete"), async (c) => {
     const pubkey = parsePubkey(c.req.param("pubkey"));
     const actor = principalOf(c);
     const role = await assertCanDeleteUser(c, pubkey);
-    const r = await ctx.users.delete(pubkey, actor.pubkey);
-    await revokeAdminAccess(pubkey);
-    await ctx.audit(c, "user.delete", pubkey, { ...r, ...(role ? { role } : {}) });
+    const r = emptyDeleteOutcome();
+    await audited(
+      (details) => ctx.audit(c, "user.delete", pubkey, details),
+      () => ({ ...r, ...(role ? { role } : {}) }),
+      () => ctx.moderation.deleteUser(pubkey, actor.pubkey, r),
+    );
     return c.json(r);
   });
 
-  const statusRoute = (path: string, action: string, status: "active" | "muted", from?: "banned" | "muted") =>
+  app.post("/users/:pubkey/unban", requirePermission("users.ban"), async (c) => {
+    const pubkey = parsePubkey(c.req.param("pubkey"));
+    const actor = principalOf(c);
+    // lifting a ban needs the same rank as imposing it (a moderator can't undo an owner's ban of an admin)
+    await ctx.users.assertCanModerate(actor, pubkey);
+    const { user } = await ctx.moderation.unbanUser(pubkey, actor.pubkey);
+    await ctx.audit(c, "user.unban", pubkey);
+    return c.json(await ctx.users.toView(user));
+  });
+
+  const statusRoute = (path: string, action: string, status: "active" | "muted", from?: "muted") =>
     app.post(`/users/:pubkey/${path}`, requirePermission("users.ban"), async (c) => {
       const pubkey = parsePubkey(c.req.param("pubkey"));
       const actor = principalOf(c);
-      // lifting a ban/mute needs the same rank as imposing it (a moderator can't undo an owner's ban of an admin)
       await ctx.users.assertCanModerate(actor, pubkey);
       const current = await ctx.users.getOrDefault(pubkey);
       let user: UserRecord = current;
@@ -319,7 +345,6 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
       await ctx.audit(c, action, pubkey);
       return c.json(await ctx.users.toView(user));
     });
-  statusRoute("unban", "user.unban", "active", "banned");
   statusRoute("mute", "user.mute", "muted");
   statusRoute("unmute", "user.unmute", "active", "muted");
 
@@ -330,14 +355,18 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
       if (role === "owner") return c.json(await ctx.users.toView(await ctx.users.getOrDefault(pubkey)));
       throw forbidden("cannot change the role of a configured owner", "config_owner");
     }
-    const current = (await stores.users.get(pubkey))?.role ?? null;
-    if (current === "owner" && role !== "owner") {
-      const owners = await ownerCount();
-      owners.delete(pubkey);
-      if (owners.size === 0) throw conflict("cannot remove the last owner", "last_owner");
-    }
-    const user = await ctx.users.update(pubkey, { role }, principalOf(c).pubkey);
-    if (!role) await revokeAdminAccess(pubkey);
+    // check and change in one transaction: two owners demoting each other at once can't both pass the last-owner check
+    // (SQLite serializes transactions; on Postgres the stores run outside it, so this stays best effort there)
+    const { current, user } = await stores.db.tx(async () => {
+      const current = (await stores.users.get(pubkey))?.role ?? null;
+      if (current === "owner" && role !== "owner") {
+        const owners = await ownerCount();
+        owners.delete(pubkey);
+        if (owners.size === 0) throw conflict("cannot remove the last owner", "last_owner");
+      }
+      return { current, user: await ctx.users.update(pubkey, { role }, principalOf(c).pubkey) };
+    });
+    if (!role) await ctx.moderation.revokeAdminAccess(pubkey);
     await ctx.audit(c, "user.role", pubkey, { from: current, to: role });
     return c.json(await ctx.users.toView(user));
   });

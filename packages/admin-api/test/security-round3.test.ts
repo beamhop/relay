@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { NostrEvent } from "@beamhop/sdk";
 import { createHarness, newKey } from "./fakes";
-import { isSecretKeyName } from "@beamhop/sdk";
+import { isSecretKeyName } from "@beamhop/sdk/secrets";
 import { maskSecrets } from "../src/routes/plugins";
 import { totpCode } from "../src/util/totp";
 

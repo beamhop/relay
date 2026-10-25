@@ -1,10 +1,12 @@
 import { z } from "zod";
-import type { ReportBulkResult } from "@beamhop/sdk";
+import type { ReportBulkResolveRequest, ReportBulkResult, ReportListQuery, ResolveReportRequest } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
-import { auditLists } from "../util/audit";
+import { newResolveMemo } from "../services/reports";
+import { audited, auditLists } from "../util/audit";
+import type { Same, SameFields } from "../util/contract";
 import { parseEventId, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
@@ -14,10 +16,13 @@ const ListQuery = z.object({
   type: z.string().max(50).optional(),
   target: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).max(5000).default(0),
+  offset: z.coerce.number().int().min(0).max(10_000_000).default(0),
 });
 const ResolveSchema = z.object({ action: z.enum(ACTIONS), note: z.string().max(2000).optional() });
 const BulkSchema = z.object({ ids: z.array(z.string()).min(1).max(500), action: z.enum(ACTIONS), note: z.string().max(2000).optional() });
+true satisfies SameFields<z.output<typeof ListQuery>, ReportListQuery> &
+  Same<z.output<typeof ResolveSchema>, ResolveReportRequest> &
+  Same<z.output<typeof BulkSchema>, ReportBulkResolveRequest>;
 
 export function registerReportRoutes(app: AdminApp, ctx: ApiContext) {
   // ?target: a pubkey (hex / npub) lists the reports whose targetPubkey it is (see ReportService.list), or an event id / blob hash
@@ -36,8 +41,20 @@ export function registerReportRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/reports/:id/resolve", requirePermission("reports.resolve"), async (c) => {
     const id = parseEventId(c.req.param("id"));
     const body = await readBody(c, ResolveSchema);
-    const { report, effects } = await ctx.reports.resolve(id, body, principalOf(c), c.get("ip"));
-    await ctx.audit(c, "report.resolve", id, { action: body.action, note: body.note, target: report.targetEventId ?? report.targetBlob ?? report.targetPubkey, ...effects });
+    // audited however it ends: a failure after the ban or delete still records what was done
+    const effects: Record<string, unknown> = {};
+    let target: string | undefined;
+    const { report } = await audited(
+      (details) => ctx.audit(c, "report.resolve", id, details),
+      () => ({ action: body.action, note: body.note, ...(target ? { target } : {}), ...effects }),
+      async () => {
+        const r = await ctx.reports.resolve(id, body, principalOf(c), c.get("ip"), effects);
+        target = r.report.targetEventId ?? r.report.targetBlob ?? r.report.targetPubkey;
+        return r;
+      },
+      // refused (rank, missing target) before anything was done
+      () => !Object.keys(effects).length,
+    );
     return c.json(report);
   });
 
@@ -45,18 +62,24 @@ export function registerReportRoutes(app: AdminApp, ctx: ApiContext) {
     const body = await readBody(c, BulkSchema);
     const result: ReportBulkResult = { ok: 0, failed: [] };
     const effects: Record<string, unknown>[] = [];
-    for (const raw of body.ids) {
-      try {
-        const id = parseEventId(raw);
-        const r = await ctx.reports.resolve(id, body, principalOf(c), c.get("ip"));
-        if (Object.keys(r.effects).length) effects.push({ id, ...r.effects });
-        result.ok++;
-      } catch (err) {
-        result.failed.push({ id: raw, error: (err as Error).message });
+    // no views are built (the response only counts), and each subject is banned / each target deleted once
+    const memo = newResolveMemo();
+    try {
+      for (const raw of body.ids) {
+        const done: Record<string, unknown> = {};
+        try {
+          const id = parseEventId(raw);
+          await ctx.reports.apply(id, body, principalOf(c), c.get("ip"), done, memo);
+          result.ok++;
+        } catch (err) {
+          result.failed.push({ id: raw, error: (err as Error).message });
+        }
+        if (Object.keys(done).length) effects.push({ id: raw, ...done });
       }
+    } finally {
+      // the full target list and what each resolution did (bans, deletions), as the single-report route records
+      await ctx.audit(c, "report.bulk-resolve", null, { ...auditLists({ ids: body.ids, failed: result.failed, effects }), action: body.action, note: body.note, ok: result.ok });
     }
-    // the full target list and what each resolution did (bans, deletions), as the single-report route records
-    await ctx.audit(c, "report.bulk-resolve", null, { ...auditLists({ ids: body.ids, failed: result.failed, effects }), action: body.action, note: body.note, ok: result.ok });
     return c.json(result);
   });
 }

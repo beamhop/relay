@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import type { ConnectionHandle, ConnectionMeta, CoreDeps, CreateRelay, NostrEvent, RelayEngine, RelaySocket } from "@beamhop/sdk";
-import { nowSec } from "@beamhop/sdk";
+import type { ConnectionHandle, ConnectionMeta, CoreDeps, CreateRelay, NostrEvent, RelayEngine, RelaySocket, StopContext } from "@beamhop/sdk";
+import { nowSec, settleBy, TaskTracker } from "@beamhop/sdk";
+import { SHUTTING_DOWN } from "./constants";
 import type { RelayContext } from "./context";
 import { createHttp } from "./http/app";
 import { buildNip11 } from "./http/nip11";
@@ -14,10 +15,12 @@ import { ContentPolicy } from "./pipeline/content-policy";
 import { MAX_VANISH_MARKERS, VANISH_KV_NAMESPACE } from "./pipeline/special-kinds";
 import { Verifier } from "./pipeline/verify";
 import { EPHEMERAL_DEDUP_SIZE, processEvent } from "./pipeline/write";
-import { Connection } from "./protocol/connection";
+import { Connection, type EventJson, serializeEvent } from "./protocol/connection";
 import {
   authReadDenied,
   cancelSub,
+  CONN_RATE_BUCKETS,
+  connBucket,
   deliverLive,
   dropAllNegSessions,
   handleAuth,
@@ -36,7 +39,7 @@ import {
   negError,
   sweepNegSessions,
 } from "./protocol/handlers";
-import { parseClientMessage, peekMessage, validateEventShape } from "./protocol/messages";
+import { parseClientMessage, peekMessage, peekType, validateEventShape } from "./protocol/messages";
 import { ReadLimits } from "./protocol/read-limits";
 import { loadRelayKey } from "./relay-key";
 import { SubscriptionIndex } from "./subscriptions/index";
@@ -45,6 +48,7 @@ import { UserCache } from "./users";
 import { randomHex } from "./util/hex";
 import { Lru } from "./util/lru";
 import { RateLimiter } from "./util/rate-limit";
+import { ipSiteKey } from "./util/cidr";
 import { toWsUrl } from "./util/url";
 
 const IP_RULES_REFRESH_MS = 30_000;
@@ -54,6 +58,12 @@ const EXPIRATION_PURGE_MS = 60_000;
  * may hold this many times that in total.
  */
 const V6_PREFIX_CONNECTION_FACTOR = 4;
+/** An IPv6 /48 (a site: many /64s) may hold this many times connectionsPerIp, unless limits.connectionsPerIpv6Site is set. */
+const V6_SITE_CONNECTION_FACTOR = 16;
+/** A connection refused more than this many times its message limit within a minute is closed. */
+const OVER_LIMIT_CLOSE_FACTOR = 3;
+/** CLOSE / NEG-CLOSE skip the message limit only up to this size (a subscription id is at most 64 chars). */
+const MAX_EXEMPT_CLOSE_CHARS = 2048;
 export { MESSAGES_PER_MINUTE };
 
 const noopHandle = (id: string): ConnectionHandle => ({ id, onMessage() {}, onClose() {} });
@@ -66,6 +76,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
 
   const ctx: RelayContext = {
     ...deps,
+    tasks: deps.tasks ?? new TaskTracker({ logger }),
     logger,
     relayUrl: toWsUrl(deps.config.server.publicUrl),
     key,
@@ -84,6 +95,9 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     s: () => deps.settings.get(),
     broadcast(event: NostrEvent): number {
       let n = 0;
+      // serialized once (at the first delivery) for all recipients
+      let json: EventJson | undefined;
+      const serialized = () => (json ??= serializeEvent(event));
       for (const sub of subs.match(event)) {
         if (sub.conn.closed) continue;
         // read auth can be switched on at runtime: subscriptions opened anonymously before that end here
@@ -94,7 +108,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
           continue;
         }
         if (!isVisibleTo(ctx, event, sub.conn, { conn: sub.conn, subId: sub.id, source: "ws" })) continue;
-        if (deliverLive(sub, event)) n++;
+        if (deliverLive(sub, event, serialized)) n++;
       }
       return n;
     },
@@ -108,11 +122,19 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   }
   await ctx.ipRules.refresh();
 
-  /** open connections per address and (IPv6) per /64 */
+  /** open connections per address and (IPv6) per /64 and per /48 */
   const ipCounts = new Map<string, number>();
-  const countKeys = (conn: Connection) => (conn.addrKey === conn.ipKey ? [conn.addrKey] : [conn.addrKey, conn.ipKey]);
+  const countKeys = (conn: Connection) => (conn.addrKey === conn.ipKey ? [conn.addrKey] : [conn.addrKey, conn.ipKey, ipSiteKey(conn.ip) ?? conn.ipKey]);
+  /** caps for countKeys(conn), in the same order (0 = unlimited) */
+  const countCaps = (keys: string[]) => {
+    const L = ctx.s().limits;
+    const max = L.connectionsPerIp;
+    return keys.length === 1 ? [max] : [max, max * V6_PREFIX_CONNECTION_FACTOR, L.connectionsPerIpv6Site ?? max * V6_SITE_CONNECTION_FACTOR];
+  };
   const scheduler = new Scheduler(logger);
   let stopped = false;
+  /** shutting down: no new connections or messages; EVENTs already queued are still processed and answered */
+  let draining = false;
 
   function cleanup(conn: Connection, handledClose: { done: boolean }) {
     if (handledClose.done) return;
@@ -121,7 +143,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     for (const sub of [...conn.subs.values()]) cancelSub(ctx, sub);
     dropAllNegSessions(ctx, conn);
     conns.delete(conn.id);
-    for (const b of ["req", "search", "msg", "auth", "neg"]) ctx.rate.delete(`${b}:conn:${conn.id}`);
+    for (const b of CONN_RATE_BUCKETS) ctx.rate.delete(connBucket(b, conn.id));
     for (const k of countKeys(conn)) {
       const n = (ipCounts.get(k) ?? 1) - 1;
       if (n <= 0) ipCounts.delete(k);
@@ -142,39 +164,88 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     else conn.notice(reason);
   }
 
+  /**
+   * Takes an inbound message token. A connection whose refused messages within a minute exceed
+   * OVER_LIMIT_CLOSE_FACTOR times its limit is closed: the flood costs bandwidth and decompression even
+   * when refused unparsed.
+   */
+  function overLimit(conn: Connection): boolean {
+    if (conn.trusted) return false;
+    if (
+      ctx.rate.take(connBucket("msg", conn.id), conn.messagesPerMinute) &&
+      (conn.ownMessageLimit || ctx.rate.take(`msg:ip:${conn.ipKey}`, MESSAGES_PER_MINUTE * MESSAGE_IP_FACTOR))
+    ) {
+      return false;
+    }
+    const now = Date.now();
+    if (now - conn.refusedSince >= 60_000) {
+      conn.refusedSince = now;
+      conn.refused = 0;
+    }
+    if (++conn.refused > OVER_LIMIT_CLOSE_FACTOR * conn.messagesPerMinute) {
+      logger.info("closing connection that keeps exceeding the message limit", { ip: conn.ip, refused: conn.refused });
+      closeConn(conn, "rate-limited: too many messages", 1008, "rate limited");
+    }
+    return true;
+  }
+
+  /**
+   * Shutting down: new work is answered (OK false / CLOSED / NEG-ERR, unparsed) instead of started. Closing
+   * subscriptions still goes through (returns false: handle it as usual).
+   */
+  function refuseWhileDraining(conn: Connection, data: string): boolean {
+    const type = peekType(data);
+    if ((type === "CLOSE" || type === "NEG-CLOSE") && data.length <= MAX_EXEMPT_CLOSE_CHARS) return false;
+    const peeked = peekMessage(data);
+    if (peeked.subId || peeked.eventId) refuse(conn, { ...peeked, reason: SHUTTING_DOWN });
+    return true;
+  }
+
   function onMessage(conn: Connection, data: string) {
     if (conn.closed) return;
     conn.messagesIn++;
+    if (draining && refuseWhileDraining(conn, data)) return;
     const L = ctx.s().limits;
-    const overLimit = () =>
-      !conn.trusted &&
-      !(
-        ctx.rate.take(`msg:conn:${conn.id}`, conn.messagesPerMinute) &&
-        (conn.ownMessageLimit || ctx.rate.take(`msg:ip:${conn.ipKey}`, MESSAGES_PER_MINUTE * MESSAGE_IP_FACTOR))
-      );
+    // The rate token is taken before the message is parsed (or even measured), from its type read off the
+    // head: a flood is refused at the cost of a peek. Closing things is always allowed (it frees
+    // resources), but only small CLOSE / NEG-CLOSE messages count as such.
+    const type = peekType(data);
+    const exempt = (type === "CLOSE" || type === "NEG-CLOSE") && data.length <= MAX_EXEMPT_CLOSE_CHARS;
+    if (!exempt && overLimit(conn)) {
+      deps.bus.emit("message.in", { connId: conn.id, type: type ?? "INVALID", bytes: Buffer.byteLength(data) });
+      // answered only when it can be matched (OK / CLOSED / NEG-ERR; closes get no answer); NOTICEs would cost as much as the flood
+      if (conn.closed || type === "CLOSE" || type === "NEG-CLOSE") return;
+      const peeked = peekMessage(data);
+      if (peeked.subId || peeked.eventId) refuse(conn, { ...peeked, reason: "rate-limited: too many messages, slow down" });
+      return;
+    }
     const bytes = Buffer.byteLength(data);
     if (bytes > L.maxMessageBytes) {
       deps.bus.emit("message.in", { connId: conn.id, type: "OVERSIZE", bytes });
-      // over the message rate limit: dropped without an answer (answers would cost as much as the flood)
-      if (!overLimit()) refuse(conn, { ...peekMessage(data), reason: `invalid: message too large (max ${L.maxMessageBytes} bytes)` });
+      if (exempt && overLimit(conn)) return;
+      refuse(conn, { ...peekMessage(data), reason: `invalid: message too large (max ${L.maxMessageBytes} bytes)` });
       return;
     }
     const parsed = parseClientMessage(data, { maxFilters: L.maxFilters });
     deps.bus.emit("message.in", { connId: conn.id, type: parsed.ok ? parsed.msg.type : (parsed.type ?? "INVALID"), bytes });
+    // a peeked CLOSE that turned out malformed (or not to be one) pays its token after all
+    if (exempt && (!parsed.ok || (parsed.msg.type !== "CLOSE" && parsed.msg.type !== "NEG-CLOSE")) && overLimit(conn)) return;
     if (!parsed.ok) {
-      if (!overLimit()) refuse(conn, parsed);
+      refuse(conn, parsed);
       return;
     }
     const msg = parsed.msg;
-    // closing things is always allowed (it frees resources)
-    if (msg.type !== "CLOSE" && msg.type !== "NEG-CLOSE" && overLimit()) {
-      const reason = "rate-limited: too many messages, slow down";
-      if (msg.type === "EVENT" || msg.type === "AUTH") conn.ok(msg.event.id, false, reason);
-      else if (msg.type === "REQ" || msg.type === "COUNT") conn.closedSub(msg.subId, reason);
-      else negError(ctx, conn, msg.subId, reason);
-      return;
-    }
-    const fail = (err: unknown) => logger.error(`${msg.type} handler failed`, { err: String(err) });
+    // a handler that throws still answers (NIP-01: CLOSED / NEG-ERR / OK), and a subscription it registered is cancelled
+    const fail = (err: unknown) => {
+      logger.error(`${msg.type} handler failed`, { err: String(err) });
+      if (conn.closed) return;
+      const reason = "error: internal error";
+      if (msg.type === "REQ" || msg.type === "COUNT") {
+        handleClose(ctx, conn, msg.subId);
+        conn.closedSub(msg.subId, reason);
+      } else if (msg.type === "NEG-OPEN") negError(ctx, conn, msg.subId, reason);
+      else if (msg.type === "AUTH") conn.ok(msg.event.id, false, reason);
+    };
     switch (msg.type) {
       case "EVENT":
         return handleEvent(ctx, conn, msg.event, bytes);
@@ -218,12 +289,16 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       conn.close(1008, reason);
       return noopHandle(id);
     };
-    if (stopped) return reject("error: relay is shutting down", "shutting down");
+    if (stopped || draining) return reject(SHUTTING_DOWN, "shutting down");
     if (verdict.blocked) return reject(`blocked: ${verdict.reason ?? "your IP address is blocked"}`, "blocked");
-    const max = ctx.s().limits.connectionsPerIp;
     const keys = countKeys(conn);
-    const over = keys.some((k, i) => (ipCounts.get(k) ?? 0) >= (i === 0 ? max : max * V6_PREFIX_CONNECTION_FACTOR));
-    if (!verdict.allowed && max > 0 && over) return reject("rate-limited: too many connections from your IP address", "too many connections");
+    if (!verdict.allowed) {
+      const maxConnections = ctx.s().limits.maxConnections;
+      if (maxConnections > 0 && conns.size >= maxConnections) return reject("rate-limited: relay has too many connections, try again later", "relay full");
+      const caps = countCaps(keys);
+      const over = keys.some((k, i) => caps[i] > 0 && (ipCounts.get(k) ?? 0) >= caps[i]);
+      if (over) return reject("rate-limited: too many connections from your IP address", "too many connections");
+    }
     for (const k of keys) ipCounts.set(k, (ipCounts.get(k) ?? 0) + 1);
     conns.set(id, conn);
     const state = { done: false };
@@ -277,11 +352,11 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   }
 
   let lastRetention = 0;
-  async function retentionTick() {
+  async function retentionTick(signal: AbortSignal) {
     const intervalMs = Math.max(1, ctx.s().retention.intervalMinutes) * 60_000;
     if (Date.now() - lastRetention < intervalMs) return;
     lastRetention = Date.now();
-    await runRetention(ctx);
+    await runRetention(ctx, signal);
   }
 
   const engine: RelayEngine = {
@@ -305,6 +380,9 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     },
     async start() {
       stopped = false;
+      draining = false;
+      ctx.refuseQueuedEvents = false;
+      scheduler.resume();
       scheduler.every("ip-rules", IP_RULES_REFRESH_MS, refreshIpRules);
       offIpRules?.();
       offIpRules = deps.bus.on("ip.rules.changed", () => void scheduler.runNow("ip-rules", refreshIpRules));
@@ -314,13 +392,36 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       scheduler.every("neg-sweep", NEG_SWEEP_MS, () => sweepNegSessions(ctx));
       void scheduler.runNow("expiration", purgeExpired);
     },
-    async stop() {
-      stopped = true;
+    async drain(sc: StopContext) {
+      draining = true;
       offIpRules?.();
       offIpRules = undefined;
-      scheduler.stopAll();
+      // past the deadline, EVENTs still waiting in a connection's queue are answered at once instead of processed
+      const onDeadline = () => (ctx.refuseQueuedEvents = true);
+      if (sc.signal.aborted) onDeadline();
+      else sc.signal.addEventListener("abort", onDeadline, { once: true });
+      try {
+        await Promise.all([
+          scheduler.drain(sc.signal),
+          settleBy(sc.signal, Promise.all([...conns.values()].map((c) => c.queue))),
+          ctx.tasks!.idle(sc.signal),
+        ]);
+      } finally {
+        sc.signal.removeEventListener("abort", onDeadline);
+      }
+    },
+    async stop() {
+      stopped = true;
+      draining = true;
+      ctx.refuseQueuedEvents = true;
+      offIpRules?.();
+      offIpRules = undefined;
+      // drained first by the server; embedders and tests that stop right away still get their jobs told to stop
+      void scheduler.drain();
       for (const conn of [...conns.values()]) {
-        conn.notice("error: relay is shutting down");
+        // never close with EVENTs unanswered: a client can't tell whether to resend them
+        conn.answerPending(SHUTTING_DOWN);
+        conn.notice(SHUTTING_DOWN);
         conn.close(1001, "relay shutting down");
         closers.get(conn.id)?.();
       }

@@ -6,7 +6,7 @@ import type { MiddlewareHandler } from "hono";
 import type { AdminContext, AdminEnv } from "../context";
 import { assertPermission, requirePermission } from "../middleware/auth";
 import { readBody } from "../util/request";
-import { maskSecretValues } from "@beamhop/sdk";
+import { maskSecretValues } from "@beamhop/sdk/secrets";
 
 const SettingsPatch = z.object({ values: z.record(z.string(), z.unknown()) });
 const PROXY_SEGMENT = "x";

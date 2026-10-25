@@ -73,4 +73,31 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "mysql" } })).toThrow(/database.driver/);
     expect(() => loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "postgres" } })).toThrow(/postgresUrl/);
   });
+
+  test("unknown file keys and BEAMHOP_* variables warn but still boot", () => {
+    writeFileSync(
+      join(dir, "beamhop.config.json"),
+      JSON.stringify({
+        $schema: "./schema.json",
+        blosom: { enabled: false },
+        server: { port: 4000, trustProxies: ["10.0.0.0/8"], metricsToken: "a-real-token", prometheus: false },
+        metrics: { otel: { headers: { "x-anything": "1" } } }, // a record: its keys are free-form
+        plugins: { enabled: ["hello"] },
+      }),
+    );
+    const seen: string[] = [];
+    const { config, extras, warnings } = loadConfig({
+      cwd: dir,
+      env: { BEAMHOP_PORTT: "1", BEAMHOP_CONFIG: "beamhop.config.json", BEAMHOP_PROMETHEUS: "", BEAMHOP_SESSION_SECRET: "x", OTHER: "1" },
+      warn: (m) => seen.push(m),
+    });
+    expect(config.server.port).toBe(4000);
+    expect(extras).toMatchObject({ metricsToken: "a-real-token", prometheus: false, pluginsEnabled: ["hello"] });
+    expect(warnings).toEqual(seen);
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain(`"blosom"`);
+    expect(warnings[1]).toContain(`"server.trustProxies"`);
+    expect(warnings[2]).toContain("BEAMHOP_PORTT");
+    expect(loadConfig({ cwd: dir, env: {}, overrides: { blossom: { enabled: false } }, warn: () => {} }).warnings).toHaveLength(2);
+  });
 });

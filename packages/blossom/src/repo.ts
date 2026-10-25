@@ -58,6 +58,32 @@ ALTER TABLE blossom_blobs ADD COLUMN moderated_by TEXT;
 ALTER TABLE blossom_blocklist ADD COLUMN blocked_by TEXT;
 `,
   },
+  {
+    // blossom_held: status (+ moderator) a non-approved blob was purged with when its last owner deleted it; a
+    // re-upload starts out in it. Was the kv namespace "blossom-held-status" (moved over at startup).
+    // blossom_used_tokens: BUD-11 delete tokens already used (`<event id>:<sha256>`), kept until the token expires
+    // (ms). Was the kv namespace "blossom-used-delete-tokens".
+    // blossom_pending_deletes: blob bytes whose deletion failed; retried while the blob has no row.
+    id: "004_held_tokens_pending",
+    up: `
+CREATE TABLE IF NOT EXISTS blossom_held (
+  sha256 TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  moderated_by TEXT,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS blossom_used_tokens (
+  id TEXT PRIMARY KEY,
+  expires_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS blossom_used_tokens_exp_idx ON blossom_used_tokens (expires_at);
+CREATE TABLE IF NOT EXISTS blossom_pending_deletes (
+  sha256 TEXT PRIMARY KEY,
+  created_at BIGINT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+`,
+  },
 ];
 
 export interface BlobRow {
@@ -70,6 +96,9 @@ export interface BlobRow {
   moderatedBy: string | null;
   hasThumbnail: boolean;
 }
+
+/** Whether a blob is out of public reach (pending review or blocked): stored and served as hidden. */
+export const isHidden = (row: Pick<BlobRow, "status">): boolean => row.status !== "approved";
 
 interface OwnedBlobRow extends BlobRow {
   /** when this owner uploaded it */
@@ -113,6 +142,14 @@ export class BlobRepo {
 
   migrate() {
     return this.db.migrate("blossom", migrations);
+  }
+
+  /**
+   * Runs `fn` in one transaction with a repo bound to it. Only quick row work belongs in there: no driver I/O, hooks
+   * or other slow awaits (SQLite has one connection, and every other statement waits for the transaction).
+   */
+  tx<T>(fn: (repo: BlobRepo) => Promise<T>): Promise<T> {
+    return this.db.tx((db) => fn(new BlobRepo(db)));
   }
 
   async get(sha256: string): Promise<BlobRow | undefined> {
@@ -172,6 +209,17 @@ export class BlobRepo {
   async deletedAt(sha256: string, pubkey: string): Promise<number | undefined> {
     const r = await this.db.get<{ deleted_at: unknown }>("SELECT deleted_at FROM blossom_deletions WHERE sha256 = ? AND pubkey = ?", [sha256, pubkey]);
     return r ? Number(r.deleted_at) : undefined;
+  }
+
+  /** Latest time `pubkey` deleted any of `shas` or the blobs they were stripped into (undefined: never). */
+  async lastDeletion(pubkey: string, shas: string[]): Promise<number | undefined> {
+    const q = shas.map(() => "?").join(",");
+    const r = await this.db.get<{ d: unknown }>(
+      `SELECT MAX(deleted_at) AS d FROM blossom_deletions
+       WHERE pubkey = ? AND (sha256 IN (${q}) OR sha256 IN (SELECT sha256 FROM blossom_stripped WHERE original IN (${q})))`,
+      [pubkey, ...shas, ...shas],
+    );
+    return r?.d == null ? undefined : Number(r.d);
   }
 
   async pruneDeletions(before: number): Promise<void> {
@@ -295,6 +343,23 @@ export class BlobRepo {
     return rows.map((r) => ({ type: r.type, count: Number(r.n), bytes: Number(r.bytes) }));
   }
 
+  /**
+   * Whether any of `shas` is refused: on the blocklist, moderated to "blocked", or stripped into a blob that is one of
+   * those. One query (it runs several times per upload).
+   */
+  async refused(shas: string[]): Promise<boolean> {
+    const q = shas.map(() => "?").join(",");
+    const r = await this.db.get<{ refused: unknown }>(
+      `SELECT CASE WHEN
+         EXISTS (SELECT 1 FROM blossom_blocklist k WHERE k.sha256 IN (${q}) OR k.sha256 IN (SELECT s.sha256 FROM blossom_stripped s WHERE s.original IN (${q})))
+         OR EXISTS (SELECT 1 FROM blossom_blobs b WHERE b.status = 'blocked'
+           AND (b.sha256 IN (${q}) OR b.sha256 IN (SELECT s.sha256 FROM blossom_stripped s WHERE s.original IN (${q}))))
+       THEN 1 ELSE 0 END AS refused`,
+      [...shas, ...shas, ...shas, ...shas],
+    );
+    return Number(r?.refused ?? 0) === 1;
+  }
+
   async isBlocked(sha256: string): Promise<boolean> {
     return !!(await this.db.get("SELECT 1 AS x FROM blossom_blocklist WHERE sha256 = ?", [sha256]));
   }
@@ -316,5 +381,65 @@ export class BlobRepo {
       "SELECT sha256, reason, created_at, blocked_by FROM blossom_blocklist ORDER BY created_at DESC",
     );
     return rows.map((r) => ({ sha256: r.sha256, reason: r.reason, createdAt: Number(r.created_at), blockedBy: r.blocked_by ?? null }));
+  }
+
+  // ---------------------------------------------------------------- held status
+
+  async held(sha256: string): Promise<{ status: BlobStatus; by: string | null } | undefined> {
+    const r = await this.db.get<{ status: string; moderated_by: string | null }>("SELECT status, moderated_by FROM blossom_held WHERE sha256 = ?", [sha256]);
+    return r && (r.status === "pending" || r.status === "blocked") ? { status: r.status, by: r.moderated_by ?? null } : undefined;
+  }
+
+  async setHeld(sha256: string, status: BlobStatus, by: string | null, at: number): Promise<void> {
+    await this.db.run(
+      `INSERT INTO blossom_held (sha256, status, moderated_by, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (sha256) DO UPDATE SET status = excluded.status, moderated_by = excluded.moderated_by, created_at = excluded.created_at`,
+      [sha256, status, by, at],
+    );
+  }
+
+  async clearHeld(sha256: string): Promise<void> {
+    await this.db.run("DELETE FROM blossom_held WHERE sha256 = ?", [sha256]);
+  }
+
+  // ---------------------------------------------------------------- used delete tokens
+
+  /** `now` and `expiresAt` in ms */
+  async tokenUsed(id: string, now: number): Promise<number | undefined> {
+    const r = await this.db.get<{ expires_at: unknown }>("SELECT expires_at FROM blossom_used_tokens WHERE id = ? AND expires_at > ?", [id, now]);
+    return r ? Number(r.expires_at) : undefined;
+  }
+
+  async markTokenUsed(id: string, expiresAt: number): Promise<void> {
+    await this.db.run("INSERT INTO blossom_used_tokens (id, expires_at) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET expires_at = excluded.expires_at", [
+      id,
+      expiresAt,
+    ]);
+  }
+
+  async pruneUsedTokens(now: number): Promise<void> {
+    await this.db.run("DELETE FROM blossom_used_tokens WHERE expires_at <= ?", [now]);
+  }
+
+  // ---------------------------------------------------------------- pending byte deletions
+
+  async addPendingDelete(sha256: string, at: number): Promise<void> {
+    await this.db.run("INSERT INTO blossom_pending_deletes (sha256, created_at, attempts) VALUES (?, ?, 0) ON CONFLICT (sha256) DO NOTHING", [sha256, at]);
+  }
+
+  async pendingDeletes(limit: number): Promise<{ sha256: string; attempts: number }[]> {
+    const rows = await this.db.all<{ sha256: string; attempts: unknown }>(
+      "SELECT sha256, attempts FROM blossom_pending_deletes ORDER BY attempts ASC, created_at ASC LIMIT ?",
+      [limit],
+    );
+    return rows.map((r) => ({ sha256: r.sha256, attempts: Number(r.attempts) }));
+  }
+
+  async pendingDeleteFailed(sha256: string): Promise<void> {
+    await this.db.run("UPDATE blossom_pending_deletes SET attempts = attempts + 1 WHERE sha256 = ?", [sha256]);
+  }
+
+  async clearPendingDelete(sha256: string): Promise<void> {
+    await this.db.run("DELETE FROM blossom_pending_deletes WHERE sha256 = ?", [sha256]);
   }
 }

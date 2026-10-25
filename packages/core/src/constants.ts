@@ -25,3 +25,9 @@ export const SUPPORTED_NIPS: readonly number[] = [
   77, // negentropy sync
   86, // relay management API (served by admin-api)
 ];
+
+/** OK / CLOSED / NOTICE reason for what arrives (or is still unanswered) while the relay shuts down */
+export const SHUTTING_DOWN = "error: relay is shutting down";
+
+/** IP buckets are looser than pubkey and connection buckets (NAT, many users behind one IP). */
+export const IP_RATE_FACTOR = 4;

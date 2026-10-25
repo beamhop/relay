@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { RuntimeSettingsSchema, unsafeRegexReason, type DeepPartial, type RuntimeSettings, type SettingsResponse } from "@beamhop/sdk";
+import { unsafeRegexReason } from "@beamhop/sdk/regex-safety";
+import { RuntimeSettingsSchema, type DeepPartial, type RuntimeSettings, type SettingsResponse } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, isZodError, zodMessage } from "../errors";

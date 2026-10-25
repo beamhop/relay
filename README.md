@@ -11,7 +11,8 @@ http://host/<sha256>  → Blossom (BUD-01/02/04/06/08/11/12)
 http://host/admin/    → admin panel (PWA)
 http://host/plugins/… → plugin public routes
 http://host/metrics   → Prometheus metrics
-http://host/health    → liveness probe (JSON; 503 if the database is unreachable)
+http://host/health    → readiness probe (JSON; 503 while starting or shutting down, or if the database doesn't answer)
+http://host/health/live → liveness probe (200 while the process answers)
 ```
 
 ## Features
@@ -90,7 +91,7 @@ docker run -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1… beamhop
 
 - The image runs as a non-root user.
 - Data lives in `/data`: `BEAMHOP_SQLITE_PATH=/data/beamhop.db` and `BEAMHOP_BLOSSOM_FS_PATH=/data/blobs`.
-- The health check calls `GET /health`, which checks the database and returns 503 if it is unreachable.
+- The health check calls `GET /health/live` (liveness). Point load balancers at `GET /health` (readiness): it checks the database and returns 503 while starting, draining or stopping. Give the container a stop grace period of at least `server.shutdownTimeoutMs` (10 s by default, Docker's default too) so shutdown can drain in-flight requests and queued events.
 
 To run CLI commands inside the container, use `docker compose exec beamhop bun packages/server/src/cli.ts admin add npub1…`.
 
@@ -137,12 +138,13 @@ Configuration is merged in this order, where later sources win:
 Relative paths, whether from the config file, `BEAMHOP_*` variables or CLI flags, are resolved against the config file's directory, or the working directory when no config file is used.
 See [`beamhop.config.example.json`](beamhop.config.example.json) for an example.
 
-Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Blossom size/quota/MIME settings and similar are **runtime settings**: you edit them live in the admin panel (Settings) and they are stored in the database. Blossom upload abuse limits (`blossom.limits.*`) are boot-time config; see below.
+Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Blossom size/quota/MIME settings and similar are **runtime settings**: you edit them live in the admin panel (Settings) and they are stored in the database. Blossom upload abuse limits (`blossom.limits.*`) are boot-time config; see below. Unknown keys in the config file and unknown `BEAMHOP_*` variables are reported as warnings at boot (usually a typo).
 
 | Env var | JSON path | Default |
 | --- | --- | --- |
 | `BEAMHOP_PORT` / `PORT` | `server.port` | `3334` |
 | `BEAMHOP_HOST` | `server.host` | `0.0.0.0` |
+| `BEAMHOP_SHUTDOWN_TIMEOUT_MS` | `server.shutdownTimeoutMs` | `10000`. Total budget for graceful shutdown (drain, close connections, stop services, close the database) before the process exits anyway |
 | `BEAMHOP_PUBLIC_URL` | `server.publicUrl` | `http://localhost:<port>`. Set it to the address users reach: NIP-42 relay tags, NIP-98 / passkey logins and Blossom descriptor URLs are checked against or built from it |
 | `BEAMHOP_TRUST_PROXY` | `server.trustProxy` | `false`. Enable only behind exactly one reverse proxy — and do enable it there: otherwise every client shares the proxy's address, so per-IP limits (connections, rate limits, Blossom's 4 concurrent uploads per IP) apply to all users at once. The client IP is then read from `server.proxyIpHeader`; non-IP values are ignored |
 | `BEAMHOP_PROXY_IP_HEADER` | `server.proxyIpHeader` | `x-forwarded-for`: the *rightmost* entry, i.e. the hop your proxy appended (nginx `$proxy_add_x_forwarded_for`, Caddy, Traefik, HAProxy `option forwardfor`) — values the client sends itself are ignored. If your proxy instead *sets* a single-address header and passes the client's own `X-Forwarded-For` through (e.g. nginx with only `proxy_set_header X-Real-IP $remote_addr`), set this to that header (`x-real-ip`, `cf-connecting-ip`, …) or the client IP is spoofable. If a request carries no `X-Forwarded-For` at all, `X-Real-IP` is used instead |
