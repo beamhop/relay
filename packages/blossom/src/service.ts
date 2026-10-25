@@ -1,5 +1,6 @@
 import { fileTypeFromBuffer } from "file-type";
-import type { BlobRecord, BlobStatus, BlossomService, CoreDeps, Logger, UserRecord } from "@beamhop/sdk";
+import type { BlobRecord, BlobStatus, BlossomService, CoreDeps, Logger, StopContext, UserRecord } from "@beamhop/sdk";
+import { TaskTracker } from "@beamhop/sdk";
 import { CREATED_AT_SKEW, domainsFromPublicUrl, MAX_AUTH_LIFETIME } from "./auth";
 import { createBlobDriver, type BlobDriver } from "./driver";
 import { BlossomError, sha256Hex, type ReadLimits } from "./http";
@@ -134,6 +135,11 @@ export class BlossomCore {
   readonly usedDeleteTokens = new ExpiringSet(100_000);
   private usedTokenWrites = 0;
   private deletionWrites = 0;
+  /** prunes, retries and sweeps running in the background (awaited at shutdown) */
+  readonly tasks: TaskTracker;
+  private maintenance: ReturnType<typeof setInterval> | undefined;
+  /** shutting down: new uploads and mirrors get 503 */
+  private draining = false;
 
   constructor(
     readonly deps: CoreDeps,
@@ -143,6 +149,7 @@ export class BlossomCore {
   ) {
     this.repo = new BlobRepo(deps.stores.db);
     this.log = deps.logger.child("blossom");
+    this.tasks = deps.tasks ?? new TaskTracker({ logger: this.log });
     this.domains = domainsFromPublicUrl(deps.config.server.publicUrl);
     this.baseUrl = deps.config.server.publicUrl.replace(/\/+$/, "");
     this.ipLimiter = new WindowLimiter(options.uploadsPerMinutePerIp ?? 60, 60_000);
@@ -186,6 +193,7 @@ export class BlossomCore {
    * trickling bodies are cut off. Body reads don't hold an ingest slot, so slow clients can't starve others.
    */
   async withUploadBody<T>(ip: string, fn: (limits: ReadLimits) => Promise<T>): Promise<T> {
+    if (this.draining) throw new BlossomError(503, "server is shutting down, retry later");
     if (!this.uploadGate.canEnter()) throw new BlossomError(503, "server busy, retry later");
     // "unknown" = no adapter-provided address (embedded/tests): can't attribute, the byte budget still applies
     const releaseIp = ip === "unknown" ? () => {} : this.uploadsPerIp.tryAcquire(ipBucket(ip));
@@ -277,7 +285,7 @@ export class BlossomCore {
   private noteDeletions(n: number) {
     const before = this.deletionWrites;
     this.deletionWrites += n;
-    if (Math.floor(before / 1000) !== Math.floor(this.deletionWrites / 1000)) void this.pruneDeletions();
+    if (Math.floor(before / 1000) !== Math.floor(this.deletionWrites / 1000)) void this.tasks.run("blossom deletion prune", () => this.pruneDeletions());
   }
 
   /** Drops deletion records older than any upload token that could still be valid. */
@@ -667,13 +675,23 @@ export class BlossomCore {
   /** Background upkeep: sweep stale temp files once, retry queued byte deletions periodically. */
   startMaintenance(): void {
     if (this.driver.sweepTempFiles) {
-      void this.driver
+      const sweep = this.driver
         .sweepTempFiles(TEMP_FILE_MAX_AGE_MS)
         .then((n) => n && this.log.info("removed temp files left by interrupted writes", { count: n }))
         .catch((err) => this.log.warn("sweeping temp files failed", { error: String(err) }));
+      this.tasks.track("blossom temp sweep", sweep);
     }
-    const timer = setInterval(() => void this.retryPendingDeletes(), this.options.pendingDeleteRetryMs ?? 10 * 60_000);
-    (timer as { unref?: () => void }).unref?.();
+    clearInterval(this.maintenance);
+    this.maintenance = setInterval(() => void this.tasks.run("blossom pending deletes", () => this.retryPendingDeletes()), this.options.pendingDeleteRetryMs ?? 10 * 60_000);
+    (this.maintenance as { unref?: () => void }).unref?.();
+  }
+
+  /** Shutdown: refuse new uploads/mirrors, stop the upkeep timer, await background work until `ctx.deadline`. */
+  async shutdown(ctx: StopContext): Promise<void> {
+    this.draining = true;
+    clearInterval(this.maintenance);
+    this.maintenance = undefined;
+    await this.tasks.idle(ctx.signal);
   }
 
   /**
@@ -709,7 +727,7 @@ export class BlossomCore {
       if (!res) return false;
       if (token) {
         this.usedDeleteTokens.add(token.key, token.expiresAt);
-        if (++this.usedTokenWrites % 1000 === 0) void this.pruneUsedDeleteTokens();
+        if (++this.usedTokenWrites % 1000 === 0) void this.tasks.run("blossom token prune", () => this.pruneUsedDeleteTokens());
       }
       this.noteDeletions(res.records);
       if (res.purged) await this.purgeBytes(sha256, actor);
@@ -744,8 +762,8 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
   await core.repo.migrate();
   // before serving: re-uploads need the held statuses, deletes the used tokens
   await core.migrateLegacyKv();
-  void core.pruneUsedDeleteTokens();
-  void core.pruneDeletions();
+  void core.tasks.run("blossom token prune", () => core.pruneUsedDeleteTokens());
+  void core.tasks.run("blossom deletion prune", () => core.pruneDeletions());
   core.startMaintenance();
   if (!images.sharp) core.log.info("sharp not available: thumbnails disabled, using pure-js EXIF stripping");
   /** Audit entry + bus "admin.action", like the admin API's own audit helper. */
@@ -765,6 +783,8 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
     app: createApp(core),
     driver,
     sharp: images.sharp,
+    drain: (ctx) => core.shutdown(ctx),
+    stop: (ctx) => core.shutdown(ctx),
 
     async list(q) {
       const { items, total } = await core.repo.list(q);
