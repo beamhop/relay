@@ -21,6 +21,15 @@
 **/beamhop.config.json
 **/.tmp-*
 **/coverage
+# test suites and their artifacts (e2e/.tmp holds generated owner keys and session cookies) never ship; e2e keeps only
+# its package.json, which `bun install --frozen-lockfile` needs because it is a workspace
+**/test
+**/.tmp
+**/test-results
+**/playwright-report
+e2e/*
+!e2e/package.json
+docs
 **/.DS_Store
 *.tsbuildinfo
 Dockerfile

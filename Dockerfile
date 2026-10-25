@@ -3,18 +3,37 @@
 # Run:    docker run -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1... beamhop
 ARG BUN_VERSION=1.4.3
 
+# ---------------------------------------------------------------- manifests: package.json files + bun.lock only, so
+# the install layers below stay cached until a dependency actually changes (new workspaces are picked up automatically)
+FROM oven/bun:${BUN_VERSION} AS manifests
+WORKDIR /app
+COPY . .
+RUN find . -type f ! -name package.json ! -name bun.lock -delete && find . -type d -empty -delete
+
 # ---------------------------------------------------------------- build: install everything, build admin UI + plugin UIs
 FROM oven/bun:${BUN_VERSION} AS build
 WORKDIR /app
-COPY . .
+COPY --from=manifests /app ./
 RUN bun install --frozen-lockfile --ignore-scripts
+COPY . .
 RUN bun run build:ui && bun run build:plugins
 
-# ---------------------------------------------------------------- prod deps only
+# ---------------------------------------------------------------- prod deps only (admin-ui deps are all devDependencies: Vite bundles them)
 FROM oven/bun:${BUN_VERSION} AS deps
 WORKDIR /app
-COPY . .
+COPY --from=manifests /app ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
+
+# ---------------------------------------------------------------- app: the tree the runtime ships, assembled here so the
+# runtime gets it as one layer. Dev node_modules are swapped for the production ones; of the admin UI only the built
+# dist/ (and the package.json its workspace link points at) is kept. Tests, e2e and docs never enter the build context.
+FROM build AS app
+RUN rm -rf node_modules packages/*/node_modules plugins/*/node_modules e2e/node_modules \
+ && find packages/admin-ui -mindepth 1 -maxdepth 1 ! -name dist ! -name package.json -exec rm -rf {} +
+COPY --from=deps /app ./
+# code (incl. the auto-imported plugins dir) stays root-owned and read-only for the runtime user, so a file-write bug
+# can't turn into persistent code execution; only /data is writable
+RUN chmod -R go-w /app
 
 # ---------------------------------------------------------------- runtime
 FROM oven/bun:${BUN_VERSION}-slim AS runtime
@@ -29,12 +48,8 @@ ENV NODE_ENV=production \
     BEAMHOP_PLUGINS_DIR=/app/plugins \
     BEAMHOP_ADMIN_UI_DIR=/app/packages/admin-ui/dist
 WORKDIR /app
-# code (incl. the auto-imported plugins dir) stays root-owned and read-only for the runtime user, so a
-# file-write bug can't turn into persistent code execution; only /data is writable
-COPY --from=deps /app /app
-COPY --from=build /app/packages/admin-ui/dist /app/packages/admin-ui/dist
-COPY --from=build /app/plugins /app/plugins
-RUN mkdir -p /data && chown -R bun:bun /data && chmod -R go-w /app
+COPY --from=app /app /app
+RUN mkdir -p /data && chown bun:bun /data
 USER bun
 VOLUME ["/data"]
 EXPOSE 3334
