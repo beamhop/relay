@@ -37,17 +37,11 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
 
   async function toViews(events: NostrEvent[]): Promise<EventView[]> {
     if (!events.length) return [];
-    const ids = events.map((e) => e.id);
-    const [profiles, reports] = await Promise.all([
+    // report counts per event: one grouped query on the report index (reports naming the event as their target)
+    const [profiles, counts] = await Promise.all([
       ctx.profiles.getMany(events.map((e) => e.pubkey)),
-      stores.events.query([{ kinds: [1984], "#e": ids }], { maxLimit: 5000 }),
+      ctx.reports.countsForEvents(events.map((e) => e.id)),
     ]);
-    const idSet = new Set(ids);
-    const counts = new Map<string, number>();
-    for (const r of reports) {
-      const targets = new Set(r.tags.filter((t) => t[0] === "e" && idSet.has(t[1])).map((t) => t[1]));
-      for (const t of targets) counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
     return events.map((event) => ({ event, author: profiles.get(event.pubkey), reports: counts.get(event.id) ?? 0 }));
   }
 
@@ -178,6 +172,8 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       if (bypass) {
         if (!isValidSignedEvent(ev)) return err(n, "invalid: bad id or signature");
         const r = await stores.events.save(ev);
+        // stored without going through the relay, so without its "report.created": the queue indexes it here
+        if ((r.status === "saved" || r.status === "replaced") && ev.kind === 1984) await ctx.reports.index([ev]);
         if (r.status === "saved" || r.status === "replaced") result.imported++;
         else if (r.status === "duplicate" || r.status === "stale") result.duplicates++;
         else err(n, r.message ?? r.status);

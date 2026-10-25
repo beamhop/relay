@@ -20,12 +20,14 @@ export function auditLists(lists: Record<string, readonly unknown[]>): Record<st
 
 /**
  * Runs a destructive action and audits it however it ends: a failure halfway (a store error after some deletes) is
- * recorded too, with the partial counts `details()` reads at that point and the `error`. Rethrows.
+ * recorded too, with the partial counts `details()` reads at that point and the `error`. Rethrows. `changedNothing`: when
+ * it says so after a failure (a refused rank check), nothing is recorded.
  */
 export async function audited<T>(
   record: (details: Record<string, unknown>) => Promise<void>,
   details: () => Record<string, unknown>,
   run: () => Promise<T>,
+  changedNothing?: () => boolean,
 ): Promise<T> {
   let error: string | undefined;
   try {
@@ -34,6 +36,6 @@ export async function audited<T>(
     error = err instanceof Error ? err.message : String(err);
     throw err;
   } finally {
-    await record({ ...details(), ...(error !== undefined ? { error } : {}) });
+    if (error === undefined || !changedNothing?.()) await record({ ...details(), ...(error !== undefined ? { error } : {}) });
   }
 }

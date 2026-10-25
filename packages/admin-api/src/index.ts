@@ -112,6 +112,11 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>)
   bus.on("event.accepted", ({ event }) => {
     if (event.kind === 0) ctx.profiles.invalidate(event.pubkey);
   });
+  // deleted reports leave the queue: by id when the deletion names them, else (vanish, retention, bulk deletes) by a sweep
+  const forgetDeleted = (ids: string[]) =>
+    void (ids.length ? ctx.reports.forget(ids) : ctx.reports.sweep()).catch((err) => ctx.logger.warn("report index cleanup failed", { error: String(err) }));
+  bus.on("event.deleted", ({ ids }) => forgetDeleted(ids));
+  bus.on("user.deleted", () => forgetDeleted([]));
   // anyone can file reports: pushes are coalesced (one per interval, the rest as a digest) and the live view skips the
   // related-report count (GET /reports computes it), so a report flood can't flood admin devices or the database
   const reportDigest = new PushCoalescer(ctx.opts.reportPushIntervalMs ?? 60_000, (n) => {
@@ -125,9 +130,15 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>)
   bus.on("report.created", ({ event }) => {
     void (async () => {
       try {
+        await ctx.reports.index([event]);
+      } catch (err) {
+        // a later read picks it up (ReportService catch-up) as long as it isn't older than the newest indexed report
+        ctx.logger.warn("report indexing failed", { error: String(err) });
+      }
+      try {
         const push = ctx.push.enabled && reportDigest.offer();
         if (!push && !reportListeners.size) return;
-        const view = await ctx.reports.view(event, { relatedLimit: 0 });
+        const view = await ctx.reports.view(event, { related: false });
         for (const fn of reportListeners) fn(view);
         if (!push) return;
         const target = view.targetProfile?.display_name ?? view.targetProfile?.name ?? nip19.npubEncode(view.targetPubkey || event.pubkey).slice(0, 16);
@@ -164,6 +175,8 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   const reportListeners = new Set<(r: ReportView) => void>();
   const ctx = await buildContext(deps, opts, reportListeners);
   wireBus(ctx, reportListeners);
+  // one-time fill of the report index from the reports already stored (retried at the next start if it fails)
+  await ctx.reports.backfill().catch((err) => ctx.logger.error("report index backfill failed", { error: String(err) }));
   // config owners need a users row so they show up in user lists and role filters
   for (const pk of ctx.roles.owners) if (!(await deps.stores.users.get(pk))) await deps.stores.users.upsert(pk, {});
 

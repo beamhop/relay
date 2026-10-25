@@ -210,13 +210,7 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
         const reason = str(params, 1, "reason", true);
         // allowing lifts any ban on it: checked before reports are dismissed, so a refused call changes nothing
         await assertCanLiftBan(caller, id);
-        const open = await ctx.reports.open(5000);
-        let n = 0;
-        for (const { event, parsed } of open) {
-          if (parsed.targetEventId !== id) continue;
-          await ctx.reports.setStatus(event.id, "dismissed", "dismiss", caller.pubkey, reason || "allowed via NIP-86");
-          n++;
-        }
+        const n = await ctx.reports.resolveFor(id, "dismissed", "dismiss", caller.pubkey, reason || "allowed via NIP-86");
         const lifted = (await stores.db.run("DELETE FROM admin_banned_events WHERE id = ?", [id])).changes > 0;
         bannedEvents.set(id, false);
         await audit(caller, "event.allow", id, { reason, dismissedReports: n, ...(lifted ? { liftedBan: true } : {}) });
@@ -249,10 +243,7 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
           );
         }
         bannedEvents.set(id, true);
-        const open = await ctx.reports.open(5000);
-        for (const { event, parsed } of open) {
-          if (parsed.targetEventId === id) await ctx.reports.setStatus(event.id, "resolved", "delete-event", caller.pubkey, reason || undefined);
-        }
+        await ctx.reports.resolveFor(id, "resolved", "delete-event", caller.pubkey, reason || undefined);
         bus.emit("event.deleted", { ids: [id], actor: caller.pubkey, reason: reason || undefined });
         await audit(caller, "event.delete", id, { reason, deleted });
         return true;
