@@ -15,6 +15,7 @@ import { UserChip } from "@/components/user-chip";
 import { CopyButton } from "@/components/copy-button";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { useLongPress } from "@/hooks/use-long-press";
+import { usePagedItems, useSelection, useStableCallback } from "@/hooks/use-list-page";
 import { tryMutate } from "@/queries/client";
 import { InfiniteSentinel } from "@/components/infinite-sentinel";
 import { SelectionBar } from "@/components/selection-bar";
@@ -55,33 +56,23 @@ const TypeIcon = ({ type, className }: { type: string; className?: string }) => 
 function MediaPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const setSearch = (p: Partial<MediaSearch>) => navigate({ search: (prev: MediaSearch) => ({ ...prev, ...p }), replace: true });
+  const setSearch = useStableCallback((p: Partial<MediaSearch>) => navigate({ search: (prev: MediaSearch) => ({ ...prev, ...p }), replace: true }));
   const q = useMedia(search);
-  const items = React.useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
-  const total = q.data?.pages[0]?.total;
+  const { items, total } = usePagedItems(q.data);
   const stats = useMediaStats();
   const { setStatus, remove, bulk } = useMediaActions();
   const can = useCan();
   const mod = can("media.moderate");
   const mobile = useIsMobile();
   const confirm = useConfirm();
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  // drops blobs that left the list (deleted one by one, or filtered out after a status change)
+  const sel = useSelection(items, (b) => b.sha256, JSON.stringify(search));
+  const { selected } = sel;
   // tracked by hash, not index, so refetches/reordering can't swap the blob under an open lightbox
   const [open, setOpen] = React.useState<string | null>(null);
   const [blocklistOpen, setBlocklistOpen] = React.useState(false);
-  const [pkDraft, setPkDraft] = React.useState(search.pubkey ?? "");
-  React.useEffect(() => setSelected(new Set()), [search.status, search.type, search.pubkey]);
-  // drop blobs that left the list (deleted one by one, or filtered out after a status change)
-  React.useEffect(() => {
-    setSelected((s) => {
-      if (!s.size) return s;
-      const keep = new Set(items.map((b) => b.sha256));
-      const n = new Set([...s].filter((k) => keep.has(k)));
-      return n.size === s.size ? s : n;
-    });
-  }, [items]);
 
-  const doDelete = async (b: MediaItem) => {
+  const doDelete = useStableCallback(async (b: MediaItem) => {
     const r = await confirm({
       title: "Delete this blob?",
       description: `${formatBytes(b.size)} ${b.type}. The file is removed from storage.`,
@@ -91,22 +82,16 @@ function MediaPage() {
     });
     if (!r) return false;
     if (!(await tryMutate(remove, { sha256: b.sha256, block: r.options.block }))) return false;
-    toggle(b.sha256, false);
+    sel.deselect([b.sha256]);
     if (open !== null) setOpen(null);
-  };
+  });
+  const approve = useStableCallback((b: MediaItem) => tryMutate(setStatus, { sha256: b.sha256, status: "approved" }));
   const once = useInFlight();
   const doBulk = (action: "approve" | "block" | "delete") => once(() => doBulkNow(action));
   const doBulkNow = async (action: "approve" | "block" | "delete") => {
     if (action !== "approve" && !(await confirm({ title: `${action === "delete" ? "Delete" : "Block"} ${selected.size} blob(s)?`, destructive: true, confirmText: action === "delete" ? "Delete" : "Block" }))) return;
-    if (await tryMutate(bulk, { sha256s: [...selected], action })) setSelected(new Set());
+    if (await tryMutate(bulk, { sha256s: [...selected], action })) sel.clear();
   };
-  const toggle = (sha: string, on: boolean) =>
-    setSelected((s) => {
-      const n = new Set(s);
-      if (on) n.add(sha);
-      else n.delete(sha);
-      return n;
-    });
 
   return (
     <div className="space-y-4">
@@ -166,23 +151,10 @@ function MediaPage() {
             ))}
           </SelectContent>
         </Select>
-        <form
-          className="flex flex-1 gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setSearch({ pubkey: pkDraft.trim() ? (parsePubkey(pkDraft) ?? pkDraft.trim()) : undefined });
-          }}
-        >
-          <Input value={pkDraft} onChange={(e) => setPkDraft(e.target.value)} placeholder="Owner npub or hex" />
-          {search.pubkey && (
-            <Button type="button" variant="ghost" size="icon" onClick={() => { setPkDraft(""); setSearch({ pubkey: undefined }); }} aria-label="Clear owner filter">
-              <X />
-            </Button>
-          )}
-        </form>
+        <OwnerFilter value={search.pubkey} onChange={(pubkey) => setSearch({ pubkey })} />
         {mod && items.length > 0 && !mobile && (
           <label className="flex items-center gap-2 text-sm whitespace-nowrap text-muted-foreground">
-            <Checkbox checked={items.every((b) => selected.has(b.sha256))} onCheckedChange={(v) => setSelected(v === true ? new Set(items.map((b) => b.sha256)) : new Set())} />
+            <Checkbox checked={sel.allSelected} onCheckedChange={(v) => sel.setAll(v === true)} />
             Select all {total !== undefined && `(${formatNumber(items.length)}/${formatNumber(total)})`}
           </label>
         )}
@@ -201,29 +173,19 @@ function MediaPage() {
           <EmptyState icon={ImageIcon} title="No media" description="Nothing matches the current filters." />
         ) : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-            {items.map((b) => {
-              const tile = (
-                <Tile b={b} selected={selected.has(b.sha256)} selectable={mod} selecting={selected.size > 0} onSelect={(on) => toggle(b.sha256, on)} onOpen={() => setOpen(b.sha256)} />
-              );
-              return mobile && mod ? (
-                <SwipeRow
-                  key={b.sha256}
-                  className="rounded-xl"
-                  right={b.status !== "approved" ? { label: "Approve", icon: Check, className: "bg-emerald-600 text-white", onTrigger: () => setStatus.mutateAsync({ sha256: b.sha256, status: "approved" }) } : undefined}
-                  left={{ label: "Delete", icon: Trash2, className: "bg-red-600 text-white", onTrigger: () => doDelete(b) }}
-                >
-                  {tile}
-                </SwipeRow>
+            {items.map((b) =>
+              mobile && mod ? (
+                <SwipeTile key={b.sha256} b={b} selected={selected.has(b.sha256)} selecting={selected.size > 0} onSelect={sel.toggle} onOpen={setOpen} onApprove={approve} onDelete={doDelete} />
               ) : (
-                <React.Fragment key={b.sha256}>{tile}</React.Fragment>
-              );
-            })}
+                <Tile key={b.sha256} b={b} selected={selected.has(b.sha256)} selectable={mod} selecting={selected.size > 0} onSelect={sel.toggle} onOpen={setOpen} />
+              ),
+            )}
           </div>
         )}
         <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
 
-      <SelectionBar count={selected.size} busy={bulk.isPending} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={bulk.isPending} onClear={sel.clear}>
         <Button size="sm" variant="ghost" className="rounded-full" onClick={() => doBulk("approve")}>
           <Check /> Approve
         </Button>
@@ -290,14 +252,51 @@ function StatTile({ label, value, highlight, onClick }: { label: string; value?:
   );
 }
 
-function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: MediaItem; selected: boolean; selectable: boolean; selecting: boolean; onSelect: (v: boolean) => void; onOpen: () => void }) {
+/** Owner filter: keeps its own draft so typing doesn't re-render the grid; applied on Enter. */
+function OwnerFilter({ value, onChange }: { value?: string; onChange: (pubkey: string | undefined) => void }) {
+  const [draft, setDraft] = React.useState(value ?? "");
+  React.useEffect(() => setDraft(value ?? ""), [value]);
+  return (
+    <form
+      className="flex flex-1 gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onChange(draft.trim() ? (parsePubkey(draft) ?? draft.trim()) : undefined);
+      }}
+    >
+      <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Owner npub or hex" />
+      {value && (
+        <Button type="button" variant="ghost" size="icon" onClick={() => { setDraft(""); onChange(undefined); }} aria-label="Clear owner filter">
+          <X />
+        </Button>
+      )}
+    </form>
+  );
+}
+
+type TileProps = { b: MediaItem; selected: boolean; selecting: boolean; onSelect: (sha: string, on: boolean) => void; onOpen: (sha: string) => void };
+
+const SwipeTile = React.memo(function SwipeTile({ onApprove, onDelete, ...p }: TileProps & { onApprove: (b: MediaItem) => unknown; onDelete: (b: MediaItem) => unknown }) {
+  const { b } = p;
+  return (
+    <SwipeRow
+      className="rounded-xl"
+      right={b.status !== "approved" ? { label: "Approve", icon: Check, className: "bg-emerald-600 text-white", onTrigger: () => onApprove(b) } : undefined}
+      left={{ label: "Delete", icon: Trash2, className: "bg-red-600 text-white", onTrigger: () => onDelete(b) }}
+    >
+      <Tile {...p} selectable />
+    </SwipeRow>
+  );
+});
+
+const Tile = React.memo(function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: TileProps & { selectable: boolean }) {
   const k = kindOf(b.type);
   const thumb = b.hasThumbnail ? mediaUrl(b, true) : k === "image" ? mediaUrl(b) : undefined;
   // touch: long-press starts selecting (the checkbox is hidden until then)
-  const longPress = useLongPress(() => selectable && onSelect(!selected));
+  const longPress = useLongPress(() => selectable && onSelect(b.sha256, !selected));
   return (
     <div className={cn("group relative aspect-square overflow-hidden rounded-xl border bg-muted", selected && "ring-2 ring-primary")}>
-      <button className="absolute inset-0 size-full select-none [-webkit-touch-callout:none]" {...longPress} onClick={() => (selecting ? onSelect(!selected) : onOpen())} aria-label={`Open ${b.sha256.slice(0, 8)}`}>
+      <button className="absolute inset-0 size-full select-none [-webkit-touch-callout:none]" {...longPress} onClick={() => (selecting ? onSelect(b.sha256, !selected) : onOpen(b.sha256))} aria-label={`Open ${b.sha256.slice(0, 8)}`}>
         {thumb ? (
           <img src={thumb} alt="" loading="lazy" className={cn("size-full object-cover transition-transform group-hover:scale-105", b.status === "blocked" && "opacity-40 grayscale")} />
         ) : (
@@ -309,7 +308,7 @@ function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: Med
       </button>
       {selectable && (
         <div className={cn("absolute top-2 left-2 transition-opacity", selected || selecting ? "opacity-100" : "opacity-0 group-hover:opacity-100 pointer-coarse:opacity-0")}>
-          <Checkbox checked={selected} onCheckedChange={(v) => onSelect(v === true)} className="bg-background/80 shadow" aria-label="Select" />
+          <Checkbox checked={selected} onCheckedChange={(v) => onSelect(b.sha256, v === true)} className="bg-background/80 shadow" aria-label="Select" />
         </div>
       )}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent p-2 pt-6 text-[11px] text-white">
@@ -321,7 +320,7 @@ function Tile({ b, selected, selectable, selecting, onSelect, onOpen }: { b: Med
       </div>
     </div>
   );
-}
+});
 
 function Lightbox({
   items, openSha, onOpen, canModerate, onStatus, onDelete, busy,

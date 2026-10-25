@@ -2,6 +2,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { HttpError } from "@/lib/api";
 import { meQuery } from "@/queries/auth";
 import { AppShell } from "@/components/layout/app-shell";
+import { AppLoadError } from "@/components/route-error";
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: async ({ context, location }) => {
@@ -16,4 +17,6 @@ export const Route = createFileRoute("/_app")({
     }
   },
   component: AppShell,
+  // the shell itself failed: full screen, not the per-page defaultErrorComponent (there's no shell to show it in)
+  errorComponent: AppLoadError,
 });

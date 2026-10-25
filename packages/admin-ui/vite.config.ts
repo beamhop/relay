@@ -31,7 +31,8 @@ export default defineConfig({
       includeAssets: ["plugin-shims/*.js"],
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
-        globIgnores: ["**/plugin-shims/**", "**/world-map-*"],
+        // the world map (maplibre + its worker, ~1 MB) is runtime-cached by sw.ts when first used, not precached
+        globIgnores: ["**/plugin-shims/**", "**/world-map-*", "**/maplibre-gl*"],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {

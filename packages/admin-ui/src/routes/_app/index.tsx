@@ -15,7 +15,7 @@ import { PageHeader } from "@/components/page-header";
 import { UserChip } from "@/components/user-chip";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { useLiveHistory, useLiveSnapshot } from "@/lib/live";
+import { useLiveHistory } from "@/lib/live";
 import { useBoolPref, WORLD_MAP_TILE_HOST, worldMapPref } from "@/lib/prefs";
 import { useSystem } from "@/queries/auth";
 import { RANGES, useGeo, useKindStats, useRejections, useSeries, useSnapshot, useTopPubkeys, type RangeKey } from "@/queries/dashboard";
@@ -70,9 +70,7 @@ function RangeSelect({ value, onChange }: { value: RangeKey; onChange: (r: Range
 }
 
 function Kpis() {
-  const live = useLiveSnapshot();
-  const fallback = useSnapshot();
-  const s = live ?? fallback.data;
+  const { data: s } = useSnapshot();
   const hist = useLiveHistory();
   const spark = (k: keyof NonNullable<typeof s>) => (hist.length > 2 ? hist.slice(-60).map((h) => Number(h[k]) || 0) : undefined);
   const loading = !s;

@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useInFlight } from "@/hooks/use-in-flight";
+import { usePagedItems, useSelection, useStableCallback } from "@/hooks/use-list-page";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Braces, Download, FileText, Filter as FilterIcon, Plus, RotateCcw, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
-import type { Filter, ImportResult } from "@beamhop/sdk/admin-contract";
+import type { EventQueryResponse, Filter, ImportResult } from "@beamhop/sdk/admin-contract";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,7 @@ import { useConfirm } from "@/components/confirm";
 import { useDeleteEvents, useEventQuery } from "@/queries/content";
 import { useCan } from "@/queries/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { API_BASE, baseHeaders, errorMessage, rawRequest } from "@/lib/api";
+import { API_BASE, baseHeaders, errorMessage, notifyUnauthorized, rawRequest } from "@/lib/api";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { isHex64, kindName, parseEventId, parsePubkey, shortNpub } from "@/lib/nostr";
 import { parseFiltersParam, sanitizeFilter } from "@/lib/sanitize";
@@ -95,21 +96,22 @@ function ContentPage() {
   const filters = React.useMemo(() => parseFiltersParam(raw).map(({ limit: _l, ...rest }) => rest as Filter), [raw]);
   const apply = (fs: Filter[]) => navigate({ search: { f: fs.length === 1 && isEmptyFilter(fs[0]) ? undefined : JSON.stringify(fs.length === 1 ? fs[0] : fs) }, replace: false });
   const q = useEventQuery(filters, 50);
-  const items = React.useMemo(() => {
-    const seen = new Set<string>();
-    return (q.data?.pages.flat() ?? []).filter((v) => !seen.has(v.event.id) && seen.add(v.event.id));
-  }, [q.data]);
+  // useEventQuery's `select` already drops events repeated across pages
+  const { items } = usePagedItems(q.data);
   const can = useCan();
+  const canDelete = can("content.delete");
   const mobile = useIsMobile();
   const confirm = useConfirm();
   const del = useDeleteEvents();
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  // deleted events leave the list and the selection with it; another filter clears the selection
+  const sel = useSelection(items, (v) => v.event.id, raw ?? "");
+  const { selected } = sel;
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [importOpen, setImportOpen] = React.useState(false);
-  React.useEffect(() => setSelected(new Set()), [raw]);
 
   const once = useInFlight();
-  const deleteIds = (ids: string[]) => once(() => deleteIdsNow(ids));
+  const deleteIds = useStableCallback((ids: string[]) => once(() => deleteIdsNow(ids)));
+  const deleteOne = useStableCallback((id: string) => deleteIds([id]));
   const deleteIdsNow = async (ids: string[]) => {
     const r = await confirm({
       title: `Delete ${ids.length} event${ids.length > 1 ? "s" : ""}?`,
@@ -120,11 +122,7 @@ function ContentPage() {
     });
     if (!r) return false;
     if (!(await tryMutate(del, { ids, reason: r.input || undefined }))) return false;
-    setSelected((s) => {
-      const n = new Set(s);
-      ids.forEach((i) => n.delete(i));
-      return n;
-    });
+    sel.deselect(ids);
   };
   const deleteByFilter = async () => {
     if (filters.every(isEmptyFilter)) return toast.error("Refusing to delete with an empty filter");
@@ -196,10 +194,7 @@ function ContentPage() {
             <div className="ml-auto flex items-center gap-2">
               {items.length > 0 && can("content.delete") && !mobile && (
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Checkbox
-                    checked={items.every((v) => selected.has(v.event.id))}
-                    onCheckedChange={(v) => setSelected(v === true ? new Set(items.map((i) => i.event.id)) : new Set())}
-                  />
+                  <Checkbox checked={sel.allSelected} onCheckedChange={(v) => sel.setAll(v === true)} />
                   Select all
                 </label>
               )}
@@ -219,25 +214,16 @@ function ContentPage() {
               <EmptyState icon={FileText} title="No events match" description="Adjust the filter to see more results." />
             ) : (
               <div className="space-y-2">
-                {items.map((v) => {
-                  const card = (
-                    <EventCard
-                      event={v.event}
-                      author={v.author}
-                      reports={v.reports}
-                      selected={selected.has(v.event.id)}
-                      onSelect={can("content.delete") ? (on) => setSelected((s) => { const n = new Set(s); if (on) n.add(v.event.id); else n.delete(v.event.id); return n; }) : undefined}
-                      onDelete={can("content.delete") ? () => deleteIds([v.event.id]) : undefined}
-                    />
-                  );
-                  return mobile && can("content.delete") ? (
-                    <SwipeRow key={v.event.id} left={{ label: "Delete", icon: Trash2, className: "bg-red-600 text-white", onTrigger: () => deleteIds([v.event.id]) }}>
-                      {card}
-                    </SwipeRow>
-                  ) : (
-                    <React.Fragment key={v.event.id}>{card}</React.Fragment>
-                  );
-                })}
+                {items.map((v) => (
+                  <EventRow
+                    key={v.event.id}
+                    v={v}
+                    selected={selected.has(v.event.id)}
+                    swipe={mobile && canDelete}
+                    onSelect={canDelete ? sel.toggle : undefined}
+                    onDelete={canDelete ? deleteOne : undefined}
+                  />
+                ))}
               </div>
             )}
             <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
@@ -248,7 +234,7 @@ function ContentPage() {
       <ResponsiveDialog open={mobile && filtersOpen} onOpenChange={setFiltersOpen} title="Filter events">
         <div className="pb-6">{builder}</div>
       </ResponsiveDialog>
-      <SelectionBar count={selected.size} busy={del.isPending} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={del.isPending} onClear={sel.clear}>
         <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => deleteIds([...selected])}>
           <Trash2 /> Delete
         </Button>
@@ -257,6 +243,22 @@ function ContentPage() {
     </div>
   );
 }
+
+/** One result; memoised with id-taking callbacks so loading another page or selecting doesn't re-render every card. */
+const EventRow = React.memo(function EventRow({ v, selected, swipe, onSelect, onDelete }: { v: EventQueryResponse["items"][number]; selected: boolean; swipe: boolean; onSelect?: (id: string, on: boolean) => void; onDelete?: (id: string) => void }) {
+  const id = v.event.id;
+  const card = (
+    <EventCard
+      event={v.event}
+      author={v.author}
+      reports={v.reports}
+      selected={selected}
+      onSelect={onSelect && ((on) => onSelect(id, on))}
+      onDelete={onDelete && (() => onDelete(id))}
+    />
+  );
+  return swipe && onDelete ? <SwipeRow left={{ label: "Delete", icon: Trash2, className: "bg-red-600 text-white", onTrigger: () => onDelete(id) }}>{card}</SwipeRow> : card;
+});
 
 function ActiveFilterChips({ filters, onClear }: { filters: Filter[]; onClear: () => void }) {
   if (filters.every(isEmptyFilter)) return <span className="text-sm text-muted-foreground">All events, newest first</span>;
@@ -491,6 +493,8 @@ function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
       } else {
         setErr((body as { error?: string })?.error ?? `Import failed (HTTP ${xhr.status})`);
         setProgress(null);
+        // rawRequest isn't used here (upload progress needs XHR): report an expired session the same way
+        if (xhr.status === 401) notifyUnauthorized();
       }
     };
     xhr.onerror = () => {
