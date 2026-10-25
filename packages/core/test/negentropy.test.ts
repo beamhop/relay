@@ -122,3 +122,41 @@ describe("negentropy interop with nostr-tools reference port", async () => {
     expect(need.sort()).toEqual(v.map((x) => x.id).sort());
   });
 });
+
+describe("NegentropyStorage sealing", () => {
+  const dump = (s: NegentropyStorage) => {
+    const out: string[] = [];
+    s.iterate(0, s.size(), (it) => void out.push(`${it.timestamp}:${Buffer.from(it.id).toString("hex")}`));
+    return { items: out, fp: Buffer.from(s.fingerprint(0, s.size())).toString("hex") };
+  };
+  const items: Item[] = Array.from({ length: 2000 }, (_, i) => ({ ts: 1000 + Math.floor(i / 4), id: randomHex(32) }));
+  const sorted = [...items].sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+
+  test("input already in order (no sort) seals like shuffled input, merging duplicates and leaving out excluded items", () => {
+    const withDupes = [...sorted.slice(0, 10), sorted[9], ...sorted.slice(10)];
+    const exclude = [sorted[5], sorted[1500]].map((it) => ({ id: it.id, created_at: it.ts }));
+    const a = new NegentropyStorage();
+    for (const it of withDupes) a.insert(it.ts, it.id);
+    a.seal(exclude);
+    const b = new NegentropyStorage();
+    for (const it of [...withDupes].reverse()) b.insert(it.ts, it.id);
+    b.seal(exclude);
+    expect(a.size()).toBe(1998);
+    expect(dump(a)).toEqual(dump(b));
+    expect(dump(a)).toEqual(dump(build(sorted.filter((_, i) => i !== 5 && i !== 1500))));
+  });
+
+  test("reserve() allocates a page's room exactly", () => {
+    const s = new NegentropyStorage();
+    s.reserve(1000);
+    expect(s.capacity).toBe(1000);
+    for (const it of sorted.slice(0, 1000)) s.insert(it.ts, it.id);
+    s.reserve(10);
+    expect(s.capacity).toBe(1010);
+    s.reserve(5); // fits already
+    expect(s.capacity).toBe(1010);
+    for (const it of sorted.slice(1000, 1010)) s.insert(it.ts, it.id);
+    s.seal();
+    expect(dump(s)).toEqual(dump(build(sorted.slice(0, 1010))));
+  });
+});

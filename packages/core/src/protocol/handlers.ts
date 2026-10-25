@@ -962,7 +962,7 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
   const syncFilters = hq.filters.map(({ limit: _limit, ...f }) => f);
   if (syncFilters.some((f) => f.search !== undefined)) return negErr("unsupported: search filters cannot be used for sync");
   // Ids are listed page by page straight into the session's typed arrays (no object per id is kept), and count
-  // against the relay-wide item budget while they are listed, so syncs being prepared can't exhaust memory either.
+  // against the relay-wide item budget (by allocated slots) while they are listed, so syncs being prepared can't exhaust memory either.
   const storage = new NegentropyStorage();
   let listed = 0;
   try {
@@ -1016,8 +1016,8 @@ async function openNegSession(ctx: RelayContext, conn: Connection, subId: string
 }
 
 /**
- * Lists the (created_at, id) pairs matching `f` into `storage`, NEG_ID_PAGE at a time (oldest first), charging
- * each page with `charge`. Returns a NEG-ERR reason when the sync is refused.
+ * Lists the (created_at, id) pairs matching `f` into `storage`, NEG_ID_PAGE at a time (oldest first), charging the
+ * slots allocated for each page with `charge`. Returns a NEG-ERR reason when the sync is refused.
  */
 async function listSyncIds(ctx: RelayContext, f: Filter, storage: NegentropyStorage, charge: (n: number) => void): Promise<string | undefined> {
   let since = f.since;
@@ -1025,13 +1025,13 @@ async function listSyncIds(ctx: RelayContext, f: Filter, storage: NegentropyStor
   let boundary = new Set<string>();
   for (;;) {
     const rows = await ctx.stores.events.queryIdsForSync({ ...f, ...(since !== undefined ? { since } : {}), limit: NEG_ID_PAGE });
-    let added = 0;
-    for (const r of rows) {
-      if (since !== undefined && (r.created_at < since || (r.created_at === since && boundary.has(r.id)))) continue;
-      storage.insert(r.created_at, r.id);
-      added++;
-    }
-    charge(added);
+    // the page's room is allocated at once (no doubling), and what is allocated is what's charged
+    const fresh = since === undefined ? rows : rows.filter((r) => r.created_at > since! || (r.created_at === since && !boundary.has(r.id)));
+    const allocated = storage.capacity;
+    storage.reserve(fresh.length);
+    for (const r of fresh) storage.insert(r.created_at, r.id);
+    const added = fresh.length;
+    charge(storage.capacity - allocated);
     // counted before the filters of a union are merged
     if (storage.inserted > MAX_NEG_ITEMS) return "blocked: too many results";
     if (ctx.neg.items > NEG_GLOBAL_ITEM_BUDGET) sweepNegSessions(ctx);
