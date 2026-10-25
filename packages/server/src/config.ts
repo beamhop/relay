@@ -21,6 +21,8 @@ export interface LoadedConfig {
   extras: ServerExtras;
   /** absolute path of the config file that was read, if any */
   configPath?: string;
+  /** unknown config file keys / BEAMHOP_* variables (already passed to `warn`) */
+  warnings: string[];
 }
 
 export interface LoadConfigOptions {
@@ -30,6 +32,8 @@ export interface LoadConfigOptions {
   cwd?: string;
   /** highest-precedence overrides (CLI flags), deep-merged */
   overrides?: Json;
+  /** where boot-time warnings go (default: stderr) */
+  warn?: (message: string) => void;
 }
 
 /** Accepts npub or 64-char hex; returns lowercase hex. Throws on invalid input. */
@@ -178,6 +182,50 @@ const ENV: EnvSpec[] = [
   ["BEAMHOP_LOG_LEVEL", "logLevel", (v) => v.toLowerCase()],
 ];
 
+/** BEAMHOP_* variables read outside the ENV table (or deliberately ignored), so they don't trip the unknown-variable warning. */
+const OTHER_ENV = new Set([
+  "BEAMHOP_CONFIG",
+  "BEAMHOP_PLUGINS_ENABLED",
+  "BEAMHOP_METRICS_TOKEN",
+  "BEAMHOP_PROMETHEUS",
+  "BEAMHOP_SESSION_SECRET", // deprecated, ignored
+  "BEAMHOP_MEMORY_LIMIT", // @beamhop/metrics
+  "BEAMHOP_UI_DIST", // build scripts
+  "BEAMHOP_BINARY_OUT",
+  "BEAMHOP_BINARY_TARGET",
+  "BEAMHOP_TEST_PG", // test suites
+]);
+const KNOWN_ENV = new Set([...ENV.map(([name]) => name), ...OTHER_ENV]);
+
+/** Config file keys read outside ConfigSchema (they become ServerExtras). */
+const FILE_EXTRAS = new Set(["server.metricsToken", "server.prometheus", "plugins.enabled"]);
+
+type SchemaNode = { _zod: { def: { type: string; innerType?: SchemaNode; shape?: Record<string, SchemaNode> } } };
+
+/**
+ * Dotted paths in `json` that the schema doesn't know (zod silently strips them, so a typo like `blosom` or
+ * `server.trustProxies` would otherwise just fall back to the default). Records and arrays are not descended into.
+ */
+export function unknownKeys(json: Json, schema: SchemaNode = ConfigSchema as unknown as SchemaNode, prefix = ""): string[] {
+  let def = schema._zod.def;
+  while (def.innerType) def = def.innerType._zod.def; // optional / default / prefault / nullable wrappers
+  if (def.type !== "object" || !def.shape) return [];
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(json)) {
+    const path = prefix + k;
+    const child = def.shape[k];
+    if (!child) {
+      if (!FILE_EXTRAS.has(path)) out.push(path);
+    } else if (isObj(v)) out.push(...unknownKeys(v, child, `${path}.`));
+  }
+  return out;
+}
+
+/** BEAMHOP_* variables beamhop doesn't read (blank ones included: compose often sets the whole list). */
+export function unknownEnv(env: Record<string, string | undefined>): string[] {
+  return Object.keys(env).filter((k) => k.startsWith("BEAMHOP_") && !KNOWN_ENV.has(k));
+}
+
 export function envToConfig(env: Record<string, string | undefined>): Json {
   const out: Json = {};
   for (const [name, path, parse] of ENV) {
@@ -205,6 +253,8 @@ export function findConfigFile(opts: { configPath?: string; env?: Record<string,
 /** defaults ← beamhop.config.json ← env (BEAMHOP_*) ← overrides (CLI flags) */
 export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   const env = opts.env ?? process.env;
+  const warn = opts.warn ?? ((m: string) => console.error(`beamhop: warning: ${m}`));
+  const warnings: string[] = [];
   const configPath = findConfigFile({ configPath: opts.configPath, env, cwd: opts.cwd });
   let fileJson: Json = {};
   if (configPath) {
@@ -215,7 +265,11 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     }
     if (!isObj(fileJson)) throw new Error(`${configPath} must contain a JSON object`);
     delete fileJson.$schema;
+    // warn, don't fail: an old or hand-edited file should still boot
+    for (const k of unknownKeys(fileJson)) warnings.push(`unknown key "${k}" in ${configPath} (ignored)`);
   }
+  for (const k of unknownEnv(env)) warnings.push(`unknown environment variable ${k} (ignored)`);
+  for (const w of warnings) warn(w);
   // owners in the file may be npubs
   const fileOwners = (fileJson.admin as Json | undefined)?.owners;
   if (Array.isArray(fileOwners)) (fileJson.admin as Json).owners = fileOwners.map((o) => toHexPubkey(String(o)));
@@ -266,5 +320,5 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     extras.metricsToken = undefined;
     extras.prometheus = false;
   }
-  return { config, extras, configPath };
+  return { config, extras, configPath, warnings };
 }
