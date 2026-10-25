@@ -9,6 +9,7 @@ import type {
   SaveResult,
 } from "@beamhop/sdk";
 import { getDTag, isAddressable, isEphemeral, isReplaceable, nowSec, yieldToEventLoop } from "@beamhop/sdk";
+import { parseSearch } from "@beamhop/sdk/search";
 import { chunk, escapeLike, greatest, inList, insertRows, isUniqueViolation, parseJson, toNum } from "./sql";
 
 /** Tag values longer than this many UTF-8 bytes are not indexed (and thus not matchable by `#x` filters). */
@@ -86,30 +87,11 @@ const rowToEvent = (r: EventRow): NostrEvent => ({
   sig: r.sig,
 });
 
+/** Re-exported for callers that import it from the store (one tokenizer: see @beamhop/sdk/search). */
+export { parseSearch };
+
 export const compareEvents = (a: NostrEvent, b: NostrEvent) =>
   b.created_at - a.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-
-const EXTENSION_TOKEN = /^[a-zA-Z_-]+:[^/\s]/;
-const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
-
-/**
- * Splits a NIP-50 search string into plain terms / quoted phrases, dropping `key:value`
- * extensions (domain:, language:, include:spam, …) and tokens without any word characters.
- */
-export function parseSearch(search: string): { terms: string[]; phrases: boolean[] } {
-  const terms: string[] = [];
-  const phrases: boolean[] = [];
-  // NUL: postgres can't bind it, and stored content never contains it
-  for (const tok of search.replace(/\u0000/g, "").match(/"[^"]*"|\S+/g) ?? []) {
-    const quoted = tok.length >= 2 && tok.startsWith('"') && tok.endsWith('"');
-    if (!quoted && EXTENSION_TOKEN.test(tok)) continue;
-    const text = (quoted ? tok.slice(1, -1) : tok).replace(/"/g, " ").trim();
-    if (!text || !HAS_WORD_CHAR.test(text)) continue;
-    terms.push(text);
-    phrases.push(quoted);
-  }
-  return { terms, phrases };
-}
 
 /**
  * Shorter last terms are matched as whole tokens: a 1-2 letter prefix expands to most of the index (and
