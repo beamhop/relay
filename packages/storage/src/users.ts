@@ -1,5 +1,6 @@
 import type { AdminRole, Db, Logger, UserQuery, UserRecord, UserStatus, UserStore } from "@beamhop/sdk";
-import { escapeLike, greatest, insertRows, parseJson, toBool, toNum, toNumOrNull } from "./sql";
+import { upsertRows } from "@beamhop/sdk";
+import { escapeLike, greatest, parseJson, toBool, toNum, toNumOrNull } from "./sql";
 
 interface UserRow {
   pubkey: string;
@@ -315,20 +316,18 @@ export class SqlUserStore implements UserStore {
   }
 
   private async writeTouches(batch: Map<string, Touch>): Promise<void> {
-    // sorted by key: concurrent upserts (several instances on one postgres) then lock rows in the same order
-    const rows = [...batch].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([pk, t]) => [pk, t.first, t.last, t.count]);
+    const rows = [...batch].map(([pk, t]) => [pk, t.first, t.last, t.count]);
     const d = this.db.dialect;
     await this.db.tx((tx) =>
-      insertRows(
+      upsertRows(
         tx,
-        "INSERT INTO users (pubkey, first_seen_at, last_seen_at, event_count)",
-        4,
-        rows,
-        `ON CONFLICT (pubkey) DO UPDATE SET
-          last_seen_at = ${greatest(d, "users.last_seen_at", "excluded.last_seen_at")},
+        "users",
+        ["pubkey", "first_seen_at", "last_seen_at", "event_count"],
+        ["pubkey"],
+        `last_seen_at = ${greatest(d, "users.last_seen_at", "excluded.last_seen_at")},
           event_count = users.event_count + excluded.event_count,
           first_seen_at = CASE WHEN users.first_seen_at = 0 THEN excluded.first_seen_at ELSE users.first_seen_at END`,
-        200,
+        rows,
       ),
     );
   }

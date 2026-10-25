@@ -1,4 +1,5 @@
 import type { Db, GeoPoint, TimeRange } from "@beamhop/sdk";
+import { upsertRows } from "@beamhop/sdk";
 import type { GeoInfo } from "./geo";
 
 const MINUTE = 60;
@@ -132,7 +133,6 @@ export const DEFAULT_MAX_REJECTION_REASONS = 500;
 const UNCAPPED: HourCaps = { maxPubkeys: Number.MAX_SAFE_INTEGER, maxRejectionReasons: Number.MAX_SAFE_INTEGER };
 
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
-const CHUNK = 200;
 
 /**
  * A batch the database rejects for its content (e.g. a value postgres can't store) would fail forever;
@@ -147,32 +147,6 @@ function isPermanentDbError(err: unknown): boolean {
 /** Even retryable failures stop being re-queued after this many consecutive attempts. */
 const MAX_FLUSH_ATTEMPTS = 10;
 
-/** Orders rows by their key columns so concurrent upserts (several instances) lock rows in the same order. */
-function sortByKeys(cols: string[], keys: string[], rows: unknown[][]): unknown[][] {
-  const idx = keys.map((k) => cols.indexOf(k));
-  return [...rows].sort((a, b) => {
-    for (const i of idx) {
-      const x = a[i] as string | number;
-      const y = b[i] as string | number;
-      if (x < y) return -1;
-      if (x > y) return 1;
-    }
-    return 0;
-  });
-}
-
-/** multi-row upsert in chunks (keys must be unique per call) */
-async function upsert(db: Db, table: string, cols: string[], keys: string[], update: string, rows: unknown[][]) {
-  rows = sortByKeys(cols, keys, rows);
-  const one = `(${cols.map(() => "?").join(", ")})`;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK);
-    const sql =
-      `INSERT INTO ${table} (${cols.join(", ")}) VALUES ${chunk.map(() => one).join(", ")} ` +
-      `ON CONFLICT (${keys.join(", ")}) DO UPDATE SET ${update}`;
-    await db.run(sql, chunk.flat());
-  }
-}
 
 /**
  * In-memory minute/hour accumulators + persistence and query helpers.
@@ -274,18 +248,18 @@ export class Rollup {
     try {
       await this.db.tx(async (db) => {
         const S = ["name", "bucket", "value"];
-        await upsert(db, "metrics_series", S, ["name", "bucket"], "value = metrics_series.value + excluded.value", counters);
-        await upsert(db, "metrics_series", S, ["name", "bucket"], "value = excluded.value", gauges);
-        await upsert(db, "metrics_kinds", ["bucket", "kind", "count"], ["bucket", "kind"], "count = metrics_kinds.count + excluded.count", kinds);
-        await upsert(
+        await upsertRows(db, "metrics_series", S, ["name", "bucket"], "value = metrics_series.value + excluded.value", counters);
+        await upsertRows(db, "metrics_series", S, ["name", "bucket"], "value = excluded.value", gauges);
+        await upsertRows(db, "metrics_kinds", ["bucket", "kind", "count"], ["bucket", "kind"], "count = metrics_kinds.count + excluded.count", kinds);
+        await upsertRows(
           db, "metrics_pubkeys", ["bucket", "pubkey", "events", "rejected"], ["bucket", "pubkey"],
           "events = metrics_pubkeys.events + excluded.events, rejected = metrics_pubkeys.rejected + excluded.rejected", pubkeys,
         );
-        await upsert(
+        await upsertRows(
           db, "metrics_rejections", ["bucket", "code", "reason", "count"], ["bucket", "code", "reason"],
           "count = metrics_rejections.count + excluded.count", rejections,
         );
-        await upsert(
+        await upsertRows(
           db, "metrics_geo", ["bucket", "country", "country_name", "city", "lat", "lon", "connections", "events"], ["bucket", "country", "city"],
           "connections = metrics_geo.connections + excluded.connections, events = metrics_geo.events + excluded.events", geo,
         );
