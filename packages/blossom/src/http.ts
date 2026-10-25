@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
+import { normalizeIp } from "@beamhop/sdk/net";
 
 export class BlossomError extends Error {
   constructor(readonly status: number, readonly reason: string) {
@@ -176,15 +177,6 @@ export function parseRange(header: string | null | undefined, size: number): { s
   }
   if (start >= size) return "unsatisfiable";
   return { start, end };
-}
-
-/** Strips brackets, an IPv4 port and the IPv4-mapped IPv6 prefix (same rules as the server adapters). */
-function normalizeIp(ip: string): string {
-  let s = ip.trim();
-  if (s.startsWith("[")) s = s.slice(1, s.indexOf("]"));
-  else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(s)) s = s.slice(0, s.lastIndexOf(":"));
-  if (s.toLowerCase().startsWith("::ffff:") && s.includes(".")) s = s.slice(7);
-  return s || "unknown";
 }
 
 /**

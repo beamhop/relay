@@ -11,6 +11,7 @@
     "./ui-contract": "./src/ui-contract.ts",
     "./config": "./src/config.ts",
     "./media-policy": "./src/media-policy.ts",
+    "./net": "./src/net.ts",
     "./regex-safety": "./src/regex-safety.ts",
     "./search": "./src/search.ts",
     "./secrets": "./src/secrets.ts"

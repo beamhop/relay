@@ -12,6 +12,7 @@
  * Raw IPs are never persisted — only the resolved country/city/coordinates are aggregated.
  */
 import type { Logger } from "@beamhop/sdk";
+import { isPrivateAddress } from "@beamhop/sdk/net";
 import { LruCache } from "./lru";
 
 export interface GeoInfo {
@@ -90,28 +91,8 @@ const stripMapped = (ip: string) => {
   return s.startsWith("::ffff:") && s.includes(".") ? s.slice(7) : s;
 };
 
-/** True for loopback, private, link-local, CGNAT, unspecified, ULA and non-IP strings. */
-export function isPrivateIp(raw: string): boolean {
-  const ip = stripMapped(raw);
-  if (ip.includes(".") && !ip.includes(":")) {
-    const p = ip.split(".");
-    if (p.length !== 4) return true;
-    const a = Number(p[0]);
-    const b = Number(p[1]);
-    if (p.some((x) => x === "" || !(Number(x) >= 0 && Number(x) <= 255))) return true;
-    return (
-      a === 0 || a === 10 || a === 127 || a >= 224 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127)
-    );
-  }
-  if (ip.includes(":")) {
-    if (ip === "::" || ip === "::1") return true;
-    const first = parseInt(ip.split(":")[0] || "0", 16);
-    if (Number.isNaN(first)) return true;
-    return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00;
-  }
-  return true;
-}
+/**
+ * True for addresses GeoIP has nothing to say about: every non-public range (see @beamhop/sdk/net — including
+ * documentation, benchmarking and IPv4-embedding IPv6 forms) and non-IP strings.
+ */
+export const isPrivateIp = (raw: string): boolean => isPrivateAddress(raw.trim());
