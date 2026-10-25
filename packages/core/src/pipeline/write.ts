@@ -224,7 +224,10 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
       message: `${report} matched event ${event.id} (kind ${event.kind}) by ${event.pubkey}`,
     });
     // off the OK path, like the NIP-56 auto-ban check
-    if (status !== "ephemeral") void fileRelayReport(ctx, event, report).catch((err) => ctx.logger.warn("filing word-filter report failed", { err: String(err) }));
+    if (status !== "ephemeral") {
+      const filing = fileRelayReport(ctx, event, report).catch((err) => ctx.logger.warn("filing word-filter report failed", { err: String(err) }));
+      ctx.tasks?.track("word-filter report", filing);
+    }
   }
   return { ok: true, message: "", status };
 }

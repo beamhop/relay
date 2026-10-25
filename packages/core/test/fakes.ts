@@ -1,5 +1,6 @@
 import {
   type AuditLog,
+  type TaskTracker,
   type BeamhopConfig,
   ConfigSchema,
   type CoreDeps,
@@ -324,13 +325,13 @@ export const PUBLIC_URL = "https://relay.example.com";
 /** Relay key for tests (the server normally generates and persists one; core requires it in config). */
 export const RELAY_SECRET_KEY = "7f".repeat(32);
 
-export async function setup(opts: { settings?: DeepPartial<RuntimeSettings>; config?: Record<string, unknown> } = {}) {
+export async function setup(opts: { settings?: DeepPartial<RuntimeSettings>; config?: Record<string, unknown>; tasks?: TaskTracker } = {}) {
   const config: BeamhopConfig = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL }, relaySecretKey: RELAY_SECRET_KEY, ...(opts.config ?? {}) });
   const stores = await createFakeStores();
   const settings = new FakeSettings(opts.settings);
   const bus = new EventBus();
   const hooks = new HookRegistry();
-  const deps: CoreDeps = { config, stores, settings, hooks, bus, logger: silentLogger };
+  const deps: CoreDeps = { config, stores, settings, hooks, bus, logger: silentLogger, tasks: opts.tasks };
   const relay = await createRelay(deps);
 
   /** Opens a client connection; returns helpers. */

@@ -58,6 +58,8 @@ export class Connection implements ConnectionInfo {
   queue: Promise<unknown> = Promise.resolve();
   /** EVENTs received but not yet answered with OK */
   inflightEvents = 0;
+  /** the same EVENTs by id, so a shutdown can answer them before the socket closes (see answerPending) */
+  readonly awaitingOk = new Set<{ id: string; answered: boolean }>();
   /** sum of the weights of open subscriptions */
   filterWeight = 0;
   /** NEG-OPENs being prepared (not yet in negSessions) */
@@ -145,6 +147,15 @@ export class Connection implements ConnectionInfo {
 
   ok(id: string, accepted: boolean, message: string) {
     this.send(["OK", id, accepted, message]);
+  }
+
+  /** OK false for every EVENT still awaiting its OK (their processing may still finish, but can't answer any more). */
+  answerPending(message: string) {
+    for (const p of this.awaitingOk) {
+      if (p.answered) continue;
+      p.answered = true;
+      this.ok(p.id, false, message);
+    }
   }
 
   closedSub(subId: string, message: string) {

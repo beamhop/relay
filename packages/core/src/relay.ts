@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import type { ConnectionHandle, ConnectionMeta, CoreDeps, CreateRelay, NostrEvent, RelayEngine, RelaySocket } from "@beamhop/sdk";
-import { nowSec } from "@beamhop/sdk";
+import type { ConnectionHandle, ConnectionMeta, CoreDeps, CreateRelay, NostrEvent, RelayEngine, RelaySocket, StopContext } from "@beamhop/sdk";
+import { nowSec, settleBy, TaskTracker } from "@beamhop/sdk";
+import { SHUTTING_DOWN } from "./constants";
 import type { RelayContext } from "./context";
 import { createHttp } from "./http/app";
 import { buildNip11 } from "./http/nip11";
@@ -73,6 +74,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
 
   const ctx: RelayContext = {
     ...deps,
+    tasks: deps.tasks ?? new TaskTracker({ logger }),
     logger,
     relayUrl: toWsUrl(deps.config.server.publicUrl),
     key,
@@ -129,6 +131,8 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   };
   const scheduler = new Scheduler(logger);
   let stopped = false;
+  /** shutting down: no new connections or messages; EVENTs already queued are still processed and answered */
+  let draining = false;
 
   function cleanup(conn: Connection, handledClose: { done: boolean }) {
     if (handledClose.done) return;
@@ -183,9 +187,22 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     return true;
   }
 
+  /**
+   * Shutting down: new work is answered (OK false / CLOSED / NEG-ERR, unparsed) instead of started. Closing
+   * subscriptions still goes through (returns false: handle it as usual).
+   */
+  function refuseWhileDraining(conn: Connection, data: string): boolean {
+    const type = peekType(data);
+    if ((type === "CLOSE" || type === "NEG-CLOSE") && data.length <= MAX_EXEMPT_CLOSE_CHARS) return false;
+    const peeked = peekMessage(data);
+    if (peeked.subId || peeked.eventId) refuse(conn, { ...peeked, reason: SHUTTING_DOWN });
+    return true;
+  }
+
   function onMessage(conn: Connection, data: string) {
     if (conn.closed) return;
     conn.messagesIn++;
+    if (draining && refuseWhileDraining(conn, data)) return;
     const L = ctx.s().limits;
     // The rate token is taken before the message is parsed (or even measured), from its type read off the
     // head: a flood is refused at the cost of a peek. Closing things is always allowed (it frees
@@ -270,7 +287,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       conn.close(1008, reason);
       return noopHandle(id);
     };
-    if (stopped) return reject("error: relay is shutting down", "shutting down");
+    if (stopped || draining) return reject(SHUTTING_DOWN, "shutting down");
     if (verdict.blocked) return reject(`blocked: ${verdict.reason ?? "your IP address is blocked"}`, "blocked");
     const keys = countKeys(conn);
     if (!verdict.allowed) {
@@ -333,11 +350,11 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   }
 
   let lastRetention = 0;
-  async function retentionTick() {
+  async function retentionTick(signal: AbortSignal) {
     const intervalMs = Math.max(1, ctx.s().retention.intervalMinutes) * 60_000;
     if (Date.now() - lastRetention < intervalMs) return;
     lastRetention = Date.now();
-    await runRetention(ctx);
+    await runRetention(ctx, signal);
   }
 
   const engine: RelayEngine = {
@@ -361,6 +378,9 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     },
     async start() {
       stopped = false;
+      draining = false;
+      ctx.refuseQueuedEvents = false;
+      scheduler.resume();
       scheduler.every("ip-rules", IP_RULES_REFRESH_MS, refreshIpRules);
       offIpRules?.();
       offIpRules = deps.bus.on("ip.rules.changed", () => void scheduler.runNow("ip-rules", refreshIpRules));
@@ -370,13 +390,36 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       scheduler.every("neg-sweep", NEG_SWEEP_MS, () => sweepNegSessions(ctx));
       void scheduler.runNow("expiration", purgeExpired);
     },
-    async stop() {
-      stopped = true;
+    async drain(sc: StopContext) {
+      draining = true;
       offIpRules?.();
       offIpRules = undefined;
-      scheduler.stopAll();
+      // past the deadline, EVENTs still waiting in a connection's queue are answered at once instead of processed
+      const onDeadline = () => (ctx.refuseQueuedEvents = true);
+      if (sc.signal.aborted) onDeadline();
+      else sc.signal.addEventListener("abort", onDeadline, { once: true });
+      try {
+        await Promise.all([
+          scheduler.drain(sc.signal),
+          settleBy(sc.signal, Promise.all([...conns.values()].map((c) => c.queue))),
+          ctx.tasks!.idle(sc.signal),
+        ]);
+      } finally {
+        sc.signal.removeEventListener("abort", onDeadline);
+      }
+    },
+    async stop() {
+      stopped = true;
+      draining = true;
+      ctx.refuseQueuedEvents = true;
+      offIpRules?.();
+      offIpRules = undefined;
+      // drained first by the server; embedders and tests that stop right away still get their jobs told to stop
+      void scheduler.drain();
       for (const conn of [...conns.values()]) {
-        conn.notice("error: relay is shutting down");
+        // never close with EVENTs unanswered: a client can't tell whether to resend them
+        conn.answerPending(SHUTTING_DOWN);
+        conn.notice(SHUTTING_DOWN);
         conn.close(1001, "relay shutting down");
         closers.get(conn.id)?.();
       }

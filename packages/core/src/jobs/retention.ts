@@ -6,10 +6,11 @@ const BATCH = 1000;
 const MAX_SCAN = 200_000;
 const GROUP_META = [39000, 39001, 39002, 39003];
 
-/** Applies settings.retention rules. Returns number of deleted events. */
-export async function runRetention(ctx: RelayContext): Promise<number> {
+/** Applies settings.retention rules. Returns number of deleted events. `signal` (shutdown) stops it between rules. */
+export async function runRetention(ctx: RelayContext, signal?: AbortSignal): Promise<number> {
   let total = 0;
   for (const rule of ctx.s().retention.rules) {
+    if (signal?.aborted) break;
     if (!rule.enabled) continue;
     const exempt = new Set(rule.exemptPubkeys);
     // never let retention eat relay-signed NIP-29 state
