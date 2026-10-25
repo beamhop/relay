@@ -97,6 +97,9 @@ export interface BlobRow {
   hasThumbnail: boolean;
 }
 
+/** Whether a blob is out of public reach (pending review or blocked): stored and served as hidden. */
+export const isHidden = (row: Pick<BlobRow, "status">): boolean => row.status !== "approved";
+
 interface OwnedBlobRow extends BlobRow {
   /** when this owner uploaded it */
   ownedAt: number;
