@@ -11,7 +11,6 @@ export default defineConfig({
   base: "/admin/",
   resolve: {
     alias: {
-      "@beamhop/sdk-config": r("../sdk/src/config.ts"),
       "@": r("./src"),
     },
   },

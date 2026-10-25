@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
-import { parseCidr, parseIp } from "@beamhop/core";
 import { DEFAULT_TRUSTED_PROXIES } from "@beamhop/sdk";
+import { normalizeIp, parseCidr, parseIp } from "@beamhop/sdk/net";
 
 export interface RunningServer {
   runtime: "bun" | "node";
@@ -41,15 +41,7 @@ export interface ServeOptions {
   port?: number;
 }
 
-/** Strips IPv4-mapped IPv6 prefix and brackets/ports. */
-export function normalizeIp(ip: string | undefined | null): string {
-  if (!ip) return "unknown";
-  let s = ip.trim();
-  if (s.startsWith("[")) s = s.slice(1, s.indexOf("]"));
-  else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(s)) s = s.slice(0, s.lastIndexOf(":"));
-  if (s.toLowerCase().startsWith("::ffff:") && s.includes(".")) s = s.slice(7);
-  return s || "unknown";
-}
+export { normalizeIp };
 
 type HeaderGetter = (name: string) => string | null | undefined;
 

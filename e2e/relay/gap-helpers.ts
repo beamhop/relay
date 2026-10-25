@@ -7,9 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
-import { createBeamhop } from "../../packages/server/src/app";
-import { loadConfig } from "../../packages/server/src/config";
-import { serve } from "../../packages/server/src/server";
+import { createBeamhop, loadConfig, serve } from "@beamhop/server";
 import { freePort } from "../harness/relay";
 
 export interface GapRelay {

@@ -1,4 +1,5 @@
 import type { Db, Dialect } from "@beamhop/sdk";
+import { chunk } from "@beamhop/sdk/util";
 
 /** Lists larger than this are passed as a single JSON parameter instead of `?` placeholders. */
 const MAX_INLINE_PARAMS = 200;
@@ -25,11 +26,7 @@ export function inList(
   return { sql: `${column} IN (SELECT ${elem})`, params: [json] };
 }
 
-export function chunk<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
+export { chunk };
 
 /** Escapes LIKE wildcards; use together with `ESCAPE '\'`. */
 export const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);

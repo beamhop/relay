@@ -5,7 +5,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useFieldArray, useForm, useWatch, type Control, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FlaskConical, Plus, Save, Trash2, Undo2 } from "lucide-react";
-import { RuntimeSettingsSchema } from "@beamhop/sdk-config";
+import { RuntimeSettingsSchema } from "@beamhop/sdk/config";
 import type { RuntimeSettings } from "@beamhop/sdk/admin-contract";
 import { compileRegexFilter, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
 import { Button } from "@/components/ui/button";

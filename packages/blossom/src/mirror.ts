@@ -2,99 +2,17 @@ import { lookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import { isIP, type LookupFunction } from "node:net";
-import { networkInterfaces } from "node:os";
 import { Readable } from "node:stream";
+import { isForbiddenDestination } from "@beamhop/sdk/net";
 import { BlossomError } from "./http";
 
-function ipv4Private(ip: string): boolean {
-  const p = ip.split(".").map(Number);
-  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  return ipv4NumPrivate(((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]);
-}
+export { parseIpv6 } from "@beamhop/sdk/net";
 
-/** Non-public IPv4 ranges (RFC 6890 special-purpose + multicast/reserved). */
-function ipv4NumPrivate(n: number): boolean {
-  const a = n >>> 24;
-  const b = (n >>> 16) & 0xff;
-  const c = (n >>> 8) & 0xff;
-  return (
-    a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0 && (c === 0 || c === 2)) ||
-    (a === 198 && (b === 18 || b === 19)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) ||
-    a >= 224
-  );
-}
-
-/** Expands an IPv6 literal (optionally with an embedded dotted IPv4 tail) into 8 16-bit groups. */
-export function parseIpv6(input: string): number[] | undefined {
-  let v = input.toLowerCase().replace(/^\[|\]$/g, "");
-  const zone = v.indexOf("%");
-  if (zone >= 0) v = v.slice(0, zone);
-  const tail: number[] = [];
-  const dotted = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(v);
-  if (dotted) {
-    const p = dotted[2].split(".").map(Number);
-    if (p.some((n) => n > 255)) return undefined;
-    tail.push((p[0] << 8) | p[1], (p[2] << 8) | p[3]);
-    v = dotted[1].endsWith("::") ? dotted[1] : dotted[1].slice(0, -1);
-  }
-  const halves = v.split("::");
-  if (halves.length > 2) return undefined;
-  const part = (s: string) => (s === "" ? [] : s.split(":").map((h) => (/^[0-9a-f]{1,4}$/.test(h) ? parseInt(h, 16) : NaN)));
-  const head = part(halves[0]);
-  const rest = halves.length === 2 ? part(halves[1]) : [];
-  const fixed = head.length + rest.length + tail.length;
-  if ([...head, ...rest].some(Number.isNaN)) return undefined;
-  if (halves.length === 1 && fixed !== 8) return undefined;
-  if (halves.length === 2 && fixed > 7) return undefined;
-  return [...head, ...new Array(8 - fixed).fill(0), ...rest, ...tail];
-}
-
-function ipv6Private(ip: string): boolean {
-  const g = parseIpv6(ip);
-  if (!g) return true;
-  const v4 = (hi: number, lo: number) => ipv4NumPrivate(((hi << 16) >>> 0) + lo);
-  const zero = (from: number, to: number) => g.slice(from, to).every((x) => x === 0);
-  if (zero(0, 8)) return true; // ::
-  if (zero(0, 7) && g[7] === 1) return true; // ::1
-  if (zero(0, 5) && g[5] === 0xffff) return v4(g[6], g[7]); // ::ffff:a.b.c.d (IPv4-mapped)
-  if (zero(0, 4) && g[4] === 0xffff && g[5] === 0) return v4(g[6], g[7]); // ::ffff:0:a.b.c.d (SIIT)
-  if (zero(0, 6)) return v4(g[6], g[7]); // ::a.b.c.d (deprecated IPv4-compatible)
-  if (g[0] === 0x64 && g[1] === 0xff9b && zero(2, 6)) return v4(g[6], g[7]); // 64:ff9b::/96 NAT64
-  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return true; // 64:ff9b:1::/48 local-use NAT64
-  if (g[0] === 0x2002) return v4(g[1], g[2]); // 6to4 embeds an IPv4
-  if (g[0] === 0x2001 && g[1] === 0) return true; // Teredo
-  if (g[0] === 0x2001 && g[1] === 0xdb8) return true; // documentation
-  if (g[0] === 0x100 && zero(1, 4)) return true; // discard-only 100::/64
-  if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 ULA
-  if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true; // link-local, site-local
-  if ((g[0] & 0xff00) === 0xff00) return true; // multicast
-  return false;
-}
-
-let localAddrs: { at: number; set: Set<string> } | undefined;
-/** Addresses bound to this host's interfaces (incl. a public IP on a VPS): reaching them loops back over `lo`. */
-function isOwnAddress(ip: string): boolean {
-  if (!localAddrs || Date.now() - localAddrs.at > 60_000) {
-    const set = new Set<string>();
-    try {
-      for (const list of Object.values(networkInterfaces())) for (const a of list ?? []) set.add(a.address.toLowerCase().split("%")[0]);
-    } catch {
-      /* unavailable (sandbox): rely on the range checks */
-    }
-    localAddrs = { at: Date.now(), set };
-  }
-  return localAddrs.set.has(ip.toLowerCase());
-}
-
-export function isPrivateAddress(ip: string): boolean {
-  const bare = ip.replace(/^\[|\]$/g, "");
-  const addr = bare.split("%")[0];
-  const fam = isIP(addr);
-  if (fam === 0) return true;
-  if (isOwnAddress(addr)) return true;
-  return fam === 4 ? ipv4Private(bare) : ipv6Private(bare);
-}
+/**
+ * Whether the mirror (and the proxy check) treats an address as non-public: a private/special range or one of this
+ * host's own addresses (see @beamhop/sdk/net).
+ */
+export const isPrivateAddress = isForbiddenDestination;
 
 const notAllowed = () => new BlossomError(403, "mirror target not allowed");
 
