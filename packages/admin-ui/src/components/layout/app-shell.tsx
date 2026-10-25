@@ -42,7 +42,7 @@ export function AppShell() {
   }, [navigate]);
 
   React.useEffect(() => {
-    if (plugins.data) loadPluginUis(plugins.data);
+    if (plugins.data) loadPluginUis(plugins.data).catch((e) => console.error("[beamhop] plugin UIs failed to load", e));
   }, [plugins.data]);
 
   return (

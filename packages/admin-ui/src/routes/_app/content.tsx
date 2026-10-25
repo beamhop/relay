@@ -29,7 +29,7 @@ import { useConfirm } from "@/components/confirm";
 import { useDeleteEvents, useEventQuery } from "@/queries/content";
 import { useCan } from "@/queries/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { API_BASE, baseHeaders, errorMessage, rawRequest } from "@/lib/api";
+import { API_BASE, baseHeaders, errorMessage, notifyUnauthorized, rawRequest } from "@/lib/api";
 import { formatBytes, formatNumber } from "@/lib/format";
 import { isHex64, kindName, parseEventId, parsePubkey, shortNpub } from "@/lib/nostr";
 import { parseFiltersParam, sanitizeFilter } from "@/lib/sanitize";
@@ -491,6 +491,8 @@ function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
       } else {
         setErr((body as { error?: string })?.error ?? `Import failed (HTTP ${xhr.status})`);
         setProgress(null);
+        // rawRequest isn't used here (upload progress needs XHR): report an expired session the same way
+        if (xhr.status === 401) notifyUnauthorized();
       }
     };
     xhr.onerror = () => {

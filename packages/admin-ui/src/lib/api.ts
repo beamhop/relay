@@ -30,6 +30,10 @@ export function onUnauthorized(fn: UnauthorizedListener) {
   unauthorizedListeners.add(fn);
   return () => unauthorizedListeners.delete(fn);
 }
+/** For requests made outside `rawRequest` (XHR uploads, plugin fetches) that got a 401. */
+export function notifyUnauthorized() {
+  unauthorizedListeners.forEach((fn) => fn());
+}
 
 export interface RequestOptions {
   query?: QueryParams;
@@ -67,7 +71,7 @@ export async function rawRequest(method: string, path: string, opts: RequestOpti
     } catch {
       /* not json */
     }
-    if (res.status === 401 && !path.startsWith("/auth/")) unauthorizedListeners.forEach((fn) => fn());
+    if (res.status === 401 && !path.startsWith("/auth/")) notifyUnauthorized();
     throw new HttpError(res.status, msg, code);
   }
   return res;
