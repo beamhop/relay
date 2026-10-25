@@ -1,7 +1,7 @@
 import type { ConnectionHandle } from "@beamhop/sdk";
 import type { Beamhop } from "../app";
 import { isRelayUpgrade, makeEnv } from "../app";
-import { clientIp, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, closeReason, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
 
 interface WsData {
   ip: string;
@@ -42,7 +42,7 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
             send: (data) => {
               if (ws.readyState === 1) ws.send(data);
             },
-            close: (code, reason) => ws.close(code, reason),
+            close: (code, reason) => ws.close(code, closeReason(reason)),
             bufferedAmount: () => ws.getBufferedAmount(),
           },
           { ip: ws.data.ip, userAgent: ws.data.userAgent, origin: ws.data.origin },
@@ -53,10 +53,20 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
       }
     },
     message(ws, msg) {
-      ws.data.handle?.onMessage(typeof msg === "string" ? msg : decoder.decode(msg));
+      try {
+        ws.data.handle?.onMessage(typeof msg === "string" ? msg : decoder.decode(msg));
+      } catch (err) {
+        // a bug in one message's handling must not take the server down; the connection's state is unknown now
+        log.error("websocket message handler failed", { error: err });
+        ws.close(1011, "internal error");
+      }
     },
     close(ws) {
-      ws.data.handle?.onClose();
+      try {
+        ws.data.handle?.onClose();
+      } catch (err) {
+        log.error("websocket close handler failed", { error: err });
+      }
       ws.data.handle = undefined;
     },
   };

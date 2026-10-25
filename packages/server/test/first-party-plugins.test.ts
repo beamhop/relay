@@ -39,6 +39,27 @@ describe("first-party plugins", () => {
     expect((await res!.json()).greeting).toBe("Hello from beamhop!");
   });
 
+  test("hello buffers rejections instead of writing the database per rejected event", async () => {
+    await pm.updateSettings("hello", { blockedWord: "bufferme" }, "t");
+    await pm.adminRoutes.fetch(new Request("http://x/hello/stats")); // flush earlier tests' rejections
+    const sql: string[] = [];
+    const run = stores.db.run;
+    stores.db.run = async (q, p) => {
+      sql.push(q);
+      return run(q, p);
+    };
+    try {
+      for (let i = 0; i < 20; i++) expect((await hooks.runWrite(ev(`bufferme ${i}`, i.toString(16).padStart(64, "d")), { source: "ws" })).result).toBe("reject");
+      expect(sql).toEqual([]);
+      // the admin stats route flushes first: one insert per buffered rejection plus one prune, in a transaction
+      await pm.adminRoutes.fetch(new Request("http://x/hello/stats"));
+      expect(sql.filter((q) => q.startsWith("INSERT"))).toHaveLength(20);
+      expect(sql.filter((q) => q.startsWith("DELETE"))).toHaveLength(1);
+    } finally {
+      stores.db.run = run;
+    }
+  });
+
   test("spam-filter rejects copy/paste floods across pubkeys", async () => {
     const msg = "Check out this amazing giveaway, totally not a scam!!!";
     const results = [];
