@@ -493,6 +493,11 @@ export class BlossomCore {
     try {
       verdict = await this.deps.hooks.runBlobUpload({ sha256, size: data.byteLength, type: storedType, pubkey: input.pubkey, ip: input.ip }, data);
     } catch (err) {
+      // a hook that didn't answer in time fails closed, as "try again later" (duck-typed: the sdk's HookTimeoutError)
+      if ((err as Error)?.name === "HookTimeoutError") {
+        this.log.warn("blob upload hook timed out", { error: String(err) });
+        throw new BlossomError(503, "upload policy timed out");
+      }
       this.log.error("blob upload hook failed", { error: String(err) });
       throw new BlossomError(500, "error: upload policy failed");
     }

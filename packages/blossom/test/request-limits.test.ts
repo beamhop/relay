@@ -54,3 +54,18 @@ describe("client aborts", () => {
   });
 });
 
+describe("blob upload hook timeouts", () => {
+  test("a hook that timed out answers 503; other hook failures stay 500", async () => {
+    h = await createHarness({ useSharp: false });
+    let fail: Error = Object.assign(new Error("hook slow timed out after 30000 ms"), { name: "HookTimeoutError" });
+    h.deps.hooks.onBlobUpload(async () => {
+      throw fail;
+    }, "slow");
+    const put = () => h!.request("/upload", { method: "PUT", body: PNG_1x1 as BodyInit, headers: { authorization: authHeader(alice.sk, "upload", { x: [xOf(PNG_1x1)] }) } });
+    const timedOut = await put();
+    expect(timedOut.status).toBe(503);
+    expect(timedOut.headers.get("x-reason")).toBe("upload policy timed out");
+    fail = new Error("boom");
+    expect((await put()).status).toBe(500);
+  });
+});
