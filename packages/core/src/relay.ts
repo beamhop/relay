@@ -14,7 +14,7 @@ import { ContentPolicy } from "./pipeline/content-policy";
 import { MAX_VANISH_MARKERS, VANISH_KV_NAMESPACE } from "./pipeline/special-kinds";
 import { Verifier } from "./pipeline/verify";
 import { EPHEMERAL_DEDUP_SIZE, processEvent } from "./pipeline/write";
-import { Connection } from "./protocol/connection";
+import { Connection, type EventJson, serializeEvent } from "./protocol/connection";
 import {
   authReadDenied,
   cancelSub,
@@ -88,6 +88,9 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     s: () => deps.settings.get(),
     broadcast(event: NostrEvent): number {
       let n = 0;
+      // serialized once (at the first delivery) for all recipients
+      let json: EventJson | undefined;
+      const serialized = () => (json ??= serializeEvent(event));
       for (const sub of subs.match(event)) {
         if (sub.conn.closed) continue;
         // read auth can be switched on at runtime: subscriptions opened anonymously before that end here
@@ -98,7 +101,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
           continue;
         }
         if (!isVisibleTo(ctx, event, sub.conn, { conn: sub.conn, subId: sub.id, source: "ws" })) continue;
-        if (deliverLive(sub, event)) n++;
+        if (deliverLive(sub, event, serialized)) n++;
       }
       return n;
     },

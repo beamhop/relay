@@ -7,7 +7,7 @@ import { processEvent } from "../pipeline/write";
 import { isVisibleTo, onlyGatedKinds, restrictedSubFilters } from "../subscriptions/visibility";
 import { filterWeight } from "../util/filter";
 import { withPrefix } from "../util/reasons";
-import { type Connection, type NegSession, SOFT_BUFFER_LIMIT, type Subscription } from "./connection";
+import { type Connection, type EventJson, type NegSession, SOFT_BUFFER_LIMIT, type Subscription } from "./connection";
 import { eventSize, isSearchFilter, REQ_BURST, SEARCH_MAX_LIMIT, SEARCH_MS_PER_MINUTE, SEARCH_PER_MINUTE } from "./read-limits";
 import { nowSec } from "@beamhop/sdk";
 
@@ -710,14 +710,17 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
   ctx.bus.emit("req.executed", { connId: conn.id, subId, filters, results, durationMs: performance.now() - started, ip: conn.ip });
 }
 
-/** Called by fan-out for a matched subscription. Returns true if delivered (or buffered). */
-export function deliverLive(sub: Subscription, event: NostrEvent): boolean {
+/**
+ * Called by fan-out for a matched subscription. Returns true if delivered (or buffered). `serialized`
+ * gives the event's JSON, computed once for all recipients.
+ */
+export function deliverLive(sub: Subscription, event: NostrEvent, serialized?: () => EventJson): boolean {
   if (sub.pending) {
     if (sub.pending.length >= MAX_PENDING_LIVE) sub.pending.shift();
     sub.pending.push(event);
     return true;
   }
-  return sub.conn.sendLive(sub.id, event);
+  return sub.conn.sendLive(sub.id, event, serialized);
 }
 
 export function handleClose(ctx: RelayContext, conn: Connection, subId: string): void {
