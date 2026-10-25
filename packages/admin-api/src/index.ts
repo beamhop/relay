@@ -7,6 +7,7 @@ import type { AdminApiOptions, AdminEnv, ApiContext } from "./context";
 import { migrateAdmin } from "./db";
 import { createErrorHandler, errorBody, HttpError } from "./errors";
 import { authenticate, isImportRequest } from "./middleware/auth";
+import { startAuditRetention } from "./services/audit-retention";
 import { BannedEventService } from "./services/banned-events";
 import { CredentialService } from "./services/credentials";
 import { ModerationService } from "./services/moderation";
@@ -204,6 +205,7 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   // banned event ids are enforced on write so a banned event can't simply be republished — through any instance
   await ctx.bannedEvents.start(deps.hooks);
   const unwire = wireBus(ctx, reportListeners, tasks);
+  const stopAuditRetention = startAuditRetention(ctx, tasks, opts.auditPruneIntervalMs);
   // one-time fill of the report index from the reports already stored (retried at the next start if it fails)
   await ctx.reports.backfill().catch((err) => ctx.logger.error("report index backfill failed", { error: String(err) }));
   // config owners need a users row so they show up in user lists and role filters
@@ -250,6 +252,7 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   /** Live streams end (dashboards reconnect to another instance or once it is back), pushes being sent get to finish. */
   const shutdown = async (sc: StopContext) => {
     unwire();
+    stopAuditRetention();
     streams.closeAll();
     await tasks.idle(sc.signal);
   };

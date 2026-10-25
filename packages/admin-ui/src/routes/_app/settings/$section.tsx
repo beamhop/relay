@@ -386,7 +386,10 @@ function RetentionFields({ control, disabled }: { control: Control<any>; disable
   };
   return (
     <>
-      <NumberField control={control} name="intervalMinutes" label="Run every" suffix="min" min={1} className="sm:max-w-xs" />
+      <Grid>
+        <NumberField control={control} name="intervalMinutes" label="Run every" suffix="min" min={1} />
+        <NumberField control={control} name="auditLogDays" label="Keep audit log" suffix="days" min={0} description="0 = keep forever; older entries are deleted daily" />
+      </Grid>
       <SubHeading hint="Rules run periodically; deleted events cannot be recovered.">Rules</SubHeading>
       <div className="space-y-3">
         {fields.map((f, i) => (

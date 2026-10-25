@@ -51,6 +51,8 @@ export interface AdminApiOptions {
   bannedEventsTtlMs?: number;
   /** time budget (ms) of one POST /users/bulk; targets not reached by then are returned as `remaining`. Default 20000 */
   bulkBudgetMs?: number;
+  /** how often (ms) audit log retention (settings retention.auditLogDays) runs; default once a day */
+  auditPruneIntervalMs?: number;
 }
 
 export interface ApiContext {
