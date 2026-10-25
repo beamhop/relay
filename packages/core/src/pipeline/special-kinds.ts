@@ -28,11 +28,13 @@ export const NOT_STORED = "not-stored";
  * - `commit` runs only after the event was stored as new (NIP-29 state changes), so replaying a stored
  *   or deleted event changes nothing.
  * - `after` runs after commit (derived relay-signed events, notifications).
+ * - `pending`: the event is stored and relayed as usual, but answered OK false with this reason (a closed
+ *   NIP-29 group's join request awaiting approval).
  */
 export type SpecialDecision =
   | { reject: string }
   | { duplicate: string }
-  | { before?: () => Promise<typeof NOT_STORED | void>; commit?: () => Promise<void>; after?: () => Promise<void> };
+  | { before?: () => Promise<typeof NOT_STORED | void>; commit?: () => Promise<void>; after?: () => Promise<void>; pending?: string };
 
 export interface SpecialOptions {
   source: EventSource;
@@ -89,6 +91,7 @@ export async function prepareSpecial(ctx: RelayContext, event: NostrEvent, user:
     // `before` is only set when there are side effects, so the pipeline can skip its replay check otherwise
     before: own.before,
     commit: group?.commit,
+    pending: group?.pending,
     after: afters.length ? async () => { for (const f of afters) await f(); } : undefined,
   };
 }

@@ -214,6 +214,8 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   }
   const recipients = ctx.broadcast(event);
   ctx.bus.emit("event.broadcast", { event, recipients });
+  // stored and relayed, yet refused (NIP-29: a closed group's join request awaiting approval)
+  if (special.pending) return reject(special.pending);
   ctx.bus.emit("event.accepted", { event, status, connId: conn?.id, ip: conn?.ip, source });
   if (report) {
     ctx.bus.emit("alert", {

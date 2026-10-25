@@ -86,11 +86,13 @@ export interface GroupActor {
  * `commit` applies the state change; the pipeline runs it only after the event was stored as new, so
  * replays of stored or deleted events change nothing. A GroupConflict thrown by `commit` makes the
  * pipeline remove the stored event again and reject it. `after` publishes derived (relay-signed) events.
+ * `pending`: the event is stored and relayed like any other, but answered OK false with this reason (a
+ * closed group's join request, kept for its admins to act on).
  */
 export type GroupWriteDecision =
   | { reject: string }
   | { duplicate: string }
-  | { commit?: () => Promise<void>; after?: () => Promise<void> }
+  | { commit?: () => Promise<void>; after?: () => Promise<void>; pending?: string }
   | undefined;
 
 const hashCode = (code: string) => `sha256:${createHash("sha256").update(code).digest("hex")}`;
@@ -104,15 +106,41 @@ const canInvite = (roles: string[] | undefined) => !!roles?.some((r) => PERMISSI
  */
 export class GroupsService {
   private groups = new Map<string, GroupState>();
-  /** bumped on every change to groups, members or flags; unreadable() results are cached per revision */
+  /** bumped on changes that can affect unreadable(); its results are cached per revision */
   private revision = 0;
   private unreadableCache = new Lru<string, { revision: number; value: { privateIds: string[]; hiddenIds: string[] } }>(UNREADABLE_CACHE_SIZE);
+  /** tail of each group's chain of state changes (they run one at a time per group) */
+  private commits = new Map<string, Promise<unknown>>();
 
   constructor(private readonly ctx: RelayContext, private readonly repo: GroupRepo) {}
 
-  /** Invalidates cached visibility (call after any change to the group map, a member list or a flag). */
+  /**
+   * Invalidates cached visibility. unreadable() only looks at private, hidden and deleting groups and their
+   * members: call after adding or removing such a group, changing its members, or changing those flags.
+   */
   private changed(): void {
     this.revision++;
+  }
+
+  /** changed() for a member list change of `g`, if its members matter for visibility. */
+  private membersChanged(g: GroupState): void {
+    if (g.private || g.hidden || g.deleting) this.changed();
+  }
+
+  /**
+   * Runs a group's state changes one at a time. Each persists first and changes memory only once that
+   * succeeded, so the in-memory state never holds a change the database doesn't; serializing keeps both in
+   * the same order.
+   */
+  private serialize<T>(groupId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.commits.get(groupId) ?? Promise.resolve();
+    const next = prev.then(fn);
+    const tail = next.catch(() => {});
+    this.commits.set(groupId, tail);
+    void tail.then(() => {
+      if (this.commits.get(groupId) === tail) this.commits.delete(groupId);
+    });
+    return next;
   }
 
   async init(): Promise<void> {
@@ -263,7 +291,9 @@ export class GroupsService {
       const apply = decision.commit;
       decision = {
         ...decision,
-        commit: async () => {
+        commit: () => this.serialize(h, async () => {
+          // deleted (or deleted and re-created) while this event was on its way
+          if (k !== GROUP_KIND.CREATE_GROUP && this.groups.get(h) !== g) throw new GroupConflict(NOT_FOUND);
           if (!(await this.repo.claimApplied(event.id, event.created_at))) throw new GroupDuplicate("duplicate: group control event was already processed");
           try {
             await apply();
@@ -271,7 +301,7 @@ export class GroupsService {
             await this.repo.unclaimApplied(event.id).catch((e) => this.ctx.logger.warn("unclaiming group control event failed", { err: String(e) }));
             throw err;
           }
-        },
+        }),
       };
     }
     return decision;
@@ -374,19 +404,14 @@ export class GroupsService {
     return {
       commit: async () => {
         if (this.groups.has(id)) throw new GroupConflict("duplicate: group already exists");
+        // all rows or none, so a retry of a failed create isn't refused as "already exists"
+        await this.repo.tx(async (r) => {
+          await r.saveGroup(g);
+          await r.saveRoles(g);
+          await r.putMember(id, event.pubkey, ["admin"], event.created_at);
+        });
         this.groups.set(id, g);
-        this.changed();
-        try {
-          await this.repo.saveGroup(g);
-          await this.repo.saveRoles(g);
-          await this.repo.putMember(id, event.pubkey, ["admin"], event.created_at);
-        } catch (err) {
-          // undo, so a retry of the same create isn't refused as "already exists"
-          if (this.groups.get(id) === g) this.groups.delete(id);
-          this.changed();
-          await this.repo.deleteGroup(id).catch(() => {});
-          throw err;
-        }
+        if (g.private || g.hidden) this.changed();
       },
       after: () => this.publishMetadata(g, METADATA_KINDS),
     };
@@ -430,10 +455,9 @@ export class GroupsService {
     }
     if (g.closed && !hash) {
       if (g.hidden) return { reject: NOT_FOUND };
-      // NIP-29: MUST reject when the user isn't added; keep the request stored (and fan it out) for admins to act on.
-      const res = await this.ctx.stores.events.save(event);
-      if (res.status === "saved") this.ctx.broadcast(event);
-      return { reject: "restricted: join request pending admin approval" };
+      // NIP-29: MUST reject when the user isn't added; the request is still stored and relayed (by the write
+      // pipeline, like any event) for admins to act on.
+      return { pending: "restricted: join request pending admin approval" };
     }
     return {
       commit: async () => {
@@ -441,19 +465,13 @@ export class GroupsService {
         // a closed group needs the code; an open group just doesn't consume one that a concurrent join used
         const useCode = hash !== undefined && g.invites.has(hash);
         if (hash && !useCode && g.closed) throw new GroupConflict("restricted: invite code was already used");
+        await this.repo.tx(async (r) => {
+          if (useCode) await r.removeInvite(g.id, hash!);
+          await r.putMember(g.id, event.pubkey, [], nowSec());
+        });
         if (useCode) g.invites.delete(hash!);
         g.members.set(event.pubkey, []);
-        this.changed();
-        try {
-          if (useCode) await this.repo.removeInvite(g.id, hash!);
-          await this.repo.putMember(g.id, event.pubkey, [], nowSec());
-        } catch (err) {
-          // undo the in-memory change so a retry can apply it
-          if (useCode) g.invites.add(hash!);
-          g.members.delete(event.pubkey);
-          this.changed();
-          throw err;
-        }
+        this.membersChanged(g);
       },
       after: async () => {
         await this.relayPublish({ kind: GROUP_KIND.PUT_USER, created_at: nowSec(), content: "", tags: [["h", g.id], ["p", event.pubkey]] });
@@ -467,9 +485,9 @@ export class GroupsService {
     if (!roles) return { reject: g.hidden ? NOT_FOUND : "invalid: not a member of this group" };
     return {
       commit: async () => {
-        g.members.delete(event.pubkey);
-        this.changed();
         await this.repo.removeMember(g.id, event.pubkey);
+        g.members.delete(event.pubkey);
+        this.membersChanged(g);
       },
       after: async () => {
         await this.relayPublish({ kind: GROUP_KIND.REMOVE_USER, created_at: nowSec(), content: "", tags: [["h", g.id], ["p", event.pubkey]] });
@@ -498,12 +516,12 @@ export class GroupsService {
         const rolesChanged = targets.some((t) => t.length > 2 || (g.members.get(t[1])?.length ?? 0) > 0);
         return {
           commit: async () => {
-            for (const t of targets) {
-              const roles = t.slice(2).filter(Boolean);
-              g.members.set(t[1], roles);
-              this.changed();
-              await this.repo.putMember(g.id, t[1], roles, event.created_at);
-            }
+            const puts = targets.map((t) => ({ pubkey: t[1], roles: t.slice(2).filter(Boolean) }));
+            await this.repo.tx(async (r) => {
+              for (const p of puts) await r.putMember(g.id, p.pubkey, p.roles, event.created_at);
+            });
+            for (const p of puts) g.members.set(p.pubkey, p.roles);
+            this.membersChanged(g);
           },
           after: () => this.publishMetadata(g, rolesChanged ? [GROUP_KIND.ADMINS, GROUP_KIND.MEMBERS] : [GROUP_KIND.MEMBERS]),
         };
@@ -514,11 +532,11 @@ export class GroupsService {
         for (const pk of targets) if (isAdminRole(g.members.get(pk)) && !isAdmin) return { reject: "restricted: only group admins can remove admins" };
         return {
           commit: async () => {
-            for (const pk of targets) {
-              g.members.delete(pk);
-              this.changed();
-              await this.repo.removeMember(g.id, pk);
-            }
+            await this.repo.tx(async (r) => {
+              for (const pk of targets) await r.removeMember(g.id, pk);
+            });
+            for (const pk of targets) g.members.delete(pk);
+            this.membersChanged(g);
           },
           after: () => this.publishMetadata(g, [GROUP_KIND.ADMINS, GROUP_KIND.MEMBERS]),
         };
@@ -527,9 +545,12 @@ export class GroupsService {
         if (hasSubgroupTags(event.tags)) return { reject: "invalid: subgroups are not supported" };
         return {
           commit: async () => {
+            const next: GroupState = { ...g };
+            applyMetadata(next, event.tags);
+            await this.repo.saveGroup(next);
+            const visibility = next.private !== g.private || next.hidden !== g.hidden;
             applyMetadata(g, event.tags);
-            this.changed();
-            await this.repo.saveGroup(g);
+            if (visibility) this.changed();
           },
           after: () => this.publishMetadata(g, [GROUP_KIND.METADATA]),
         };
@@ -562,8 +583,8 @@ export class GroupsService {
         const hash = hashCode(code);
         return {
           commit: async () => {
-            g.invites.add(hash);
             await this.repo.addInvite(g.id, hash, event.pubkey, event.created_at);
+            g.invites.add(hash);
           },
         };
       }
@@ -662,7 +683,7 @@ export class GroupsService {
 
   async delete(id: string, actor: string): Promise<void> {
     const g = this.groups.get(id);
-    if (g) await this.deleteGroup(g, actor);
+    if (g) await this.serialize(id, () => (this.groups.get(id) === g ? this.deleteGroup(g, actor) : Promise.resolve()));
   }
 }
 
