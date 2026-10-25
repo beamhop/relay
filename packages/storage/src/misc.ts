@@ -1,5 +1,5 @@
 import type { AuditEntry, AuditLog, Db, Invite, InviteStore, IpRule, IpRuleStore, KvStore } from "@beamhop/sdk";
-import { nowSec } from "@beamhop/sdk";
+import { nowSec, yieldToEventLoop } from "@beamhop/sdk";
 import { isUniqueViolation, parseJson, toNum, toNumOrNull } from "./sql";
 import { upsertUser } from "./users";
 
@@ -141,6 +141,7 @@ export class SqlKvStore implements KvStore {
     );
   }
 
+  /** Insert-if-absent (`ON CONFLICT DO NOTHING`, the same statement on SQLite and Postgres). */
   async setIfAbsent(namespace: string, key: string, value: unknown): Promise<boolean> {
     const r = await this.db.run(
       "INSERT INTO kv (namespace, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (namespace, key) DO NOTHING",
@@ -176,8 +177,11 @@ interface AuditRow {
   ip: string | null;
 }
 
+/** audit entries removed per statement by `prune` */
+const AUDIT_PRUNE_BATCH = 2000;
+
 /**
- * Append-only audit log. `list()` returns newest first (id DESC); `before` is an id cursor
+ * Append-only audit log (apart from retention: `prune`). `list()` returns newest first (id DESC); `before` is an id cursor
  * (entries with id < before), `limit` defaults to 100 and is capped at 1000.
  */
 export class SqlAuditLog implements AuditLog {
@@ -224,5 +228,21 @@ export class SqlAuditLog implements AuditLog {
       details: parseJson<Record<string, unknown>>(r.details, {}),
       ip: r.ip ?? null,
     }));
+  }
+
+  /**
+   * Deletes entries with `at < before`, oldest first, AUDIT_PRUNE_BATCH per statement with a timer turn between
+   * statements (SQLite runs on the event loop). Each batch is atomic, the whole call is not.
+   */
+  async prune(before: number): Promise<number> {
+    let deleted = 0;
+    for (let i = 0; ; i++) {
+      if (i > 0) await yieldToEventLoop();
+      const n = (
+        await this.db.run("DELETE FROM audit_log WHERE id IN (SELECT id FROM audit_log WHERE at < ? ORDER BY id LIMIT ?)", [before, AUDIT_PRUNE_BATCH])
+      ).changes;
+      deleted += n;
+      if (n < AUDIT_PRUNE_BATCH) return deleted;
+    }
   }
 }

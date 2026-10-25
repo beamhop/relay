@@ -1,11 +1,12 @@
 import { z } from "zod";
-import type { ReportBulkResult } from "@beamhop/sdk";
+import type { ReportBulkResolveRequest, ReportBulkResult, ReportListQuery, ResolveReportRequest } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
 import { newResolveMemo } from "../services/reports";
 import { audited, auditLists } from "../util/audit";
+import type { Same, SameFields } from "../util/contract";
 import { parseEventId, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
@@ -19,6 +20,9 @@ const ListQuery = z.object({
 });
 const ResolveSchema = z.object({ action: z.enum(ACTIONS), note: z.string().max(2000).optional() });
 const BulkSchema = z.object({ ids: z.array(z.string()).min(1).max(500), action: z.enum(ACTIONS), note: z.string().max(2000).optional() });
+true satisfies SameFields<z.output<typeof ListQuery>, ReportListQuery> &
+  Same<z.output<typeof ResolveSchema>, ResolveReportRequest> &
+  Same<z.output<typeof BulkSchema>, ReportBulkResolveRequest>;
 
 export function registerReportRoutes(app: AdminApp, ctx: ApiContext) {
   // ?target: a pubkey (hex / npub) lists the reports whose targetPubkey it is (see ReportService.list), or an event id / blob hash

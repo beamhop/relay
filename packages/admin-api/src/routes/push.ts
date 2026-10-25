@@ -1,9 +1,11 @@
 import { z } from "zod";
+import type { PushSubscribeRequest, PushUnsubscribeRequest } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { notFound } from "../errors";
 import { requireAdmin } from "../middleware/auth";
 import { isAllowedPushEndpoint, PUSH_TOPICS, type SentPushTopic } from "../services/push";
+import type { Same } from "../util/contract";
 import { readBody } from "../util/request";
 
 const SubscribeSchema = z.object({
@@ -20,6 +22,7 @@ const SubscribeSchema = z.object({
     .optional(),
 });
 const UnsubscribeSchema = z.object({ endpoint: z.string().max(2048) });
+true satisfies Same<z.output<typeof SubscribeSchema>, PushSubscribeRequest> & Same<z.output<typeof UnsubscribeSchema>, PushUnsubscribeRequest>;
 
 export function registerPushRoutes(app: AdminApp, ctx: ApiContext) {
   app.get("/push/vapid", requireAdmin(), (c) => c.json({ publicKey: ctx.push.publicKey }));

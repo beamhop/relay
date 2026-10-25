@@ -49,6 +49,11 @@ function createFakeKv(): KvStore {
   return {
     async get<T>(ns: string, k: string) { return m.get(`${ns}:${k}`) as T | undefined; },
     async set(ns, k, v) { m.set(`${ns}:${k}`, v); },
+    async setIfAbsent(ns, k, v) {
+      if (m.has(`${ns}:${k}`)) return false;
+      m.set(`${ns}:${k}`, v);
+      return true;
+    },
     async delete(ns, k) { m.delete(`${ns}:${k}`); },
     async list<T>(ns: string) {
       const out: Record<string, T> = {};
@@ -64,6 +69,12 @@ export function createFakeAudit(): AuditLog & { entries: AuditEntry[] } {
     entries,
     async record(e) { entries.push({ ...e, id: entries.length + 1, at: e.at ?? Math.floor(Date.now() / 1000) }); },
     async list() { return entries; },
+    async prune(before) {
+      const keep = entries.filter((e) => e.at >= before);
+      const n = entries.length - keep.length;
+      entries.splice(0, entries.length, ...keep);
+      return n;
+    },
   };
 }
 

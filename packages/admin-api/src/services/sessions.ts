@@ -64,6 +64,11 @@ export class SessionService {
    * periodic sweep (to drop whatever the swept sessions left behind, e.g. their push devices).
    */
   onExpired: (id?: string) => Promise<void> = async () => {};
+  /**
+   * Called after end() / endAllFor() removed sessions, to drop what they leave behind (their push devices): `id` for
+   * one session, else every session of `pubkey` but `exceptId`.
+   */
+  onEnded: (ended: { id: string } | { pubkey: string; exceptId?: string }) => Promise<void> = async () => {};
 
   constructor(
     private readonly db: Db,
@@ -145,10 +150,17 @@ export class SessionService {
     await this.db.run("DELETE FROM admin_sessions WHERE id = ?", [id]);
   }
 
-  /** Destroys all sessions of a pubkey, optionally keeping one (by hashed id). */
-  async destroyAllFor(pubkey: string, exceptId?: string): Promise<void> {
+  /** Ends one session (logout): destroy plus onEnded. `id`: the hashed id. */
+  async end(id: string): Promise<void> {
+    await this.destroy(id);
+    await this.onEnded({ id });
+  }
+
+  /** Ends all sessions of a pubkey, optionally keeping one (by hashed id), plus onEnded. */
+  async endAllFor(pubkey: string, exceptId?: string): Promise<void> {
     for (const [id, e] of this.cache) if (e.s.pubkey === pubkey && id !== exceptId) this.cache.delete(id);
     await this.db.run("DELETE FROM admin_sessions WHERE pubkey = ? AND id <> ?", [pubkey, exceptId ?? ""]);
+    await this.onEnded({ pubkey, exceptId });
   }
 
   private remember(s: SessionRecord) {

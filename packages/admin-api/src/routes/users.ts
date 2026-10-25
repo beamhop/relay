@@ -1,12 +1,12 @@
 import { z } from "zod";
-import type { AdminRole, BulkResult, BulkUserRequest, RoleRequest, UserDetail, UserRecord } from "@beamhop/sdk";
+import type { AddUserRequest, AdminRole, BanRequest, BulkResult, BulkUserRequest, RoleRequest, UserDetail, UserEventsQuery, UserListQuery, UserPatch, UserRecord } from "@beamhop/sdk";
 import type { AdminApp, AdminContext, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, conflict, forbidden } from "../errors";
 import { assertPermission, requirePermission } from "../middleware/auth";
 import { emptyBanOutcome, emptyDeleteOutcome } from "../services/moderation";
 import { audited, auditLists } from "../util/audit";
-import type { Same } from "../util/contract";
+import type { Same, SameFields } from "../util/contract";
 import { parsePubkey, tryParsePubkey } from "../util/pubkey";
 import { readBody, readQuery } from "../util/request";
 
@@ -25,6 +25,7 @@ const ListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
   offset: z.coerce.number().int().min(0).max(10_000_000).default(0),
 });
+true satisfies SameFields<z.output<typeof ListQuery>, UserListQuery>;
 
 const Tags = z.array(z.string().trim().min(1).max(64)).max(50);
 const Nip05Name = z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{1,64}$/, "invalid nip05 name");
@@ -43,12 +44,14 @@ const UserPatchSchema = z
     denied: z.boolean().optional(),
   })
   .strict();
+true satisfies Same<z.output<typeof UserPatchSchema>, UserPatch>;
 const BanSchema = z.object({
   reason: z.string().max(1000).optional(),
   deleteEvents: z.boolean().optional(),
   deleteMedia: z.boolean().optional(),
   disconnect: z.boolean().optional(),
 });
+true satisfies Same<z.output<typeof BanSchema>, BanRequest>;
 const RoleSchema = z.object({ role: z.enum(ROLES).nullable() });
 true satisfies Same<z.output<typeof RoleSchema>, RoleRequest>;
 const BulkSchema = z.object({
@@ -57,12 +60,15 @@ const BulkSchema = z.object({
   reason: z.string().max(1000).optional(),
   tag: z.string().trim().min(1).max(64).optional(),
 });
+true satisfies Same<z.output<typeof BulkSchema>, BulkUserRequest>;
 const AddUserSchema = z.object({ pubkey: z.string(), allowed: z.boolean().optional(), notes: z.string().max(10_000).optional(), tags: Tags.optional() });
+true satisfies Same<z.output<typeof AddUserSchema>, AddUserRequest>;
 const EventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
   until: z.coerce.number().int().min(0).optional(),
   kinds: z.string().regex(/^\d+(,\d+)*$/).optional(),
 });
+true satisfies SameFields<z.output<typeof EventsQuery>, UserEventsQuery>;
 
 const BULK_PERMISSION = {
   ban: "users.ban",
@@ -81,22 +87,6 @@ const BULK_PERMISSION = {
 
 export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   const { stores, bus } = ctx.deps;
-
-  async function kindStats(pubkey: string): Promise<{ kind: number; count: number }[]> {
-    try {
-      const rows = await stores.db.all<{ kind: number; count: number }>(
-        "SELECT kind, COUNT(*) AS count FROM events WHERE pubkey = ? GROUP BY kind ORDER BY count DESC",
-        [pubkey],
-      );
-      return rows.map((r) => ({ kind: Number(r.kind), count: Number(r.count) }));
-    } catch {
-      // fall back to a capped scan through the EventStore API
-      const evs = await stores.events.query([{ authors: [pubkey], limit: 5000 }], { maxLimit: 5000 });
-      const m = new Map<number, number>();
-      for (const e of evs) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
-      return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count);
-    }
-  }
 
   /** Pubkeys matching a search by npub/hex or by profile name (kind-0 full-text search). */
   async function searchPubkeys(search: string): Promise<string[]> {
@@ -147,13 +137,13 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/users", requirePermission("users.edit"), async (c) => {
     const body = await readBody(c, AddUserSchema);
     const pubkey = parsePubkey(body.pubkey);
-    const patch: Partial<UserRecord> = {};
+    const patch: UserPatch = {};
     if (body.allowed !== undefined) patch.allowed = body.allowed;
     if (body.notes !== undefined) patch.notes = body.notes;
     if (body.tags !== undefined) patch.tags = body.tags;
     await ctx.users.assertCanEdit(principalOf(c), pubkey, patch);
     const user = await ctx.users.update(pubkey, patch, principalOf(c).pubkey);
-    await ctx.audit(c, "user.create", pubkey, patch);
+    await ctx.audit(c, "user.create", pubkey, { ...patch });
     return c.json(await ctx.users.toView(user), 201);
   });
 
@@ -171,7 +161,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   });
 
   app.post("/users/bulk", requirePermission("users.view"), async (c) => {
-    const body = (await readBody(c, BulkSchema)) as BulkUserRequest;
+    const body = await readBody(c, BulkSchema);
     assertPermission(c, BULK_PERMISSION[body.action]);
     if ((body.action === "add-tag" || body.action === "remove-tag") && !body.tag) throw badRequest("tag required");
     const actor = principalOf(c);
@@ -180,7 +170,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     // the rank checks need the staff set once, not a lookup per target
     const moderate = await ctx.users.moderationCheck(actor);
     const prot = body.action === "delete-events" ? await ctx.users.protectedAuthors(actor) : undefined;
-    const canEdit = async (pubkey: string, patch?: Partial<UserRecord>) =>
+    const canEdit = async (pubkey: string, patch?: UserPatch) =>
       pubkey === actor.pubkey ? ctx.users.assertCanEdit(actor, pubkey, patch) : moderate(pubkey);
     const signal = c.req.raw.signal;
     const started = performance.now();
@@ -278,7 +268,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     const [view, eventCount, kinds, usage, reportsAgainst, reportsFiled] = await Promise.all([
       ctx.users.toView(user),
       stores.events.count([{ authors: [pubkey] }]),
-      kindStats(pubkey),
+      stores.events.kindCounts(pubkey),
       ctx.deps.blossom ? ctx.deps.blossom.usage(pubkey) : Promise.resolve({ count: 0, bytes: 0 }),
       stores.events.count([{ kinds: [1984], "#p": [pubkey] }]),
       stores.events.count([{ kinds: [1984], authors: [pubkey] }]),
@@ -294,12 +284,12 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     const pubkey = parsePubkey(c.req.param("pubkey"));
     const patch = await readBody(c, UserPatchSchema);
     if (patch.denied !== undefined) await ctx.users.assertCanModerate(principalOf(c), pubkey);
-    else await ctx.users.assertCanEdit(principalOf(c), pubkey, patch as Partial<UserRecord>);
+    else await ctx.users.assertCanEdit(principalOf(c), pubkey, patch);
     if (patch.nip05Name) {
       const holder = await stores.users.getByNip05(patch.nip05Name);
       if (holder && holder.pubkey !== pubkey) throw conflict("nip05 name already taken");
     }
-    const user = await ctx.users.update(pubkey, patch as Partial<UserRecord>, principalOf(c).pubkey);
+    const user = await ctx.users.update(pubkey, patch, principalOf(c).pubkey);
     await ctx.audit(c, "user.update", pubkey, patch);
     return c.json(await ctx.users.toView(user));
   });

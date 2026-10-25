@@ -575,6 +575,15 @@ export class SqlEventStore implements EventStore {
     return byKind ? { total, byKind, sizeBytes } : { total, sizeBytes };
   }
 
+  /** One pubkey's events per kind (most first): a range of events_pubkey_kind_created_idx, not a table scan. */
+  async kindCounts(pubkey: string): Promise<{ kind: number; count: number }[]> {
+    const rows = await this.db.all<{ kind: number; n: number }>(
+      "SELECT kind, COUNT(*) AS n FROM events WHERE pubkey = ? GROUP BY kind ORDER BY n DESC, kind ASC",
+      [pubkey],
+    );
+    return rows.map((r) => ({ kind: Number(r.kind), count: Number(r.n) }));
+  }
+
   // ------------------------------------------------------------------ filter → SQL
 
   /** Returns null when the filter can never match (e.g. empty id list). */

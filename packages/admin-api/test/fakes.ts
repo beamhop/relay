@@ -117,6 +117,11 @@ export class FakeEventStore implements EventStore {
   async stats() {
     return { total: this.events.size, byKind: [], sizeBytes: 0 };
   }
+  async kindCounts(pubkey: string) {
+    const m = new Map<number, number>();
+    for (const e of this.events.values()) if (e.pubkey === pubkey) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
+    return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind - b.kind);
+  }
 }
 
 export class FakeUserStore implements UserStore {
@@ -192,6 +197,11 @@ class FakeKv implements KvStore {
   async set(ns: string, k: string, v: unknown) {
     this.m.set(`${ns}/${k}`, v);
   }
+  async setIfAbsent(ns: string, k: string, v: unknown) {
+    if (this.m.has(`${ns}/${k}`)) return false;
+    this.m.set(`${ns}/${k}`, v);
+    return true;
+  }
   async delete(ns: string, k: string) {
     this.m.delete(`${ns}/${k}`);
   }
@@ -212,6 +222,11 @@ export class FakeAudit implements AuditLog {
       .filter((e) => (!q.actor || e.actor === q.actor) && (!q.action || e.action === q.action))
       .reverse()
       .slice(0, q.limit ?? 100);
+  }
+  async prune(before: number) {
+    const n = this.entries.length;
+    this.entries = this.entries.filter((e) => e.at >= before);
+    return n - this.entries.length;
   }
 }
 

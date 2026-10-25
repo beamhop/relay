@@ -7,10 +7,12 @@ import type { AdminApiOptions, AdminEnv, ApiContext } from "./context";
 import { migrateAdmin } from "./db";
 import { createErrorHandler, errorBody, HttpError } from "./errors";
 import { authenticate, isImportRequest } from "./middleware/auth";
+import { startAuditRetention } from "./services/audit-retention";
+import { BannedEventService } from "./services/banned-events";
 import { CredentialService } from "./services/credentials";
 import { ModerationService } from "./services/moderation";
 import { ProfileService } from "./services/profiles";
-import { KeyedPushCoalescer, PushCoalescer, PushService } from "./services/push";
+import { deleteSessionDevices, KeyedPushCoalescer, PushCoalescer, PushService } from "./services/push";
 import { ReplayGuard } from "./services/replay";
 import { ReportService } from "./services/reports";
 import { RoleService } from "./services/roles";
@@ -37,7 +39,8 @@ import { registerPushRoutes } from "./routes/push";
 import { createNip86Handler } from "./routes/nip86";
 
 export type { AdminApiOptions, AdminEnv, Principal } from "./context";
-export { ADMIN_MIGRATIONS } from "./db";
+export { ADMIN_MIGRATIONS, migrateAdmin } from "./db";
+export { adminAccess, revokeAdminAccess, setAdminPassword } from "./services/moderation";
 export { hashPassword, verifyPassword } from "./util/password";
 export type { ScryptParams } from "./util/password";
 
@@ -60,9 +63,12 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
   const sessions = new SessionService(deps.stores.db, nowMs);
   // a session that simply expired takes the push devices it registered with it, like a logout does
   sessions.onExpired = (id) => (id ? push.unsubscribeSession(id) : push.pruneEndedSessions());
+  // sessions ended on purpose (logout, password change, revoked access) take their push devices with them
+  sessions.onEnded = (ended) => deleteSessionDevices(deps.stores.db, ended);
   const credentials = new CredentialService(deps.stores.db, nowSec);
-  const moderation = new ModerationService(deps, users, sessions, push, credentials);
+  const moderation = new ModerationService(deps, users, sessions, credentials);
   const reports = new ReportService(deps, profiles, users, moderation, nowSec);
+  const bannedEvents = new BannedEventService(deps.stores.db, roles, nowSec, { nowMs, ttlMs: opts.bannedEventsTtlMs ?? 5000, logger });
 
   const auditAs: ApiContext["auditAs"] = async (actor, ip, action, target, details = {}) => {
     const at = nowSec();
@@ -91,6 +97,7 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
     reports,
     push,
     moderation,
+    bannedEvents,
     credentials,
     passwords: new PasswordHasher({ params: opts.scryptParams }),
     replay: new ReplayGuard(deps.stores.db, nowMs),
@@ -195,7 +202,10 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   const reportListeners = new Set<(r: ReportView) => void>();
   const ctx = await buildContext(deps, opts, reportListeners);
   const tasks = deps.tasks ?? new TaskTracker({ logger: ctx.logger });
+  // banned event ids are enforced on write so a banned event can't simply be republished — through any instance
+  await ctx.bannedEvents.start(deps.hooks);
   const unwire = wireBus(ctx, reportListeners, tasks);
+  const stopAuditRetention = startAuditRetention(ctx, tasks, opts.auditPruneIntervalMs);
   // one-time fill of the report index from the reports already stored (retried at the next start if it fails)
   await ctx.reports.backfill().catch((err) => ctx.logger.error("report index backfill failed", { error: String(err) }));
   // config owners need a users row so they show up in user lists and role filters
@@ -242,10 +252,20 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   /** Live streams end (dashboards reconnect to another instance or once it is back), pushes being sent get to finish. */
   const shutdown = async (sc: StopContext) => {
     unwire();
+    stopAuditRetention();
     streams.closeAll();
     await tasks.idle(sc.signal);
   };
-  return { app: app as unknown as Hono, nip86: await createNip86Handler(ctx), drain: shutdown, stop: shutdown };
+  return {
+    app: app as unknown as Hono,
+    nip86: createNip86Handler(ctx),
+    drain: shutdown,
+    // event bans stay enforced while draining (the relay may still take writes); stopped, the hook goes
+    stop: async (sc) => {
+      await shutdown(sc);
+      ctx.bannedEvents.stop();
+    },
+  };
 }
 
 createAdminApi satisfies CreateAdminApi;

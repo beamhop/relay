@@ -2,11 +2,10 @@ import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { randomBytes, scrypt as scryptCb } from "node:crypto";
 import { parseArgs } from "node:util";
 import { nip19 } from "nostr-tools";
 import { verifyEvent } from "nostr-tools/pure";
-import { createLogger, isBun, type AdminRole, type BeamhopConfig, type Db, type Filter, type NostrEvent, type Stores } from "@beamhop/sdk";
+import { createLogger, isBun, type AdminRole, type BeamhopConfig, type Filter, type NostrEvent, type Stores } from "@beamhop/sdk";
 import { loadConfig, toHexPubkey, type LoadedConfig } from "./config";
 import { VERSION } from "./version";
 
@@ -134,37 +133,18 @@ async function promptHidden(question: string): Promise<string> {
   return answer;
 }
 
-/** Uses @beamhop/admin-api's hasher; local fallback uses the same format: scrypt$N$r$p$saltB64$hashB64 */
-async function hashPassword(password: string): Promise<string> {
-  try {
-    const mod = (await import("@beamhop/admin-api")) as { hashPassword?: (pw: string) => Promise<string> };
-    if (typeof mod.hashPassword === "function") return await mod.hashPassword(password);
-  } catch {
-    /* fall through */
-  }
-  const N = 16384, r = 8, p = 1;
-  const salt = randomBytes(16);
-  const key = await new Promise<Buffer>((res, rej) =>
-    scryptCb(password.normalize("NFKC"), salt, 64, { N, r, p, maxmem: 64 * 1024 * 1024 }, (e, k) => (e ? rej(e) : res(k))),
-  );
-  return `scrypt$${N}$${r}$${p}$${salt.toString("base64")}$${key.toString("base64")}`;
-}
-
 const ROLES: AdminRole[] = ["owner", "admin", "moderator", "viewer"];
 
 /**
- * What removing a role through the admin API does too (admin-api `revokeAdminAccess`): sessions, push devices and
- * login factors (password, TOTP, passkeys) go, so a role granted again later can't be used with credentials from before.
+ * Admin account changes run against the stores with the admin API's own functions (no relay, Blossom, metrics or
+ * plugins are started); its tables are migrated first, so this works on a fresh database too.
  */
-export async function revokeAdminAccess(db: Db, pubkey: string): Promise<void> {
-  for (const table of ["admin_sessions", "admin_push_subscriptions", "admin_passkeys", "admin_credentials"]) {
-    try {
-      await db.run(`DELETE FROM ${table} WHERE pubkey = ?`, [pubkey]);
-    } catch (err) {
-      // admin.enabled=false on a database the admin API never migrated: nothing to revoke
-      if (!/no such table|does not exist/i.test((err as Error).message)) throw err;
-    }
-  }
+async function withAdminStores<T>(config: BeamhopConfig, fn: (stores: Stores, admin: typeof import("@beamhop/admin-api")) => Promise<T>): Promise<T> {
+  const admin = await import("@beamhop/admin-api");
+  return withStores(config, async (stores) => {
+    await admin.migrateAdmin(stores.db);
+    return fn(stores, admin);
+  });
 }
 const npub = (hex: string) => nip19.npubEncode(hex);
 
@@ -221,48 +201,27 @@ async function cmdAdmin(v: Values, args: string[]) {
     });
     console.log(`${npub(pubkey)} is now ${role}`);
   } else if (sub === "remove") {
-    // full composition so the admin-api tables exist (fresh database) before their rows are deleted
-    const { createBeamhop } = await import("./app");
-    const bh = await createBeamhop({ ...config, logLevel: "warn" }, { autoDiscoverNpm: false });
-    try {
-      await bh.stores.users.upsert(pubkey, { role: null });
-      await revokeAdminAccess(bh.stores.db, pubkey);
-      await bh.stores.audit.record({ actor: "cli", action: "admin.remove", target: pubkey, details: {}, ip: null });
-    } finally {
-      await bh.stop();
-    }
+    await withAdminStores(config, async (stores, admin) => {
+      await stores.users.upsert(pubkey, { role: null });
+      // what removing a role through the admin API does too: sessions, push devices and login factors go
+      await admin.revokeAdminAccess(admin.adminAccess(stores.db), pubkey);
+      await stores.audit.record({ actor: "cli", action: "admin.remove", target: pubkey, details: {}, ip: null });
+    });
     if (config.admin.owners.includes(pubkey)) console.warn("note: this pubkey is still an owner via config admin.owners / BEAMHOP_OWNERS");
     console.log(`${npub(pubkey)} is no longer an admin; signed out everywhere, password, two-factor and passkeys removed`);
   } else if (sub === "password") {
     const pw = await promptHidden(`new password for ${npub(pubkey).slice(0, 16)}…: `);
     if (pw.length < 8) throw new Error("password must be at least 8 characters");
     if (process.stdin.isTTY && (await promptHidden("repeat password: ")) !== pw) throw new Error("passwords do not match");
-    const hash = await hashPassword(pw);
-    // full composition so admin-api migrations (admin_credentials table) are applied
-    const { createBeamhop } = await import("./app");
-    const bh = await createBeamhop({ ...config, logLevel: "warn" }, { autoDiscoverNpm: false });
-    try {
-      const user = await bh.stores.users.get(pubkey);
+    await withAdminStores(config, async (stores, admin) => {
+      const user = await stores.users.get(pubkey);
       if (!user?.role && !config.admin.owners.includes(pubkey)) console.warn(`warning: ${npub(pubkey)} has no admin role yet — run \`beamhop admin add ${target}\``);
-      const now = Math.floor(Date.now() / 1000);
-      const db = bh.stores.db;
-      // password_set_at also retires trusted-device cookies issued before this reset
-      const r = await db.run("UPDATE admin_credentials SET password_hash = ?, updated_at = ?, password_set_at = ? WHERE pubkey = ?", [hash, now, now, pubkey]);
-      if (!r.changes)
-        await db.run("INSERT INTO admin_credentials (pubkey, password_hash, totp_secret, updated_at, password_set_at) VALUES (?, ?, NULL, ?, ?)", [pubkey, hash, now, now]);
-      // a reset is how a compromised or locked-out account is recovered: end every session (running servers
-      // re-read sessions within seconds) and drop the push devices they registered
-      await db.run("DELETE FROM admin_sessions WHERE pubkey = ?", [pubkey]);
-      await db.run("DELETE FROM admin_push_subscriptions WHERE pubkey = ?", [pubkey]);
-      if (v["reset-2fa"]) {
-        // a lost or hijacked authenticator: every second factor and passkey goes, the new password is the only way in
-        await db.run("UPDATE admin_credentials SET totp_secret = NULL, totp_last_step = NULL WHERE pubkey = ?", [pubkey]);
-        await db.run("DELETE FROM admin_passkeys WHERE pubkey = ?", [pubkey]);
-      }
-      await bh.stores.audit.record({ actor: "cli", action: "admin.password", target: pubkey, details: { reset2fa: !!v["reset-2fa"] }, ip: null });
-    } finally {
-      await bh.stop();
-    }
+      // a reset is how a compromised or locked-out account is recovered: the new password retires trusted-device
+      // cookies issued before it, every session ends (running servers re-read sessions within seconds) with the push
+      // devices it registered; --reset-2fa (a lost or hijacked authenticator) also drops TOTP and every passkey
+      await admin.setAdminPassword(admin.adminAccess(stores.db), pubkey, await admin.hashPassword(pw), { resetSecondFactors: !!v["reset-2fa"] });
+      await stores.audit.record({ actor: "cli", action: "admin.password", target: pubkey, details: { reset2fa: !!v["reset-2fa"] }, ip: null });
+    });
     console.log(`password set for ${npub(pubkey)}; signed out everywhere${v["reset-2fa"] ? "; two-factor authentication and passkeys removed" : ""}`);
   } else throw new Error(`unknown admin command: ${sub}`);
 }

@@ -1,9 +1,18 @@
 import { lookup } from "node:dns/promises";
 import webpush from "web-push";
-import type { AdminApiDeps, Permission, PushTopic } from "@beamhop/sdk";
+import type { AdminApiDeps, Db, Permission, PushTopic } from "@beamhop/sdk";
 import { isForbiddenDestination } from "../util/ip";
 import { kvGetOrCreate } from "../util/kv";
 import { permissionsFor, type RoleService } from "./roles";
+
+/**
+ * Deletes push devices: those a session registered (`id`), or all of `pubkey`'s except those registered by `exceptId`.
+ * What SessionService.onEnded does, also without a PushService (CLI).
+ */
+export async function deleteSessionDevices(db: Db, ended: { id: string } | { pubkey: string; exceptId?: string }): Promise<void> {
+  if ("id" in ended) await db.run("DELETE FROM admin_push_subscriptions WHERE session_id = ?", [ended.id]);
+  else await db.run("DELETE FROM admin_push_subscriptions WHERE pubkey = ? AND (session_id IS NULL OR session_id <> ?)", [ended.pubkey, ended.exceptId ?? ""]);
+}
 
 /** Topics the server sends. */
 export const PUSH_TOPICS = ["reports", "alerts"] as const satisfies readonly PushTopic[];
@@ -236,10 +245,10 @@ export class PushService {
       // overwritten by another instance would invalidate every device subscribed with the first one)
       type Keys = { publicKey: string; privateKey: string };
       const valid = (k: Keys | undefined): k is Keys => !!k?.publicKey && !!k.privateKey;
-      const keys = await kvGetOrCreate(stores, "admin", "vapid", () => {
+      const keys = await kvGetOrCreate(stores.kv, "admin", "vapid", () => {
         const gen = webpush.generateVAPIDKeys();
         return { publicKey: gen.publicKey, privateKey: gen.privateKey };
-      }, this.nowSec(), valid);
+      }, valid);
       this.vapid = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject: fallbackSubject };
     } catch (err) {
       logger.warn("web push disabled: could not initialise VAPID keys", { error: String(err) });
@@ -286,9 +295,9 @@ export class PushService {
     return r.changes > 0;
   }
 
-  /** Drops the devices a session registered (on logout), so a stolen session can't keep receiving reports. */
+  /** Drops the devices a session registered (on logout / expiry), so a stolen session can't keep receiving reports. */
   async unsubscribeSession(sessionId: string): Promise<void> {
-    await this.deps.stores.db.run("DELETE FROM admin_push_subscriptions WHERE session_id = ?", [sessionId]);
+    await deleteSessionDevices(this.deps.stores.db, { id: sessionId });
   }
 
   /**
@@ -302,14 +311,6 @@ export class PushService {
          (SELECT 1 FROM admin_sessions s WHERE s.id = admin_push_subscriptions.session_id AND s.expires_at > ?)`,
       [this.lastPrune],
     );
-  }
-
-  /** Drops all of an admin's devices except those registered by `exceptSessionId` (alongside sessions.destroyAllFor). */
-  async unsubscribeAllFor(pubkey: string, exceptSessionId?: string): Promise<void> {
-    await this.deps.stores.db.run("DELETE FROM admin_push_subscriptions WHERE pubkey = ? AND (session_id IS NULL OR session_id <> ?)", [
-      pubkey,
-      exceptSessionId ?? "",
-    ]);
   }
 
   /**

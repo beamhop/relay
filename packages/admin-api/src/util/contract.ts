@@ -6,3 +6,8 @@
 export type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 /** `B` is accepted by a schema whose input type is `A` (for fields the schema only checks after parsing). */
 export type Accepts<A, B> = [B] extends [A] ? true : false;
+/**
+ * Same fields with the same value types, optional or not: for query schemas, whose defaults make fields the client may
+ * leave out present on the parsed output.
+ */
+export type SameFields<A, B> = Same<Required<A>, Required<B>>;

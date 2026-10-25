@@ -1,7 +1,7 @@
-import type { AdminApiDeps, BanRequest, IpRule, UserRecord } from "@beamhop/sdk";
-import type { CredentialService } from "./credentials";
-import type { PushService } from "./push";
-import type { SessionService } from "./sessions";
+import type { AdminApiDeps, BanRequest, Db, IpRule, UserRecord } from "@beamhop/sdk";
+import { CredentialService } from "./credentials";
+import { deleteSessionDevices } from "./push";
+import { SessionService } from "./sessions";
 import type { UserService } from "./users";
 
 /** What a ban did so far: filled in as it goes, so a caller auditing in `finally` records partial work too. */
@@ -23,6 +23,40 @@ export interface DeleteOutcome {
 export const emptyBanOutcome = (): BanOutcome => ({ deletedEvents: 0, deletedMedia: 0, disconnected: 0 });
 export const emptyDeleteOutcome = (): DeleteOutcome => ({ deletedEvents: 0, deletedMedia: 0, disconnected: 0 });
 
+/** Admin access state (sessions with their push devices, login factors) on a database, without the HTTP app (CLI). */
+export function adminAccess(db: Db, nowMs: () => number = Date.now): { sessions: SessionService; credentials: CredentialService } {
+  const sessions = new SessionService(db, nowMs);
+  sessions.onEnded = (ended) => deleteSessionDevices(db, ended);
+  return { sessions, credentials: new CredentialService(db, () => Math.floor(nowMs() / 1000)) };
+}
+
+/**
+ * Ends whatever admin access `pubkey` had: sessions, push devices and login factors (password, TOTP, passkeys), so a
+ * role granted again later can't be used with credentials from before (possibly the reason it was removed).
+ */
+export async function revokeAdminAccess(access: { sessions: SessionService; credentials: CredentialService }, pubkey: string): Promise<void> {
+  await access.sessions.endAllFor(pubkey);
+  await access.credentials.deleteAll(pubkey);
+}
+
+/**
+ * Sets an admin's password from outside a session (CLI recovery): the new password retires trusted-device cookies issued
+ * before it, every session ends (with its push devices), and `resetSecondFactors` also drops TOTP and passkeys.
+ */
+export async function setAdminPassword(
+  access: { sessions: SessionService; credentials: CredentialService },
+  pubkey: string,
+  hash: string,
+  opts: { resetSecondFactors?: boolean } = {},
+): Promise<void> {
+  await access.credentials.setPassword(pubkey, hash);
+  await access.sessions.endAllFor(pubkey);
+  if (opts.resetSecondFactors) {
+    await access.credentials.setTotp(pubkey, null);
+    await access.credentials.deletePasskeys(pubkey);
+  }
+}
+
 /**
  * The moderation actions shared by the REST routes, bulk actions, report resolutions and NIP-86, so every path has the
  * same effects (status, allow list, disconnects, bus events). Rank and permission checks stay with the callers, which
@@ -33,7 +67,6 @@ export class ModerationService {
     private readonly deps: AdminApiDeps,
     private readonly users: UserService,
     private readonly sessions: SessionService,
-    private readonly push: PushService,
     private readonly credentials: CredentialService,
   ) {}
 
@@ -80,9 +113,7 @@ export class ModerationService {
    * role granted again later can't be used with credentials from before (possibly the reason it was removed).
    */
   async revokeAdminAccess(pubkey: string): Promise<void> {
-    await this.sessions.destroyAllFor(pubkey);
-    await this.push.unsubscribeAllFor(pubkey);
-    await this.credentials.deleteAll(pubkey);
+    await revokeAdminAccess({ sessions: this.sessions, credentials: this.credentials }, pubkey);
   }
 
   /**

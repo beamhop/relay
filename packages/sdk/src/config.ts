@@ -240,6 +240,8 @@ export const RuntimeSettingsSchema = z.object({
       rules: z.array(RetentionRuleSchema).default([]),
       /** how often retention job runs (minutes) */
       intervalMinutes: z.number().default(60),
+      /** delete admin audit log entries older than N days (checked daily); 0 = keep forever */
+      auditLogDays: z.number().int().min(0).default(0),
     })
     .prefault({}),
   nip05: z
