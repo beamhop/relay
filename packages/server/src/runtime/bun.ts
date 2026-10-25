@@ -1,7 +1,7 @@
 import type { ConnectionHandle } from "@beamhop/sdk";
 import type { Beamhop } from "../app";
 import { isRelayUpgrade, makeEnv } from "../app";
-import { clientIp, closeReason, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, closeReason, graceFor, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
 
 interface WsData {
   ip: string;
@@ -9,6 +9,9 @@ interface WsData {
   origin?: string;
   handle?: ConnectionHandle;
 }
+
+/** open websockets → resolves its close promise (for the close-handshake grace at shutdown) */
+type OpenSockets = Map<unknown, { closed: Promise<void>; resolve: () => void }>;
 
 const MB = 1024 * 1024;
 const decoder = new TextDecoder();
@@ -29,6 +32,7 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
     };
   };
 
+  const sockets: OpenSockets = new Map();
   const websocket: import("bun").WebSocketHandler<WsData> = {
     perMessageDeflate: true,
     idleTimeout: 120,
@@ -36,6 +40,9 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
     maxPayloadLength: limits().maxPayloadLength,
     backpressureLimit: 4 * MB,
     open(ws) {
+      let resolve!: () => void;
+      const closed = new Promise<void>((r) => (resolve = r));
+      sockets.set(ws, { closed, resolve });
       try {
         ws.data.handle = relay.handleConnection(
           {
@@ -68,6 +75,8 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
         log.error("websocket close handler failed", { error: err });
       }
       ws.data.handle = undefined;
+      sockets.get(ws)?.resolve();
+      sockets.delete(ws);
     },
   };
 
@@ -80,6 +89,7 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
     fetch(req: Request, server: import("bun").Server<WsData>) {
       const ip = clientIp(server.requestIP(req)?.address, (n) => req.headers.get(n), trustProxy, proxyIpHeader, trustedProxies);
       if (isRelayUpgrade(req)) {
+        if (!beamhop.lifecycle.accepting) return new Response("server is shutting down", { status: 503, headers: { "retry-after": "5", connection: "close" } });
         const ok = server.upgrade(req, { data: { ip, userAgent: req.headers.get("user-agent") ?? undefined, origin: req.headers.get("origin") ?? undefined } });
         if (ok) return undefined as unknown as Response;
         return new Response("websocket upgrade failed", { status: 400 });
@@ -104,17 +114,27 @@ export async function serveBun(beamhop: Beamhop, opts: ServeOptions = {}): Promi
     log.info("reloaded server limits", next);
   });
 
-  return {
+  let draining: Promise<void> | undefined;
+  const running: RunningServer = {
     runtime: "bun",
     hostname: server.hostname ?? config.server.host,
     port: server.port ?? config.server.port,
     stopAccepting() {
+      if (draining) return;
       unsub();
-      void server.stop(false);
+      // resolves once the requests and sockets still open have finished
+      draining = server.stop(false).catch(() => {});
+    },
+    settle(signal) {
+      // the 1001 closes relay.stop() started, and the requests still running (same grace as the node adapter)
+      return graceFor([...[...sockets.values()].map((s) => s.closed), ...(draining ? [draining] : [])], undefined, signal);
     },
     async stop() {
-      unsub();
+      running.stopAccepting();
+      await running.settle();
+      // then cut whatever is left
       await server.stop(true);
     },
   };
+  return running;
 }

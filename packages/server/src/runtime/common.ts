@@ -8,8 +8,32 @@ export interface RunningServer {
   port: number;
   /** stop accepting new connections (open sockets stay up) */
   stopAccepting(): void;
-  /** force-close everything that is still open */
+  /**
+   * Waits (at most STOP_GRACE_MS, or until `signal` aborts) for the websocket close handshakes relay.stop() started,
+   * so clients see a clean 1001 instead of 1006.
+   */
+  settle(signal?: AbortSignal): Promise<void>;
+  /** settle(), then force-close everything that is still open */
   stop(): Promise<void>;
+}
+
+/** How long stopping waits for websocket close handshakes before cutting the sockets. */
+export const STOP_GRACE_MS = 1_000;
+
+/** Resolves once every one of `waits` settled, `ms` passed or `signal` aborted, whichever comes first. */
+export function graceFor(waits: Promise<unknown>[], ms: number = STOP_GRACE_MS, signal?: AbortSignal): Promise<void> {
+  if (!waits.length || signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    (timer as { unref?: () => void }).unref?.();
+    signal?.addEventListener("abort", done, { once: true });
+    Promise.allSettled(waits).then(done);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 }
 
 export interface ServeOptions {

@@ -23,6 +23,11 @@ export const ConfigSchema = z.object({
        * is identified by their own socket address, so a client that reaches the port directly can't spoof it
        */
       trustedProxies: z.array(z.string()).default([...DEFAULT_TRUSTED_PROXIES]),
+      /**
+       * graceful shutdown budget (ms): in-flight requests and queued EVENTs get up to half of it (at most 5 s), then
+       * services close in order; the process is forced out when it runs out
+       */
+      shutdownTimeoutMs: z.number().int().min(1_000).max(600_000).default(10_000),
     })
     .prefault({}),
   database: z

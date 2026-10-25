@@ -54,7 +54,7 @@ USER bun
 VOLUME ["/data"]
 EXPOSE 3334
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["bun", "-e", "fetch('http://127.0.0.1:'+(process.env.BEAMHOP_PORT||3334)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+  CMD ["bun", "-e", "fetch('http://127.0.0.1:'+(process.env.BEAMHOP_PORT||3334)+'/health/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["bun", "packages/server/src/cli.ts"]
 CMD ["start"]
