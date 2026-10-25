@@ -1,6 +1,7 @@
 import type { AdminApiDeps, BlobRecord, Filter, NostrEvent, Paged, ReportStatus, ReportView, ResolveReportRequest } from "@beamhop/sdk";
 import { chunk, placeholders } from "../db";
 import { badRequest, notFound } from "../errors";
+import type { ModerationService } from "./moderation";
 import type { ProfileService } from "./profiles";
 import type { Actor, UserService } from "./users";
 
@@ -54,6 +55,7 @@ export class ReportService {
     private readonly deps: AdminApiDeps,
     private readonly profiles: ProfileService,
     private readonly users: UserService,
+    private readonly moderation: ModerationService,
     private readonly nowSec: () => number,
   ) {}
 
@@ -271,9 +273,10 @@ export class ReportService {
       this.deps.bus.emit("event.deleted", { ids: [p.targetEventId], actor: actor.pubkey, reason: req.note ?? `report ${id}` });
     }
     if (subject) {
-      const r = await this.users.ban(subject.pubkey, { reason: req.note ?? `report ${id}`, disconnect: true }, actor.pubkey);
+      const r = await this.moderation.banUser(subject.pubkey, { reason: req.note ?? `report ${id}`, disconnect: true }, actor.pubkey);
       effects.banned = subject.pubkey;
       effects.disconnected = r.disconnected;
+      if (r.unallowed) effects.unallowed = true;
       if (subject.claimed) effects.claimedPubkey = subject.claimed;
     }
     if (req.action === "delete-media" && p.targetBlob && this.deps.blossom) {

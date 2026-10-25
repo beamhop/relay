@@ -59,7 +59,7 @@ const kindParam = (params: Params, i = 0) => {
  * relay's HTTP routes.
  */
 export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request, env?: { ip?: unknown }) => Promise<Response>> {
-  const { stores, settings, relay, bus, hooks } = ctx.deps;
+  const { stores, settings, bus, hooks } = ctx.deps;
   // banned event ids are enforced on write so a banned event can't simply be republished — through any instance
   const bannedEvents = new BannedEventCache(stores.db, ctx.nowMs, ctx.opts.bannedEventsTtlMs ?? 5000, ctx.logger);
   await bannedEvents.init();
@@ -132,11 +132,9 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
         const pk = pubkeyParam(params);
         const reason = str(params, 1, "reason", true);
         await assertCan("moderate", caller, pk);
-        const r = await ctx.users.ban(pk, { reason: reason || undefined, disconnect: true }, caller.pubkey);
-        // NIP-86: banning also removes the pubkey from the allow list
-        const unallowed = r.user.allowed;
-        if (unallowed) await ctx.users.update(pk, { allowed: false }, caller.pubkey);
-        await audit(caller, "user.ban", pk, { reason, disconnected: r.disconnected, ...(unallowed ? { unallowed } : {}) });
+        // NIP-86: banning also removes the pubkey from the allow list (as every ban does)
+        const r = await ctx.moderation.banUser(pk, { reason: reason || undefined, disconnect: true }, caller.pubkey);
+        await audit(caller, "user.ban", pk, { reason, disconnected: r.disconnected, ...(r.unallowed ? { unallowed: true } : {}) });
         return true;
       },
     },
@@ -146,7 +144,7 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
         const pk = pubkeyParam(params);
         await assertCan("moderate", caller, pk);
         // only lift a ban; a muted user stays muted (and is not added to the allow list)
-        if ((await stores.users.get(pk))?.status === "banned") await ctx.users.setStatus(pk, "active", caller.pubkey);
+        await ctx.moderation.unbanUser(pk, caller.pubkey);
         await audit(caller, "user.unban", pk, { reason: str(params, 1, "reason", true) });
         return true;
       },
@@ -328,9 +326,7 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
         const ip = str(params, 0, "ip").trim();
         if (!isValidCidr(ip)) throw new RpcError("invalid ip");
         const reason = str(params, 1, "reason", true);
-        await stores.ipRules.add({ cidr: ip, action: "block", reason });
-        bus.emit("ip.rules.changed", { actor: caller.pubkey });
-        const disconnected = ip.includes("/") ? 0 : relay.disconnect({ ip });
+        const { disconnected } = await ctx.moderation.addIpRule({ cidr: ip, action: "block", reason }, caller.pubkey);
         await audit(caller, "ip.add", ip, { action: "block", reason, disconnected });
         return true;
       },
@@ -339,9 +335,8 @@ export async function createNip86Handler(ctx: ApiContext): Promise<(req: Request
       permission: "ip.manage",
       async run(params, caller) {
         const ip = str(params, 0, "ip").trim();
-        await stores.ipRules.remove(ip);
-        bus.emit("ip.rules.changed", { actor: caller.pubkey });
-        await audit(caller, "ip.remove", ip, {});
+        // nothing to remove: nothing changed, so nothing to announce or audit (still a success, like a repeated call)
+        if (await ctx.moderation.removeIpRule(ip, caller.pubkey)) await audit(caller, "ip.remove", ip, {});
         return true;
       },
     },

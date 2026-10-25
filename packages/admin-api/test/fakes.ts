@@ -43,7 +43,7 @@ import {
   type UserStore,
 } from "@beamhop/sdk";
 import { createMemoryDb } from "@beamhop/storage";
-import { createAdminApi } from "../src/index";
+import { createAdminApi, type AdminApiOptions } from "../src/index";
 import { sha256Hex } from "../src/util/nip98";
 
 // ------------------------------------------------------------------ stores
@@ -429,6 +429,9 @@ export async function createHarness(
     reportPushIntervalMs?: number;
     importMaxBytes?: number;
     bannedEventsTtlMs?: number;
+    /** any other AdminApiOptions (budgets, intervals) */
+    apiOptions?: AdminApiOptions;
+    storedOwner?: boolean;
   } = {},
 ) {
   const owner = opts.owner ?? newKey();
@@ -443,7 +446,12 @@ export async function createHarness(
     kv: new FakeKv(),
     audit: new FakeAudit(),
   };
-  const config = ConfigSchema.parse({ server: { publicUrl: PUBLIC_URL, trustProxy: opts.trustProxy ?? false }, admin: { owners: [owner.pk] } });
+  const config = ConfigSchema.parse({
+    server: { publicUrl: PUBLIC_URL, trustProxy: opts.trustProxy ?? false },
+    admin: { owners: opts.storedOwner ? [] : [owner.pk] },
+  });
+  // `storedOwner`: the owner holds the role through its users row instead of the config (so it can be demoted)
+  if (opts.storedOwner) await stores.users.upsert(owner.pk, { role: "owner" });
   const settings = fakeSettings(bus);
   const relay = fakeRelay(stores, bus);
   const metrics = fakeMetrics();
@@ -471,6 +479,7 @@ export async function createHarness(
     reportPushIntervalMs: opts.reportPushIntervalMs,
     importMaxBytes: opts.importMaxBytes,
     bannedEventsTtlMs: opts.bannedEventsTtlMs,
+    ...opts.apiOptions,
   });
 
   /** absolute public URL of an admin path (what NIP-98 `u` tags must contain) */

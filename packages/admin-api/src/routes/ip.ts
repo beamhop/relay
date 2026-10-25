@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { z } from "zod";
 import type { AdminApp, ApiContext } from "../context";
+import { principalOf } from "../context";
 import { badRequest, notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
 import { ipv6Groups } from "../util/ip";
@@ -64,10 +65,7 @@ export function registerIpRoutes(app: AdminApp, ctx: ApiContext) {
         "broad_allow_rule",
       );
     }
-    await ipRules.add(rule);
-    ctx.deps.bus.emit("ip.rules.changed", { actor: "admin-api" });
-    let disconnected = 0;
-    if (rule.action === "block" && !rule.cidr.includes("/")) disconnected = ctx.deps.relay.disconnect({ ip: rule.cidr });
+    const { disconnected } = await ctx.moderation.addIpRule(rule, principalOf(c).pubkey);
     await ctx.audit(c, "ip.add", rule.cidr, { action: rule.action, reason: rule.reason, disconnected, ...(broad ? { confirmedBroad: true } : {}) });
     const saved = (await ipRules.list()).find((r) => r.cidr === rule.cidr);
     return c.json(saved ?? { ...rule, createdAt: ctx.nowSec() }, 201);
@@ -75,9 +73,7 @@ export function registerIpRoutes(app: AdminApp, ctx: ApiContext) {
 
   app.delete("/ip-rules/:cidr", requirePermission("ip.manage"), async (c) => {
     const cidr = decodeURIComponent(c.req.param("cidr"));
-    if (!(await ipRules.list()).some((r) => r.cidr === cidr)) throw notFound("ip rule not found");
-    await ipRules.remove(cidr);
-    ctx.deps.bus.emit("ip.rules.changed", { actor: "admin-api" });
+    if (!(await ctx.moderation.removeIpRule(cidr, principalOf(c).pubkey))) throw notFound("ip rule not found");
     await ctx.audit(c, "ip.remove", cidr);
     return c.json({ ok: true });
   });

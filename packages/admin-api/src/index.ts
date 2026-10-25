@@ -7,6 +7,7 @@ import { migrateAdmin } from "./db";
 import { createErrorHandler, errorBody, HttpError } from "./errors";
 import { authenticate, isImportRequest } from "./middleware/auth";
 import { CredentialService } from "./services/credentials";
+import { ModerationService } from "./services/moderation";
 import { ProfileService } from "./services/profiles";
 import { PushCoalescer, PushService } from "./services/push";
 import { ReplayGuard } from "./services/replay";
@@ -52,13 +53,15 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
   const roles = new RoleService(deps.stores.users, deps.config.admin.owners);
   const profiles = new ProfileService(deps.stores.events, nowMs);
   const users = new UserService(deps, roles, profiles);
-  const reports = new ReportService(deps, profiles, users, nowSec);
   const push = new PushService(deps, roles, nowSec);
   if (opts.pushSender) push.sender = opts.pushSender;
   await push.init();
   const sessions = new SessionService(deps.stores.db, nowMs);
   // a session that simply expired takes the push devices it registered with it, like a logout does
   sessions.onExpired = (id) => (id ? push.unsubscribeSession(id) : push.pruneEndedSessions());
+  const credentials = new CredentialService(deps.stores.db, nowSec);
+  const moderation = new ModerationService(deps, users, sessions, push, credentials);
+  const reports = new ReportService(deps, profiles, users, moderation, nowSec);
 
   const auditAs: ApiContext["auditAs"] = async (actor, ip, action, target, details = {}) => {
     const at = nowSec();
@@ -86,7 +89,8 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
     users,
     reports,
     push,
-    credentials: new CredentialService(deps.stores.db, nowSec),
+    moderation,
+    credentials,
     passwords: new PasswordHasher({ params: opts.scryptParams }),
     replay: new ReplayGuard(deps.stores.db, nowMs),
     onReport(fn) {
