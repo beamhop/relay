@@ -7,6 +7,12 @@ export class BlossomError extends Error {
   }
 }
 
+/**
+ * Status for a request body that broke off mid-read (the client went away or reset the connection): nginx's
+ * "client closed request". Not a server error, so it's logged at debug, not as a 500 with a stack.
+ */
+export const CLIENT_CLOSED = 499;
+
 export const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Authorization, Content-Type, X-SHA-256, X-Content-Type, X-Content-Length, Range, If-None-Match, *",
@@ -39,6 +45,8 @@ export const sha256Hex = (data: Uint8Array) => createHash("sha256").update(data)
 export interface ReadLimits {
   /** reserves memory for each chunk before it is kept (shared budget); false aborts with 503 */
   reserve?: (bytes: number) => boolean;
+  /** gives back reserved bytes no longer held (the chunk copies of a chunked body once it's joined) */
+  unreserve?: (bytes: number) => void;
   /**
    * admission check against the announced size (Content-Length) before anything is read: false → 503 right away
    * instead of mid-body. Nothing is held by it — bytes are still reserved as they arrive — so a client lying
@@ -83,6 +91,8 @@ export async function readLimited(
   let buf: Uint8Array | undefined = hint ? new Uint8Array(hint) : undefined;
   const chunks: Uint8Array[] = [];
   let total = 0;
+  /** bytes reserved twice (kept as chunks, then joined into one buffer) */
+  let doubled = 0;
   if (stream) {
     if (hint && limits.admit && !limits.admit(hint)) {
       await stream.cancel().catch(() => {});
@@ -95,7 +105,12 @@ export async function readLimited(
     };
     const started = Date.now();
     for (;;) {
-      const r = await readOrStall(reader, limits.stallMs);
+      let r: ReadResult<Uint8Array> | "stalled";
+      try {
+        r = await readOrStall(reader, limits.stallMs);
+      } catch {
+        throw new BlossomError(CLIENT_CLOSED, "connection closed while receiving the body");
+      }
       if (r === "stalled") await fail(408, "upload stalled");
       const { done, value } = r as ReadResult<Uint8Array>;
       if (done) break;
@@ -108,7 +123,7 @@ export async function readLimited(
       }
       if (limits.reserve && !limits.reserve(buf ? value.byteLength : value.byteLength * 2)) await fail(503, "server busy, retry later");
       if (buf) buf.set(value, total);
-      else chunks.push(value);
+      else (chunks.push(value), (doubled += value.byteLength));
       total += value.byteLength;
       hash.update(value);
       const elapsed = Date.now() - started;
@@ -119,8 +134,10 @@ export async function readLimited(
   }
   let data: Uint8Array;
   if (buf) data = total === buf.byteLength ? buf : buf.subarray(0, total);
-  else if (chunks.length === 1) data = chunks[0];
-  else {
+  else if (chunks.length === 1) {
+    data = chunks[0];
+    limits.unreserve?.(doubled);
+  } else {
     data = new Uint8Array(total);
     let offset = 0;
     for (let i = 0; i < chunks.length; i++) {
@@ -128,6 +145,8 @@ export async function readLimited(
       offset += chunks[i].byteLength;
       chunks[i] = EMPTY;
     }
+    // the chunk copies (reserved as a second copy of each chunk) are garbage now
+    limits.unreserve?.(doubled);
   }
   return { data, sha256: hash.digest("hex") };
 }

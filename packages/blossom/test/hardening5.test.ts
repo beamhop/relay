@@ -149,7 +149,7 @@ describe("used delete tokens survive a restart", () => {
     expect((await upload(PNG_1x1)).status).toBe(201);
     const token = authHeader(alice.sk, "delete", { x: [x] });
     expect((await h.request(`/${x}`, { method: "DELETE", headers: { authorization: token } })).status).toBe(200);
-    expect(Object.keys(await h.deps.stores.kv.list("blossom-used-delete-tokens")).length).toBe(1);
+    expect(Number((await h.deps.stores.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM blossom_used_tokens"))?.n)).toBe(1);
 
     // "restart": a fresh service (empty in-memory caches) over the same stores
     const svc2 = await createBlossomService(h.deps as never, { useSharp: false });

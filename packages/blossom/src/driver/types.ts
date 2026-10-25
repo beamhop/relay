@@ -7,13 +7,14 @@ export interface ByteRange {
 export interface BlobObject {
   /** Body of the requested object (or of the requested range). */
   body: ReadableStream<Uint8Array>;
-  /** Total size of the stored object in bytes (not the range length). */
-  size: number;
+  /**
+   * Total size of the stored object in bytes (not the range length); undefined when the backend didn't say (an S3
+   * response without Content-Length / Content-Range), never a guessed 0.
+   */
+  size?: number;
   /** Present when only a range of the object is returned. */
   range?: ByteRange;
 }
-
-export type BlobData = Uint8Array | ReadableStream<Uint8Array>;
 
 /**
  * Storage backend for blob bytes. Keys are the sha256 of the blob; thumbnails are stored
@@ -36,12 +37,17 @@ export interface LocateOptions {
   hidden?: boolean;
 }
 
+export interface HasOptions extends LocateOptions {
+  /** expected size in bytes: an object of another size (a torn or truncated write) counts as missing */
+  size?: number;
+}
+
 export interface BlobDriver {
   readonly name: string;
-  put(sha256: string, data: BlobData, type: string, opts?: PutOptions): Promise<void>;
+  put(sha256: string, data: Uint8Array, type: string, opts?: PutOptions): Promise<void>;
   /** Returns undefined when the object does not exist. `range` must be valid for the object size. */
   get(sha256: string, range?: ByteRange, opts?: LocateOptions): Promise<BlobObject | undefined>;
-  has(sha256: string, opts?: LocateOptions): Promise<boolean>;
+  has(sha256: string, opts?: HasOptions): Promise<boolean>;
   /** Deletes the blob and its thumbnail (no error when missing). */
   delete(sha256: string): Promise<void>;
   putThumbnail(sha256: string, data: Uint8Array, opts?: PutOptions): Promise<void>;
@@ -53,6 +59,11 @@ export interface BlobDriver {
    * changes. Must be idempotent: re-running it after a partial failure finishes the move.
    */
   setHidden?(sha256: string, hidden: boolean, opts?: { hasThumbnail?: boolean }): Promise<void>;
+  /**
+   * Removes leftovers of writes interrupted by a crash (temp files) older than `maxAgeMs`; returns how many. Run in
+   * the background at startup by drivers that write through temp files.
+   */
+  sweepTempFiles?(maxAgeMs: number): Promise<number>;
 }
 
 export const thumbnailKey = (sha256: string) => `${sha256}.thumb.webp`;
