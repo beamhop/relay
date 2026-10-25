@@ -8,8 +8,8 @@ export type { LoadedConfig, LoadConfigOptions, ServerExtras } from "./config";
 export { createPluginManager, PluginError } from "./plugins/manager";
 export type { ServerPluginManager, PluginManagerDeps } from "./plugins/manager";
 export { discoverPlugins } from "./plugins/discovery";
-export { serve, startServer } from "./server";
-export type { RunningServer, ServeOptions, StartedServer } from "./server";
+export { installProcessHandlers, serve, startServer } from "./server";
+export type { ProcessGuardOptions, RunningServer, ServeOptions, StartedServer } from "./server";
 export { createAssetSource, setEmbeddedUi } from "./static";
 export { VERSION } from "./version";
 

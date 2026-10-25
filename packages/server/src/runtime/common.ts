@@ -94,6 +94,17 @@ export function lastForwardedHop(xff: string | null | undefined): string | undef
   return hops[hops.length - 1];
 }
 
+/** Websocket close reasons are limited to 123 UTF-8 bytes (`ws` throws on longer ones): cut on a character boundary. */
+export function closeReason(reason: string | undefined): string | undefined {
+  if (!reason) return reason;
+  const bytes = Buffer.from(reason, "utf8");
+  if (bytes.length <= 123) return reason;
+  let end = 123;
+  // back off continuation bytes (10xxxxxx) so a multi-byte character isn't split
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf8");
+}
+
 /**
  * Websocket transport cap for a relay message limit. Above the relay's own `maxMessageBytes` (with headroom), so
  * a moderately oversized frame reaches the relay and gets the NIP-01 answer (OK/CLOSED "invalid: message too

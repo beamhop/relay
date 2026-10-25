@@ -4,7 +4,7 @@ import { getRequestListener } from "@hono/node-server";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Beamhop } from "../app";
 import { makeEnv } from "../app";
-import { clientIp, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
+import { clientIp, closeReason, proxyMatcher, wsMaxPayload, type RunningServer, type ServeOptions } from "./common";
 
 const PING_INTERVAL_MS = 30_000;
 const header = (req: IncomingMessage) => (n: string) => {
@@ -45,7 +45,8 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: wsMaxPayload(settings.get().limits.maxMessageBytes),
-    perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 }, concurrencyLimit: 10 },
+    // no context takeover: each message is compressed on its own, so an idle connection doesn't pin a zlib window
+    perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 }, concurrencyLimit: 10, serverNoContextTakeover: true, clientNoContextTakeover: true },
   });
   const unsub = settings.onChange((s) => {
     (wss.options as { maxPayload?: number }).maxPayload = wsMaxPayload(s.limits.maxMessageBytes);
@@ -68,10 +69,20 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
       ws.on("message", (data, isBinary) => {
         alive.set(ws, true);
         const text = isBinary ? Buffer.from(data as Buffer).toString("utf8") : data.toString();
-        handle?.onMessage(text);
+        try {
+          handle?.onMessage(text);
+        } catch (err) {
+          // an exception in an EventEmitter listener would be uncaught: contain it to this connection
+          log.error("websocket message handler failed", { error: err });
+          ws.close(1011, "internal error");
+        }
       });
       ws.on("close", () => {
-        handle?.onClose();
+        try {
+          handle?.onClose();
+        } catch (err) {
+          log.error("websocket close handler failed", { error: err });
+        }
         handle = undefined;
       });
       try {
@@ -80,7 +91,7 @@ export async function serveNode(beamhop: Beamhop, opts: ServeOptions = {}): Prom
             send: (d) => {
               if (ws.readyState === ws.OPEN) ws.send(d);
             },
-            close: (code, reason) => ws.close(code, reason),
+            close: (code, reason) => ws.close(code, closeReason(reason)),
             bufferedAmount: () => ws.bufferedAmount,
           },
           { ip, userAgent: req.headers["user-agent"], origin: req.headers.origin },
