@@ -14,6 +14,7 @@ import { NAV, MOBILE_TABS, ALL_NAV, titleForPath, type NavItem } from "@/lib/nav
 import { useCan, useMe } from "@/queries/auth";
 import { useOpenReportCount } from "@/queries/content";
 import { usePlugins } from "@/queries/misc";
+import { refreshAfterCrash } from "@/queries/client";
 import { live, useLiveStatus } from "@/lib/live";
 import { loadPluginUis } from "@/plugins/loader";
 import { usePluginRegistry } from "@/plugins/registry";
@@ -52,9 +53,10 @@ export function AppShell() {
         <SidebarInset className="min-w-0">
           <TopBar />
           <div className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 px-3 pt-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))] sm:pt-6 md:pb-8">
-            {/* keyed so a crashed page doesn't keep showing the error after navigating away; Retry refetches the
-                cache first (the shell may share the query the page crashed on), so it doesn't re-render the bad response */}
-            <ErrorBoundary key={pathname} label="Page" onRetry={() => queryClient.refetchQueries().catch(() => {})}>
+            {/* pages render the router's RouteError (defaultErrorComponent); this catches what's left. Keyed so a
+                crashed page doesn't keep showing the error after navigating away; Retry refreshes the cache first (the
+                shell may share the query the page crashed on), so it doesn't re-render the bad response */}
+            <ErrorBoundary key={pathname} label="Page" onRetry={() => refreshAfterCrash(queryClient)}>
               <Outlet />
             </ErrorBoundary>
           </div>
