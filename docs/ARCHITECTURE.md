@@ -6,7 +6,7 @@ Bun is the primary runtime; everything must also run on Node ≥ 22 (via `bun bu
 ## Packages (Bun workspaces, scope `@beamhop/*`)
 | Package | Responsibility |
 |---|---|
-| `sdk` | **Contracts only** (+ tiny runtime: EventBus, HookRegistry, logger, zod config schemas). Everyone depends on it. |
+| `sdk` | Contracts at the package root (+ tiny runtime: EventBus, HookRegistry, logger, zod config schemas). Shared runtime-neutral helpers several packages must apply identically live in subpath exports `@beamhop/sdk/<name>` (`config`, `net`, `media-policy`, `search`, `secrets`, `regex-safety`, `util`), never re-exported from the root, not part of the plugin API stability promise. Everyone depends on it. |
 | `storage` | `createStores(config) → Stores`: SQL `Db` abstraction (bun:sqlite / better-sqlite3 / postgres), EventStore (FTS for NIP-50), users, invites, ip rules, kv, audit, `createSettingsService`. |
 | `core` | `createRelay(deps) → RelayEngine`: NIP-01 protocol, validation pipeline, subscriptions/fan-out, NIP-09/11/13/40/42/45/50/62/70/77/29/05/17-59, rate limits, moderation policies, retention jobs. |
 | `blossom` | `createBlossom(deps) → BlossomService`: BUD-01/02/04/06/08/11/12, FS & S3 blob drivers, opt-in EXIF strip, thumbnails (sharp, optional), quotas, moderation status. |
@@ -59,6 +59,6 @@ The relay key lives in kv `server/relaySecretKey` (or config), created insert-if
 - TypeScript, ESM, strict. Packages export `./src/index.ts` directly (no build step for libs).
 - **Runtime-neutral code**: use Web APIs (`fetch`, `Request`, `crypto.subtle`, `TextEncoder`) and `node:*` modules. Bun-only APIs (`bun:sqlite`, `Bun.serve`) only behind `isBun` checks with dynamic `import()`.
 - SQL: write portable SQL with `?` placeholders via `Db`; each package owns its tables via `db.migrate("<namespace>", migrations)`; table names prefixed by package (`blossom_*`, `metrics_*`, `admin_*`, `core_*`). JSON stored as TEXT, booleans as INTEGER, timestamps unix seconds.
-- Cross-package communication: only through sdk interfaces, `EventBus` and `HookRegistry`. Never import another package's internals.
+- Cross-package communication: only through sdk interfaces, `EventBus` and `HookRegistry`. Shared logic is imported from an sdk subpath, never copied and never imported from another package's `src/`. Each package's `test/` may import its own `src/` only; e2e imports packages by name. Drift guard: when two packages need the same rule (address classification, how a blob is served, search tokenization), it moves into an sdk subpath with its tests there, and a copy found later is replaced by an import rather than kept in sync.
 - Tests: `bun test` with files in `packages/<pkg>/test/*.test.ts`. Use SQLite `:memory:`.
 - Typecheck: `bun run typecheck` (the root tsconfig plus admin-ui's own tsconfig).
