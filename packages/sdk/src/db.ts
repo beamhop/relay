@@ -24,3 +24,10 @@ export interface Db {
   migrate(namespace: string, migrations: Migration[]): Promise<void>;
   close(): Promise<void>;
 }
+
+/**
+ * Resolves on a timer turn, after timers already due and pending socket I/O got to run (a `setImmediate` callback
+ * may run before due timers on Bun). Bulk jobs on SQLite, whose statements run synchronously on the event loop,
+ * await this between batches so a long job doesn't stall the relay. Costs ~1 ms per call.
+ */
+export const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
