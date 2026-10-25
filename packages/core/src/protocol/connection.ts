@@ -59,6 +59,9 @@ export class Connection implements ConnectionInfo {
   ownMessageLimit = false;
   /** EVENTs that may await their OK at once */
   maxInflightEvents: number;
+  /** messages refused by the inbound message limit since `refusedSince` (a one-minute window) */
+  refused = 0;
+  refusedSince = 0;
   /** stored queries running (incl. streaming their results); further REQs wait for a slot */
   readonly queries = new Gate(MAX_QUERIES_PER_CONN);
   /** estimated bytes of stored results materialized but not yet sent */

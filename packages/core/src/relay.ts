@@ -36,7 +36,7 @@ import {
   negError,
   sweepNegSessions,
 } from "./protocol/handlers";
-import { parseClientMessage, peekMessage, validateEventShape } from "./protocol/messages";
+import { parseClientMessage, peekMessage, peekType, validateEventShape } from "./protocol/messages";
 import { ReadLimits } from "./protocol/read-limits";
 import { loadRelayKey } from "./relay-key";
 import { SubscriptionIndex } from "./subscriptions/index";
@@ -54,6 +54,10 @@ const EXPIRATION_PURGE_MS = 60_000;
  * may hold this many times that in total.
  */
 const V6_PREFIX_CONNECTION_FACTOR = 4;
+/** A connection refused more than this many times its message limit within a minute is closed. */
+const OVER_LIMIT_CLOSE_FACTOR = 3;
+/** CLOSE / NEG-CLOSE skip the message limit only up to this size (a subscription id is at most 64 chars). */
+const MAX_EXEMPT_CLOSE_CHARS = 2048;
 export { MESSAGES_PER_MINUTE };
 
 const noopHandle = (id: string): ConnectionHandle => ({ id, onMessage() {}, onClose() {} });
@@ -142,38 +146,64 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     else conn.notice(reason);
   }
 
+  /**
+   * Takes an inbound message token. A connection whose refused messages within a minute exceed
+   * OVER_LIMIT_CLOSE_FACTOR times its limit is closed: the flood costs bandwidth and decompression even
+   * when refused unparsed.
+   */
+  function overLimit(conn: Connection): boolean {
+    if (conn.trusted) return false;
+    if (
+      ctx.rate.take(`msg:conn:${conn.id}`, conn.messagesPerMinute) &&
+      (conn.ownMessageLimit || ctx.rate.take(`msg:ip:${conn.ipKey}`, MESSAGES_PER_MINUTE * MESSAGE_IP_FACTOR))
+    ) {
+      return false;
+    }
+    const now = Date.now();
+    if (now - conn.refusedSince >= 60_000) {
+      conn.refusedSince = now;
+      conn.refused = 0;
+    }
+    if (++conn.refused > OVER_LIMIT_CLOSE_FACTOR * conn.messagesPerMinute) {
+      logger.info("closing connection that keeps exceeding the message limit", { ip: conn.ip, refused: conn.refused });
+      closeConn(conn, "rate-limited: too many messages", 1008, "rate limited");
+    }
+    return true;
+  }
+
   function onMessage(conn: Connection, data: string) {
     if (conn.closed) return;
     conn.messagesIn++;
     const L = ctx.s().limits;
-    const overLimit = () =>
-      !conn.trusted &&
-      !(
-        ctx.rate.take(`msg:conn:${conn.id}`, conn.messagesPerMinute) &&
-        (conn.ownMessageLimit || ctx.rate.take(`msg:ip:${conn.ipKey}`, MESSAGES_PER_MINUTE * MESSAGE_IP_FACTOR))
-      );
+    // The rate token is taken before the message is parsed (or even measured), from its type read off the
+    // head: a flood is refused at the cost of a peek. Closing things is always allowed (it frees
+    // resources), but only small CLOSE / NEG-CLOSE messages count as such.
+    const type = peekType(data);
+    const exempt = (type === "CLOSE" || type === "NEG-CLOSE") && data.length <= MAX_EXEMPT_CLOSE_CHARS;
+    if (!exempt && overLimit(conn)) {
+      deps.bus.emit("message.in", { connId: conn.id, type: type ?? "INVALID", bytes: Buffer.byteLength(data) });
+      // answered only when it can be matched (OK / CLOSED / NEG-ERR; closes get no answer); NOTICEs would cost as much as the flood
+      if (conn.closed || type === "CLOSE" || type === "NEG-CLOSE") return;
+      const peeked = peekMessage(data);
+      if (peeked.subId || peeked.eventId) refuse(conn, { ...peeked, reason: "rate-limited: too many messages, slow down" });
+      return;
+    }
     const bytes = Buffer.byteLength(data);
     if (bytes > L.maxMessageBytes) {
       deps.bus.emit("message.in", { connId: conn.id, type: "OVERSIZE", bytes });
-      // over the message rate limit: dropped without an answer (answers would cost as much as the flood)
-      if (!overLimit()) refuse(conn, { ...peekMessage(data), reason: `invalid: message too large (max ${L.maxMessageBytes} bytes)` });
+      if (exempt && overLimit(conn)) return;
+      refuse(conn, { ...peekMessage(data), reason: `invalid: message too large (max ${L.maxMessageBytes} bytes)` });
       return;
     }
     const parsed = parseClientMessage(data, { maxFilters: L.maxFilters });
     deps.bus.emit("message.in", { connId: conn.id, type: parsed.ok ? parsed.msg.type : (parsed.type ?? "INVALID"), bytes });
+    // a peeked CLOSE that turned out malformed (or not to be one) pays its token after all
+    if (exempt && (!parsed.ok || (parsed.msg.type !== "CLOSE" && parsed.msg.type !== "NEG-CLOSE")) && overLimit(conn)) return;
     if (!parsed.ok) {
-      if (!overLimit()) refuse(conn, parsed);
+      refuse(conn, parsed);
       return;
     }
     const msg = parsed.msg;
-    // closing things is always allowed (it frees resources)
-    if (msg.type !== "CLOSE" && msg.type !== "NEG-CLOSE" && overLimit()) {
-      const reason = "rate-limited: too many messages, slow down";
-      if (msg.type === "EVENT" || msg.type === "AUTH") conn.ok(msg.event.id, false, reason);
-      else if (msg.type === "REQ" || msg.type === "COUNT") conn.closedSub(msg.subId, reason);
-      else negError(ctx, conn, msg.subId, reason);
-      return;
-    }
     // a handler that throws still answers (NIP-01: CLOSED / NEG-ERR / OK), and a subscription it registered is cancelled
     const fail = (err: unknown) => {
       logger.error(`${msg.type} handler failed`, { err: String(err) });
