@@ -29,6 +29,7 @@ function defaultUser(pubkey: string): UserRecord {
     nip05Name: null,
     invitedBy: null,
     banReason: null,
+    allowReason: null,
     firstSeenAt: 0,
     lastSeenAt: 0,
     eventCount: 0,

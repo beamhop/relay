@@ -77,7 +77,7 @@ export class ModerationService {
    */
   async banUser(pubkey: string, req: BanRequest, actor: string, out: BanOutcome = emptyBanOutcome()): Promise<BanOutcome> {
     const unallowed = (await this.deps.stores.users.get(pubkey))?.allowed === true;
-    out.user = await this.users.update(pubkey, { status: "banned", banReason: req.reason ?? null, ...(unallowed ? { allowed: false } : {}) }, actor);
+    out.user = await this.users.update(pubkey, { status: "banned", banReason: req.reason ?? null, ...(unallowed ? { allowed: false, allowReason: null } : {}) }, actor);
     if (unallowed) out.unallowed = true;
     if (req.disconnect ?? true) out.disconnected = this.deps.relay.disconnect({ pubkey });
     if (req.deleteEvents) out.deletedEvents = await this.deps.stores.events.deleteByPubkey(pubkey);
