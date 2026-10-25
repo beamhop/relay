@@ -9,7 +9,9 @@
     ".": "./src/index.ts",
     "./admin-contract": "./src/admin-contract.ts",
     "./ui-contract": "./src/ui-contract.ts",
-    "./regex-safety": "./src/regex-safety.ts"
+    "./config": "./src/config.ts",
+    "./regex-safety": "./src/regex-safety.ts",
+    "./secrets": "./src/secrets.ts"
   },
   "dependencies": {
     "hono": "^4.13.13",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { REGEX_FILTER_MAX_INPUT, unsafeRegexReason } from "@beamhop/sdk";
+import { REGEX_FILTER_MAX_INPUT, unsafeRegexReason } from "@beamhop/sdk/regex-safety";
 import { ContentPolicy } from "../src/pipeline/content-policy";
 import { FakeSettings, keypair, setup, sign, silentLogger } from "./fakes";
 

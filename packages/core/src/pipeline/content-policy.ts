@@ -1,4 +1,5 @@
-import { compileRegexFilter, type Logger, type NostrEvent, type RuntimeSettings, type SettingsService, type WordFilter } from "@beamhop/sdk";
+import type { Logger, NostrEvent, RuntimeSettings, SettingsService, WordFilter } from "@beamhop/sdk";
+import { compileRegexFilter } from "@beamhop/sdk/regex-safety";
 
 export type PolicyVerdict =
   | { action: "pass" }

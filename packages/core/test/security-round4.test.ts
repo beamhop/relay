@@ -1,5 +1,6 @@
 import { describe, expect, setSystemTime, test } from "bun:test";
-import { compileRegexFilter, ConfigSchema, type Filter, type NostrEvent, REGEX_FILTER_MAX_INPUT, regexFilterInputLimit } from "@beamhop/sdk";
+import { ConfigSchema, type Filter, type NostrEvent } from "@beamhop/sdk";
+import { compileRegexFilter, REGEX_FILTER_MAX_INPUT, regexFilterInputLimit } from "@beamhop/sdk/regex-safety";
 import type { RelayContext } from "../src/context";
 import { createHttp } from "../src/http/app";
 import { createRelay, Negentropy, NegentropyStorage, validateEventShape } from "../src";
