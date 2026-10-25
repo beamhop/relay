@@ -8,10 +8,10 @@
  * (3) is skipped when no `node` >= 22 is on PATH.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { generateSecretKey, getEventHash, getPublicKey } from "nostr-tools";
 import { RelayClient, now, sha256, sign } from "../harness/client";
 import { freePort } from "../harness/relay";
@@ -258,8 +258,18 @@ async function buildNodeCli(out: string): Promise<string> {
     naming: "cli.js",
   });
   if (!r.success) throw new Error(`node build failed: ${r.logs.join("\n")}`);
-  // externals resolve from the server package's own node_modules
-  symlinkSync(join(SERVER, "node_modules"), join(dist, "node_modules"), "dir");
+  // externals live with the workspace packages that use them (bun's isolated linker): link each one in
+  const modules = join(dist, "node_modules");
+  mkdirSync(modules);
+  for (const name of ["better-sqlite3", "postgres", "sharp"]) {
+    for (const from of ["server", "storage", "blossom"]) {
+      try {
+        const pkg = dirname(Bun.resolveSync(`${name}/package.json`, resolve(SERVER, "..", from)));
+        symlinkSync(realpathSync(pkg), join(modules, name), "dir");
+        break;
+      } catch {}
+    }
+  }
   return join(dist, "cli.js");
 }
 
