@@ -35,18 +35,12 @@ export const Route = createFileRoute("/_app/live")({
 const MAX_EVENTS = 300;
 
 function LivePage() {
-  const snap = useLiveSnapshot();
   const can = useCan();
   // GET /connections requires connections.manage; don't show (or poll) a tab that can only 403
   const showConnections = can("connections.manage");
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Live"
-        description={
-          snap ? `${formatNumber(snap.connections)} connections · ${formatRate(snap.eventsInPerSec)} events/s in · ${formatRate(snap.rejectedPerSec)} rejected/s` : "Realtime relay activity"
-        }
-      />
+      <LiveHeader />
       <Tabs defaultValue="events">
         <TabsList>
           <TabsTrigger value="events">Event stream</TabsTrigger>
@@ -62,6 +56,19 @@ function LivePage() {
         )}
       </Tabs>
     </div>
+  );
+}
+
+/** Subscribes to the snapshot (every 2 s) on its own, so the page and the event list don't re-render with it. */
+function LiveHeader() {
+  const snap = useLiveSnapshot();
+  return (
+    <PageHeader
+      title="Live"
+      description={
+        snap ? `${formatNumber(snap.connections)} connections · ${formatRate(snap.eventsInPerSec)} events/s in · ${formatRate(snap.rejectedPerSec)} rejected/s` : "Realtime relay activity"
+      }
+    />
   );
 }
 
@@ -92,7 +99,10 @@ function EventStream() {
     return () => clearInterval(t);
   }, [paused]);
 
-  const filtered = events.filter((e) => (status === "all" || e.status === status) && (!kinds.length || kinds.includes(e.event.kind)));
+  const filtered = React.useMemo(
+    () => events.filter((e) => (status === "all" || e.status === status) && (!kinds.length || kinds.includes(e.event.kind))),
+    [events, status, kinds],
+  );
 
   return (
     <Card className="gap-3">
@@ -129,39 +139,52 @@ function EventStream() {
         ) : (
           <ul className="divide-y overflow-hidden rounded-lg border">
             {filtered.map((e) => (
-              <li key={e.key}>
-                <button className="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50 animate-in fade-in" onClick={() => setSelected(e)}>
-                  <UserAvatar pubkey={e.event.pubkey} size={28} />
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                      <span className="font-mono text-muted-foreground">{shortNpub(e.event.pubkey, 4)}</span>
-                      <KindBadge kind={e.event.kind} className="text-[11px]" />
-                      {e.status === "rejected" ? <ToneBadge t="red">rejected</ToneBadge> : <ToneBadge t="green">accepted</ToneBadge>}
-                      {e.country && <span title={e.country}>{countryFlag(e.country)}</span>}
-                      {e.ip && <span className="hidden font-mono text-muted-foreground sm:inline">{e.ip}</span>}
-                      <span className="ml-auto text-muted-foreground tabular-nums">{new Date(e.receivedAt).toLocaleTimeString()}</span>
-                    </div>
-                    {e.reason && <p className="text-xs text-destructive">{e.reason}</p>}
-                    <p className="line-clamp-2 text-sm break-all text-foreground/90">{e.event.content || <span className="text-muted-foreground italic">({e.event.tags.length} tags)</span>}</p>
-                  </div>
-                </button>
-              </li>
+              <EventRow key={e.key} e={e} onOpen={setSelected} />
             ))}
           </ul>
         )}
       </CardContent>
-      <ResponsiveDialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)} title={selected ? `${kindName(selected.event.kind)} event` : ""} description={selected ? shortHex(selected.event.id, 12) : undefined} className="sm:max-w-2xl">
-        {selected && (
-          <div className="space-y-3 pb-4">
-            {selected.reason && <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive">Rejected: {selected.reason}</p>}
-            <div className="rounded-lg border p-3">
-              <EventContent event={selected.event} />
-            </div>
-            <JsonView value={selected.event} />
-          </div>
-        )}
-      </ResponsiveDialog>
+      <EventDialog selected={selected} onClose={() => setSelected(null)} />
     </Card>
+  );
+}
+
+/** Memoised: a flush prepends new rows, and the up to 300 existing ones must not re-render each time. */
+const EventRow = React.memo(function EventRow({ e, onOpen }: { e: LiveEvent; onOpen: (e: LiveEvent) => void }) {
+  return (
+    <li>
+      <button className="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50 animate-in fade-in" onClick={() => onOpen(e)}>
+        <UserAvatar pubkey={e.event.pubkey} size={28} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-mono text-muted-foreground">{shortNpub(e.event.pubkey, 4)}</span>
+            <KindBadge kind={e.event.kind} className="text-[11px]" />
+            {e.status === "rejected" ? <ToneBadge t="red">rejected</ToneBadge> : <ToneBadge t="green">accepted</ToneBadge>}
+            {e.country && <span title={e.country}>{countryFlag(e.country)}</span>}
+            {e.ip && <span className="hidden font-mono text-muted-foreground sm:inline">{e.ip}</span>}
+            <span className="ml-auto text-muted-foreground tabular-nums">{new Date(e.receivedAt).toLocaleTimeString()}</span>
+          </div>
+          {e.reason && <p className="text-xs text-destructive">{e.reason}</p>}
+          <p className="line-clamp-2 text-sm break-all text-foreground/90">{e.event.content || <span className="text-muted-foreground italic">({e.event.tags.length} tags)</span>}</p>
+        </div>
+      </button>
+    </li>
+  );
+});
+
+function EventDialog({ selected, onClose }: { selected: LiveEvent | null; onClose: () => void }) {
+  return (
+    <ResponsiveDialog open={!!selected} onOpenChange={(o) => !o && onClose()} title={selected ? `${kindName(selected.event.kind)} event` : ""} description={selected ? shortHex(selected.event.id, 12) : undefined} className="sm:max-w-2xl">
+      {selected && (
+        <div className="space-y-3 pb-4">
+          {selected.reason && <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive">Rejected: {selected.reason}</p>}
+          <div className="rounded-lg border p-3">
+            <EventContent event={selected.event} />
+          </div>
+          <JsonView value={selected.event} />
+        </div>
+      )}
+    </ResponsiveDialog>
   );
 }
 

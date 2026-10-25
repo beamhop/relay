@@ -22,6 +22,7 @@ import { RoleBadge, ToneBadge, UserStatusBadge } from "@/components/badges";
 import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ListSkeleton } from "@/components/page-skeleton";
 import { useLongPress } from "@/hooks/use-long-press";
+import { useDebouncedSearchParam, usePagedItems, useSelection, useStableCallback } from "@/hooks/use-list-page";
 import { tryMutate } from "@/queries/client";
 import { InfiniteSentinel } from "@/components/infinite-sentinel";
 import { SelectionBar } from "@/components/selection-bar";
@@ -52,53 +53,49 @@ export const Route = createFileRoute("/_app/users/")({
   component: UsersPage,
 });
 
+type RowAction = "toggle-allowed" | "allow" | "mute" | "unmute" | "ban" | "unban" | "delete";
+
 function UsersPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: "/users/" });
-  const setSearch = (patch: Partial<UsersSearch>) => navigate({ search: (prev: UsersSearch) => ({ ...prev, ...patch }), replace: true });
-  const [draft, setDraft] = React.useState(search.search ?? "");
-  React.useEffect(() => setDraft(search.search ?? ""), [search.search]);
-  React.useEffect(() => {
-    const t = setTimeout(() => {
-      if ((draft || undefined) !== search.search) setSearch({ search: draft || undefined });
-    }, 300);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
+  const setSearch = useStableCallback((patch: Partial<UsersSearch>) => navigate({ search: (prev: UsersSearch) => ({ ...prev, ...patch }), replace: true }));
 
   const q = useUsers(search);
-  const items = React.useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
-  const total = q.data?.pages[0]?.total;
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  // drop users that left the list (deleted, filtered out after an action) so counts and bulk actions stay right
-  React.useEffect(() => {
-    setSelected((s) => {
-      if (!s.size) return s;
-      const keep = new Set(items.map((u) => u.pubkey));
-      const n = new Set([...s].filter((k) => keep.has(k)));
-      return n.size === s.size ? s : n;
-    });
-  }, [items]);
-  // a bulk action must never hit users that are no longer visible under the current filters
-  React.useEffect(() => setSelected(new Set()), [search.search, search.status, search.role, search.tag, search.allowed, search.sort]);
+  const { items, total } = usePagedItems(q.data);
+  // any filter change clears the selection (the search included)
+  const sel = useSelection(items, (u) => u.pubkey, JSON.stringify(search));
+  const { selected } = sel;
   const [adding, setAdding] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const mobile = useIsMobile();
   const can = useCan();
   const flow = useBanFlow();
 
-  const toggle = (pk: string, v: boolean) =>
-    setSelected((s) => {
-      const n = new Set(s);
-      if (v) n.add(pk);
-      else n.delete(pk);
-      return n;
-    });
-  const allSelected = items.length > 0 && items.every((u) => selected.has(u.pubkey));
   const selectedStatuses = new Set(items.filter((u) => selected.has(u.pubkey)).map((u) => u.status));
   const anyBanned = selectedStatuses.has("banned");
   const anyMuted = selectedStatuses.has("muted");
   const anyActive = selectedStatuses.has("active");
+
+  // one stable handler for every row's menu and swipe actions, so rows can be memoised
+  const onRowAction = useStableCallback((u: UserView, action: RowAction): Promise<unknown> | void => {
+    switch (action) {
+      case "toggle-allowed":
+        return flow.patch.mutate({ pubkey: u.pubkey, allowed: !u.allowed });
+      case "allow":
+        return tryMutate(flow.patch, { pubkey: u.pubkey, allowed: true });
+      case "mute":
+        return flow.mute.mutate(u.pubkey);
+      case "unmute":
+        return flow.unmute.mutate(u.pubkey);
+      case "unban":
+        return tryMutate(flow.unban, u.pubkey);
+      case "ban":
+        return flow.banWithConfirm(u.pubkey, u.profile);
+      case "delete":
+        return flow.deleteWithConfirm(u.pubkey, u.profile);
+    }
+  });
+  const onTag = useStableCallback((tag: string) => setSearch({ tag }));
 
   const once = useInFlight();
   const runBulk = (action: BulkUserRequest["action"], destructive = false) => once(() => runBulkNow(action, destructive));
@@ -121,7 +118,7 @@ function UsersPage() {
       if (!r) return;
       reason = r.input || undefined;
     }
-    if (await tryMutate(flow.bulk, { pubkeys, action, reason, tag })) setSelected(new Set());
+    if (await tryMutate(flow.bulk, { pubkeys, action, reason, tag })) sel.clear();
   };
 
   const activeFilters = [search.status, search.role, search.tag, search.allowed].filter((v) => v !== undefined).length;
@@ -159,10 +156,7 @@ function UsersPage() {
         }
       />
       <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input className="pl-9" placeholder="Search npub, hex, name, nip05, notes…" value={draft} onChange={(e) => setDraft(e.target.value)} />
-        </div>
+        <SearchBox value={search.search} onCommit={(v) => setSearch({ search: v })} />
         {mobile && (
           <Button variant="outline" size="icon" onClick={() => setFiltersOpen(true)} aria-label="Filters" className="relative">
             <Filter />
@@ -185,20 +179,7 @@ function UsersPage() {
         ) : mobile ? (
           <div className="space-y-2">
             {items.map((u) => (
-              <SwipeRow
-                key={u.pubkey}
-                disabled={u.role === "owner"}
-                left={can("users.ban") && u.status !== "banned" ? { label: "Ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => flow.banWithConfirm(u.pubkey, u.profile) } : undefined}
-                right={
-                  u.status === "banned"
-                    ? can("users.ban") ? { label: "Unban", icon: CheckCircle2, className: "bg-emerald-600 text-white", onTrigger: () => flow.unban.mutateAsync(u.pubkey) } : undefined
-                    : !u.allowed && can("users.edit")
-                      ? { label: "Allow", icon: ShieldCheck, className: "bg-emerald-600 text-white", onTrigger: () => flow.patch.mutateAsync({ pubkey: u.pubkey, allowed: true }) }
-                      : undefined
-                }
-              >
-                <UserCardRow u={u} selected={selected.has(u.pubkey)} onSelect={(v) => toggle(u.pubkey, v)} selecting={selected.size > 0} />
-              </SwipeRow>
+              <SwipeUserRow key={u.pubkey} u={u} selected={selected.has(u.pubkey)} selecting={selected.size > 0} onSelect={sel.toggle} onAction={onRowAction} />
             ))}
           </div>
         ) : (
@@ -207,7 +188,7 @@ function UsersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10">
-                    <Checkbox checked={allSelected} onCheckedChange={(v) => setSelected(v === true ? new Set(items.map((u) => u.pubkey)) : new Set())} aria-label="Select all" />
+                    <Checkbox checked={sel.allSelected} onCheckedChange={(v) => sel.setAll(v === true)} aria-label="Select all" />
                   </TableHead>
                   <TableHead>User</TableHead>
                   <TableHead>Status</TableHead>
@@ -219,31 +200,7 @@ function UsersPage() {
               </TableHeader>
               <TableBody>
                 {items.map((u) => (
-                  <TableRow key={u.pubkey} data-state={selected.has(u.pubkey) ? "selected" : undefined}>
-                    <TableCell>
-                      <Checkbox checked={selected.has(u.pubkey)} onCheckedChange={(v) => toggle(u.pubkey, v === true)} aria-label="Select" />
-                    </TableCell>
-                    <TableCell className="max-w-72">
-                      <UserChip pubkey={u.pubkey} profile={u.profile} />
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadges u={u} />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex max-w-56 flex-wrap gap-1">
-                        {u.tags.map((t) => (
-                          <Badge key={t} variant="secondary" className="cursor-pointer font-normal" onClick={() => setSearch({ tag: t })}>
-                            {t}
-                          </Badge>
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatNumber(u.eventCount)}</TableCell>
-                    <TableCell className="text-right text-muted-foreground">{timeAgo(u.lastSeenAt)}</TableCell>
-                    <TableCell>
-                      <RowMenu u={u} flow={flow} />
-                    </TableCell>
-                  </TableRow>
+                  <UserTableRow key={u.pubkey} u={u} selected={selected.has(u.pubkey)} onSelect={sel.toggle} onTag={onTag} onAction={onRowAction} />
                 ))}
               </TableBody>
             </Table>
@@ -252,7 +209,7 @@ function UsersPage() {
         <InfiniteSentinel hasMore={!!q.hasNextPage} loading={q.isFetchingNextPage} paused={q.isFetchNextPageError} onVisible={() => q.fetchNextPage()} />
       </PullToRefresh>
 
-      <SelectionBar count={selected.size} busy={flow.bulk.isPending} onClear={() => setSelected(new Set())}>
+      <SelectionBar count={selected.size} busy={flow.bulk.isPending} onClear={sel.clear}>
         {can("users.ban") && (
           <>
             {(anyActive || anyMuted) && <Button size="sm" variant="ghost" className="rounded-full text-destructive" onClick={() => runBulk("ban", true)}><Ban /> Ban</Button>}
@@ -294,6 +251,69 @@ function UsersPage() {
     </div>
   );
 }
+
+/** Holds the typed search text itself, so typing re-renders only this field, not the list. */
+function SearchBox({ value, onCommit }: { value?: string; onCommit: (v: string | undefined) => void }) {
+  const [draft, setDraft] = useDebouncedSearchParam(value, onCommit);
+  return (
+    <div className="relative flex-1">
+      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input className="pl-9" placeholder="Search npub, hex, name, nip05, notes…" value={draft} onChange={(e) => setDraft(e.target.value)} />
+    </div>
+  );
+}
+
+type RowProps = { u: UserView; selected: boolean; onSelect: (pubkey: string, on: boolean) => void; onAction: (u: UserView, a: RowAction) => unknown };
+
+const UserTableRow = React.memo(function UserTableRow({ u, selected, onSelect, onTag, onAction }: RowProps & { onTag: (tag: string) => void }) {
+  return (
+    <TableRow data-state={selected ? "selected" : undefined}>
+      <TableCell>
+        <Checkbox checked={selected} onCheckedChange={(v) => onSelect(u.pubkey, v === true)} aria-label="Select" />
+      </TableCell>
+      <TableCell className="max-w-72">
+        <UserChip pubkey={u.pubkey} profile={u.profile} />
+      </TableCell>
+      <TableCell>
+        <StatusBadges u={u} />
+      </TableCell>
+      <TableCell>
+        <div className="flex max-w-56 flex-wrap gap-1">
+          {u.tags.map((t) => (
+            <Badge key={t} variant="secondary" className="cursor-pointer font-normal" onClick={() => onTag(t)}>
+              {t}
+            </Badge>
+          ))}
+        </div>
+      </TableCell>
+      <TableCell className="text-right tabular-nums">{formatNumber(u.eventCount)}</TableCell>
+      <TableCell className="text-right text-muted-foreground">{timeAgo(u.lastSeenAt)}</TableCell>
+      <TableCell>
+        <RowMenu u={u} onAction={onAction} />
+      </TableCell>
+    </TableRow>
+  );
+});
+
+const SwipeUserRow = React.memo(function SwipeUserRow({ u, selected, selecting, onSelect, onAction }: RowProps & { selecting: boolean }) {
+  const can = useCan();
+  return (
+    <SwipeRow
+      disabled={u.role === "owner"}
+      left={can("users.ban") && u.status !== "banned" ? { label: "Ban", icon: Ban, className: "bg-red-600 text-white", onTrigger: () => onAction(u, "ban") } : undefined}
+      right={
+        u.status === "banned"
+          ? can("users.ban") ? { label: "Unban", icon: CheckCircle2, className: "bg-emerald-600 text-white", onTrigger: () => onAction(u, "unban") } : undefined
+          : !u.allowed && can("users.edit")
+            ? { label: "Allow", icon: ShieldCheck, className: "bg-emerald-600 text-white", onTrigger: () => onAction(u, "allow") }
+            : undefined
+      }
+    >
+      <UserCardRow u={u} selected={selected} onSelect={(v) => onSelect(u.pubkey, v)} selecting={selecting} />
+    </SwipeRow>
+  );
+});
+
 
 function FilterSelect({ label, value, options, onChange, placeholder }: { label: string; value?: string; options: [string, string][]; onChange: (v: string | undefined) => void; placeholder?: string }) {
   return (
@@ -357,7 +377,7 @@ function UserCardRow({ u, selected, onSelect, selecting }: { u: UserView; select
   );
 }
 
-function RowMenu({ u, flow }: { u: UserView; flow: ReturnType<typeof useBanFlow> }) {
+function RowMenu({ u, onAction }: { u: UserView; onAction: RowProps["onAction"] }) {
   const can = useCan();
   return (
     <DropdownMenu>
@@ -371,27 +391,27 @@ function RowMenu({ u, flow }: { u: UserView; flow: ReturnType<typeof useBanFlow>
           <Link to="/users/$pubkey" params={{ pubkey: u.pubkey }}>Open</Link>
         </DropdownMenuItem>
         {can("users.edit") && (
-          <DropdownMenuItem onSelect={() => flow.patch.mutate({ pubkey: u.pubkey, allowed: !u.allowed })}>{u.allowed ? "Remove from allow-list" : "Allow"}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onAction(u, "toggle-allowed")}>{u.allowed ? "Remove from allow-list" : "Allow"}</DropdownMenuItem>
         )}
         {can("users.ban") && u.role !== "owner" && (
           <>
             <DropdownMenuSeparator />
             {u.status === "muted" ? (
-              <DropdownMenuItem onSelect={() => flow.unmute.mutate(u.pubkey)}>Unmute</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onAction(u, "unmute")}>Unmute</DropdownMenuItem>
             ) : (
-              <DropdownMenuItem onSelect={() => flow.mute.mutate(u.pubkey)}>Mute</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onAction(u, "mute")}>Mute</DropdownMenuItem>
             )}
             {u.status === "banned" ? (
-              <DropdownMenuItem onSelect={() => flow.unban.mutate(u.pubkey)}>Unban</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onAction(u, "unban")}>Unban</DropdownMenuItem>
             ) : (
-              <DropdownMenuItem variant="destructive" onSelect={() => flow.banWithConfirm(u.pubkey, u.profile)}>
+              <DropdownMenuItem variant="destructive" onSelect={() => onAction(u, "ban")}>
                 Ban…
               </DropdownMenuItem>
             )}
           </>
         )}
         {can("users.delete") && u.role !== "owner" && (!u.role || can("admins.manage")) && (
-          <DropdownMenuItem variant="destructive" onSelect={() => flow.deleteWithConfirm(u.pubkey, u.profile)}>
+          <DropdownMenuItem variant="destructive" onSelect={() => onAction(u, "delete")}>
             Delete…
           </DropdownMenuItem>
         )}
