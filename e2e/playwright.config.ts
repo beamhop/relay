@@ -35,5 +35,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 60_000,
     stdout: "pipe",
+    // the default is SIGKILL, which would leave .tmp/<port> (owner key + session cookie) behind
+    gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
   },
 });
