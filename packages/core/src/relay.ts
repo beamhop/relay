@@ -174,7 +174,17 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       else negError(ctx, conn, msg.subId, reason);
       return;
     }
-    const fail = (err: unknown) => logger.error(`${msg.type} handler failed`, { err: String(err) });
+    // a handler that throws still answers (NIP-01: CLOSED / NEG-ERR / OK), and a subscription it registered is cancelled
+    const fail = (err: unknown) => {
+      logger.error(`${msg.type} handler failed`, { err: String(err) });
+      if (conn.closed) return;
+      const reason = "error: internal error";
+      if (msg.type === "REQ" || msg.type === "COUNT") {
+        handleClose(ctx, conn, msg.subId);
+        conn.closedSub(msg.subId, reason);
+      } else if (msg.type === "NEG-OPEN") negError(ctx, conn, msg.subId, reason);
+      else if (msg.type === "AUTH") conn.ok(msg.event.id, false, reason);
+    };
     switch (msg.type) {
       case "EVENT":
         return handleEvent(ctx, conn, msg.event, bytes);

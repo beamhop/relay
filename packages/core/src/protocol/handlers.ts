@@ -117,13 +117,26 @@ async function waitForDrain(conn: Connection, signal?: AbortSignal): Promise<boo
 
 // ------------------------------------------------------------------ rate limiting for reads
 
-type ReadRate = "staff" | "ok" | "limited";
+type ReadRate = "staff" | "ok" | "limited" | "error";
+
+/** Refusal for a read whose rate limit couldn't be determined (the user lookup failed). */
+const READ_RATE_ERROR = "error: internal error";
 
 /**
  * General REQ/COUNT/NEG-OPEN bucket. The burst is capped (REQ_BURST) so a client can't have a whole
- * minute's allowance executed back to back.
+ * minute's allowance executed back to back. "error" when a user lookup failed: the read is refused,
+ * but answered.
  */
 async function readRate(ctx: RelayContext, conn: Connection): Promise<ReadRate> {
+  try {
+    return await takeReadRate(ctx, conn);
+  } catch (err) {
+    ctx.logger.warn("user lookup for read limits failed", { err: String(err) });
+    return "error";
+  }
+}
+
+async function takeReadRate(ctx: RelayContext, conn: Connection): Promise<ReadRate> {
   const def = ctx.s().limits.reqPerMinute;
   let limit = def;
   let override = false;
@@ -620,6 +633,7 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
   if (denied) return conn.closedSub(subId, denied);
   const rate = await readRate(ctx, conn);
   if (rate === "limited") return conn.closedSub(subId, "rate-limited: too many requests");
+  if (rate === "error") return conn.closedSub(subId, READ_RATE_ERROR);
 
   if (conn.subs.size >= L.maxSubscriptions) return conn.closedSub(subId, `rate-limited: too many subscriptions (max ${L.maxSubscriptions})`);
 
@@ -738,6 +752,7 @@ export async function handleCount(ctx: RelayContext, conn: Connection, subId: st
   if (denied) return conn.closedSub(subId, denied);
   const rate = await readRate(ctx, conn);
   if (rate === "limited") return conn.closedSub(subId, "rate-limited: too many requests");
+  if (rate === "error") return conn.closedSub(subId, READ_RATE_ERROR);
   const started = performance.now();
   let hq: { filters: Filter[] } | { reject: string };
   try {
@@ -903,7 +918,9 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   const denied = authReadDenied(ctx, conn);
   if (denied) return negErr(denied);
   if (conn.authedPubkeys.size === 0 && onlyGatedKinds(filter)) return negErr("auth-required: authentication is required to sync direct messages");
-  if ((await readRate(ctx, conn)) === "limited") return negErr("rate-limited: too many requests");
+  const rate = await readRate(ctx, conn);
+  if (rate === "limited") return negErr("rate-limited: too many requests");
+  if (rate === "error") return negErr(READ_RATE_ERROR);
   if (conn.negSessions.size + conn.negOpening >= MAX_NEG_SESSIONS_PER_CONN) {
     return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
   }

@@ -203,7 +203,15 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     }
   }
 
-  await special.after?.();
+  // derived events (relay-signed group metadata, notifications) failing doesn't undo the stored, committed event:
+  // it is still relayed and answered OK
+  if (special.after) {
+    try {
+      await special.after();
+    } catch (err) {
+      ctx.logger.error("post-store step failed", { id: event.id, kind: event.kind, err: String(err) });
+    }
+  }
   const recipients = ctx.broadcast(event);
   ctx.bus.emit("event.broadcast", { event, recipients });
   ctx.bus.emit("event.accepted", { event, status, connId: conn?.id, ip: conn?.ip, source });
