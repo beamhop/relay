@@ -156,14 +156,8 @@ export async function ensureSecrets(config: BeamhopConfig, stores: Stores, logge
   let k = await stores.kv.get<string>(NS, KEY);
   if (!k) {
     const fresh = Buffer.from(generateSecretKey()).toString("hex");
-    if (stores.kv.setIfAbsent) {
-      if (await stores.kv.setIfAbsent(NS, KEY, fresh)) logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
-      k = await stores.kv.get<string>(NS, KEY);
-    } else {
-      await stores.kv.set(NS, KEY, fresh);
-      logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
-      k = fresh;
-    }
+    if (await stores.kv.setIfAbsent(NS, KEY, fresh)) logger.info("generated relay secret key (persisted in kv server/relaySecretKey)");
+    k = await stores.kv.get<string>(NS, KEY);
     if (!k) throw new Error("relay secret key could not be stored in kv server/relaySecretKey");
   }
   config.relaySecretKey = k;
