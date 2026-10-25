@@ -1,8 +1,9 @@
 import { z } from "zod";
-import type { SeriesResponse, TimeRange } from "@beamhop/sdk";
+import type { MetricsRangeQuery, SeriesResponse, TimeRange } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { badRequest } from "../errors";
 import { requirePermission } from "../middleware/auth";
+import type { Same } from "../util/contract";
 import { readQuery } from "../util/request";
 
 const MAX_RANGE_SEC = 400 * 86400;
@@ -11,6 +12,7 @@ const RangeQuery = z.object({
   to: z.coerce.number().int().min(0).optional(),
   step: z.coerce.number().int().min(1).max(86400 * 31).optional(),
 });
+true satisfies Same<z.output<typeof RangeQuery>, MetricsRangeQuery>;
 
 function defaultStep(rangeSec: number): number {
   if (rangeSec <= 2 * 3600) return 60;

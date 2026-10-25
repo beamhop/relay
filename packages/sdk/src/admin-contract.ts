@@ -51,8 +51,25 @@ export interface PasswordLoginRequest { login: string; password: string; totp?: 
  * /events/import) — so another site can't submit forms to the API.
  */
 /** POST /auth/passkey/login/options {login?} → PublicKeyCredentialRequestOptionsJSON; POST /auth/passkey/login/verify {response} */
-/** POST /auth/passkey/register/options → creation options; POST /auth/passkey/register/verify {response, name}; DELETE /auth/passkey/:id */
+export interface PasskeyLoginOptionsRequest { login?: string }
+/** `response`: the WebAuthn credential JSON (AuthenticationResponseJSON / RegistrationResponseJSON) */
+export interface PasskeyVerifyRequest { response: Record<string, unknown> }
+/**
+ * POST /auth/passkey/register/options {currentPassword?} → creation options; POST /auth/passkey/register/verify {response, name?};
+ * DELETE /auth/passkey/:id {currentPassword?}. Adding or removing a factor needs a recent login, NIP-98 or `currentPassword`
+ * (403 reauth_required).
+ */
+export interface ReauthRequest { currentPassword?: string }
+export interface PasskeyRegisterVerifyRequest { response: Record<string, unknown>; name?: string }
 /** POST /auth/password/set {password, currentPassword?}; POST /auth/logout */
+export interface PasswordSetRequest { password: string; currentPassword?: string }
+/**
+ * TOTP: POST /auth/totp/setup {code?, currentPassword?} → TotpSetupResponse (`code`: one from the active authenticator
+ * when replacing it); POST /auth/totp/enable {code}; POST /auth/totp/disable {code}
+ */
+export interface TotpSetupRequest { code?: string; currentPassword?: string }
+export interface TotpSetupResponse { secret: string; uri: string }
+export interface TotpCodeRequest { code: string }
 /** GET /auth/me */
 export interface Me {
   pubkey: string;
@@ -90,6 +107,9 @@ export type GeoResponse = { items: GeoPoint[] };
 
 /** GET /connections → {items: ConnectionSummary & {geo?}} ; DELETE /connections/:id ; POST /connections/disconnect {pubkey?|ip?} */
 export type ConnectionView = ConnectionSummary & { geo?: { country: string; city?: string } };
+export interface DisconnectRequest { pubkey?: string; ip?: string }
+/** the time range of GET /metrics/* (unix seconds; default the last 24 h, step chosen from the range) */
+export interface MetricsRangeQuery { from?: number; to?: number; step?: number }
 
 // ------------------------------------------------------------- users
 /** GET /users?search&status&role&tag&allowed&sort&limit&offset → Paged<UserView> */
@@ -122,13 +142,16 @@ export interface BulkResult {
   remaining?: string[];
 }
 /** GET /users/:pubkey/events?limit&until&kinds=1,7 → {items: NostrEvent[]} */
-/** POST /users  {pubkey, allowed?, notes?, tags?} — add user manually (e.g. allowlist) */
+export interface UserEventsQuery { limit?: number; until?: number; /** comma-separated */ kinds?: string }
+/** POST /users  {pubkey, allowed?, notes?, tags?} — add user manually (e.g. allowlist) → UserView */
+export interface AddUserRequest { pubkey: string; allowed?: boolean; notes?: string; tags?: string[] }
 
 /** GET /admins → {items: UserView[]} users with a role */
 
 // ------------------------------------------------------------- invites & ip rules
 /** GET /invites → {items: InviteView[]}; POST /invites {maxUses?, expiresAt?, note?, count?} → {items: InviteView[]}; DELETE /invites/:code */
 export type InviteView = Invite & { url: string };
+export interface InviteCreateRequest { maxUses?: number; expiresAt?: number | null; note?: string; count?: number }
 /**
  * GET /ip-rules → {items: IpRule[]}; POST /ip-rules IpRuleInput; DELETE /ip-rules/:cidr (url-encoded).
  * An allow rule exempts matching addresses from per-IP limits and overrides block rules; one wider than an IPv4 /16
@@ -141,7 +164,8 @@ export type IpRuleInput = Omit<IpRule, "createdAt"> & { confirmBroad?: boolean }
 export interface EventQueryRequest { filters: Filter[]; limit?: number }
 export interface EventQueryResponse { items: EventView[] }
 export interface EventView { event: NostrEvent; author?: Profile; reports: number }
-/** GET /events/:id → EventView ; DELETE /events/:id {reason?} */
+/** GET /events/:id → EventView ; DELETE /events/:id {reason?} → {deleted} */
+export interface EventDeleteOneRequest { reason?: string }
 /** POST /events/delete */
 export interface EventDeleteRequest { ids?: string[]; filters?: Filter[]; reason?: string }
 /** POST /events/import  body: JSONL (one event per line), ?bypassPolicies=true → ImportResult */
@@ -161,6 +185,7 @@ export interface EventBanView {
   /** role it was placed with (null: recorded before roles were) */
   byRole: AdminRole | null;
 }
+export interface EventBanListQuery { limit?: number }
 export interface EventBanListResponse { items: EventBanView[] }
 export interface EventBanLiftRequest { reason?: string }
 
@@ -187,9 +212,11 @@ export interface ReportView {
   relatedCount: number;
 }
 /** GET /reports?status&type&target&limit&offset → Paged<ReportView>; a pubkey `target` matches ReportView.targetPubkey (the content's author), not the report's `p` tag */
+export interface ReportListQuery { status?: ReportStatus; type?: string; target?: string; limit?: number; offset?: number }
 /** POST /reports/:id/resolve */
 export interface ResolveReportRequest { action: "dismiss" | "delete-event" | "ban-user" | "delete-and-ban" | "delete-media"; note?: string }
 /** POST /reports/bulk-resolve {ids: string[], action, note?} → ReportBulkResult */
+export interface ReportBulkResolveRequest { ids: string[]; action: ResolveReportRequest["action"]; note?: string }
 export interface ReportBulkResult { ok: number; failed: { id: string; error: string }[] }
 
 // ------------------------------------------------------------- media (blossom)
@@ -219,12 +246,19 @@ export type GroupView = GroupSummary;
 export type PluginView = PluginInfo;
 
 // ------------------------------------------------------------- audit
-/** GET /audit?actor&action&target&before&limit → {items: AuditEntry[]} */
+/** GET /audit?actor&action&target&before&limit → {items: AuditEntry[]} (`before`: an entry id cursor) */
 export type AuditView = AuditEntry;
+export interface AuditListQuery { actor?: string; action?: string; target?: string; before?: number; limit?: number }
 
 // ------------------------------------------------------------- push notifications
 /** GET /push/vapid → {publicKey: string | null}; POST /push/subscribe {subscription: PushSubscriptionJSON, topics?: PushTopic[]}; POST /push/unsubscribe {endpoint} */
 export type PushTopic = "reports" | "alerts";
+/** `subscription`: PushSubscription.toJSON(); `topics` default: all the admin's permissions allow */
+export interface PushSubscribeRequest {
+  subscription: { endpoint: string; expirationTime?: number | null; keys: { p256dh: string; auth: string } };
+  topics?: PushTopic[];
+}
+export interface PushUnsubscribeRequest { endpoint: string }
 /** "reports" pushes are coalesced: at most one per minute per device, the reports filed meanwhile arrive as one digest. */
 
 // ------------------------------------------------------------- SSE  GET /stream?events=1&kinds=1,7

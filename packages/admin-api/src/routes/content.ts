@@ -1,5 +1,16 @@
 import { z } from "zod";
-import type { EventBanLiftRequest, EventBanListResponse, EventView, Filter, ImportResult, NostrEvent } from "@beamhop/sdk";
+import type {
+  EventBanLiftRequest,
+  EventBanListQuery,
+  EventBanListResponse,
+  EventDeleteOneRequest,
+  EventDeleteRequest,
+  EventQueryRequest,
+  EventView,
+  Filter,
+  ImportResult,
+  NostrEvent,
+} from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, forbidden, HttpError, notFound } from "../errors";
@@ -9,7 +20,7 @@ import { FiltersSchema, isConstrained, parseFiltersParam } from "../util/filters
 import { isNostrEventShape, isValidSignedEvent } from "../util/nip98";
 import { parseEventId } from "../util/pubkey";
 import { BAN_LIST_MAX } from "../services/banned-events";
-import type { Same } from "../util/contract";
+import type { Same, SameFields } from "../util/contract";
 import { readBody, readQuery } from "../util/request";
 
 const MAX_QUERY_LIMIT = 500;
@@ -36,9 +47,13 @@ const DeleteOne = z.object({ reason: z.string().max(1000).optional() });
 const BanLift = DeleteOne;
 true satisfies Same<z.output<typeof BanLift>, EventBanLiftRequest>;
 const BanListQuery = z.object({ limit: z.coerce.number().int().min(1).max(BAN_LIST_MAX).default(1000) });
+true satisfies SameFields<z.output<typeof BanListQuery>, EventBanListQuery>;
 const DeleteMany = z
   .object({ ids: z.array(z.string()).max(10_000).optional(), filters: FiltersSchema.optional(), reason: z.string().max(1000).optional() })
   .refine((b) => (b.ids?.length ?? 0) > 0 || (b.filters?.length ?? 0) > 0, "ids or filters required");
+true satisfies Same<z.output<typeof QuerySchema>, EventQueryRequest> &
+  Same<z.output<typeof DeleteOne>, EventDeleteOneRequest> &
+  Same<z.output<typeof DeleteMany>, EventDeleteRequest>;
 
 export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
   const { stores, relay, bus } = ctx.deps;

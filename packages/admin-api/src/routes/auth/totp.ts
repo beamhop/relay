@@ -1,18 +1,21 @@
 import { nip19 } from "nostr-tools";
 import { z } from "zod";
+import type { TotpCodeRequest, TotpSetupRequest, TotpSetupResponse } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../../context";
 import { principalOf } from "../../context";
 import { badRequest } from "../../errors";
 import { requireAdmin } from "../../middleware/auth";
 import type { LoginGuard } from "../../services/login-guard";
+import type { Same } from "../../util/contract";
 import { ExpiringMap } from "../../util/lru";
 import { readBody } from "../../util/request";
 import { generateTotpSecret, totpStep, totpUri } from "../../util/totp";
 
 const TotpCode = z.object({ code: z.string().min(6).max(16) });
 const TotpSetup = z.object({ code: z.string().min(6).max(16).optional(), currentPassword: z.string().max(1024).optional() });
+true satisfies Same<z.output<typeof TotpCode>, TotpCodeRequest> & Same<z.output<typeof TotpSetup>, TotpSetupRequest>;
 
-/** TOTP (extension, not in admin-contract): setup → enable(code) ; disable(code) */
+/** TOTP: setup → enable(code) ; disable(code) */
 export function registerTotpRoutes(app: AdminApp, ctx: ApiContext, guard: LoginGuard) {
   /** pending TOTP secrets, bound to the session that passed setup's checks (null: NIP-98) */
   const pendingTotp = new ExpiringMap<{ secret: string; session: string | null }>(1000, ctx.nowMs);
@@ -35,7 +38,8 @@ export function registerTotpRoutes(app: AdminApp, ctx: ApiContext, guard: LoginG
     const secret = generateTotpSecret();
     if (!pendingTotp.set(p.pubkey, { secret, session: p.session?.id ?? null }, 10 * 60_000)) throw guard.busy();
     const label = nip19.npubEncode(p.pubkey).slice(0, 16);
-    return c.json({ secret, uri: totpUri(secret, label, ctx.deps.settings.get().info.name || "beamhop") });
+    const body: TotpSetupResponse = { secret, uri: totpUri(secret, label, ctx.deps.settings.get().info.name || "beamhop") };
+    return c.json(body);
   });
 
   app.post("/auth/totp/enable", requireAdmin(), async (c) => {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { PasswordLoginRequest } from "@beamhop/sdk";
+import type { PasswordLoginRequest, PasswordSetRequest } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../../context";
 import { principalOf } from "../../context";
 import { badRequest, forbidden, unauthorized } from "../../errors";
@@ -15,6 +15,7 @@ const FRESH_NOSTR_LOGIN_SEC = 10 * 60;
 const PasswordLogin = z.object({ login: z.string().min(1).max(200), password: z.string().min(1).max(1024), totp: z.string().max(16).optional() });
 true satisfies Same<z.output<typeof PasswordLogin>, PasswordLoginRequest>;
 const PasswordSet = z.object({ password: z.string().min(8, "password must be at least 8 characters").max(1024), currentPassword: z.string().max(1024).optional() });
+true satisfies Same<z.output<typeof PasswordSet>, PasswordSetRequest>;
 
 /** Password login (with TOTP when enabled) and setting / changing the password. */
 export function registerPasswordRoutes(app: AdminApp, ctx: ApiContext, guard: LoginGuard, startSession: StartSession) {

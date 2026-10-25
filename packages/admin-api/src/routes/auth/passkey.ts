@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
+import type { PasskeyLoginOptionsRequest, PasskeyRegisterVerifyRequest, PasskeyVerifyRequest, ReauthRequest } from "@beamhop/sdk";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { nip19 } from "nostr-tools";
 import {
@@ -15,6 +16,7 @@ import { principalOf } from "../../context";
 import { badRequest, notFound, unauthorized } from "../../errors";
 import { requireAdmin } from "../../middleware/auth";
 import { CHALLENGE_TTL_MS, type LoginGuard, nip05Name, SignedTokens } from "../../services/login-guard";
+import type { Same } from "../../util/contract";
 import { ExpiringMap } from "../../util/lru";
 import { readBody } from "../../util/request";
 import { buildMe, type StartSession } from "./session";
@@ -34,8 +36,12 @@ const DECOY_SHAPES: { bytes: number; transports: string[] }[] = [
 const PasskeyLoginOptions = z.object({ login: z.string().max(200).optional() });
 const PasskeyVerify = z.object({ response: z.record(z.string(), z.unknown()) });
 const PasskeyRegisterVerify = z.object({ response: z.record(z.string(), z.unknown()), name: z.string().max(100).optional() });
-const PasskeyRegisterOptions = z.object({ currentPassword: z.string().max(1024).optional() });
-const PasskeyDelete = z.object({ currentPassword: z.string().max(1024).optional() });
+/** register/options and DELETE /auth/passkey/:id */
+const Reauth = z.object({ currentPassword: z.string().max(1024).optional() });
+true satisfies Same<z.output<typeof PasskeyLoginOptions>, PasskeyLoginOptionsRequest> &
+  Same<z.output<typeof PasskeyVerify>, PasskeyVerifyRequest> &
+  Same<z.output<typeof PasskeyRegisterVerify>, PasskeyRegisterVerifyRequest> &
+  Same<z.output<typeof Reauth>, ReauthRequest>;
 
 /** Passkeys (WebAuthn): registration and removal inside a session, and passkey login. */
 export function registerPasskeyRoutes(app: AdminApp, ctx: ApiContext, guard: LoginGuard, startSession: StartSession) {
@@ -60,7 +66,7 @@ export function registerPasskeyRoutes(app: AdminApp, ctx: ApiContext, guard: Log
 
   app.post("/auth/passkey/register/options", requireAdmin(), async (c) => {
     const p = principalOf(c);
-    const { currentPassword } = await readBody(c, PasskeyRegisterOptions);
+    const { currentPassword } = await readBody(c, Reauth);
     await guard.requireFreshAuth(p, currentPassword, "add a passkey");
     const existing = await ctx.credentials.listPasskeys(p.pubkey);
     const profile = await ctx.profiles.get(p.pubkey);
@@ -168,7 +174,7 @@ export function registerPasskeyRoutes(app: AdminApp, ctx: ApiContext, guard: Log
   app.delete("/auth/passkey/:id", requireAdmin(), async (c) => {
     const p = principalOf(c);
     const id = c.req.param("id");
-    const { currentPassword } = await readBody(c, PasskeyDelete);
+    const { currentPassword } = await readBody(c, Reauth);
     // removing passkeys can lock the owner out: same proof as adding one
     await guard.requireFreshAuth(p, currentPassword, "remove a passkey");
     if (!(await ctx.credentials.deletePasskey(p.pubkey, id))) throw notFound("passkey not found");

@@ -1,9 +1,11 @@
 import { isIP } from "node:net";
 import { z } from "zod";
+import type { IpRuleInput } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { badRequest, notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
+import type { SameFields } from "../util/contract";
 import { ipv6Groups } from "../util/ip";
 import { readBody } from "../util/request";
 
@@ -45,6 +47,7 @@ const IpRuleSchema = z.object({
   /** acknowledges an allow rule wider than an IPv4 /16 or an IPv6 /48 */
   confirmBroad: z.boolean().optional(),
 });
+true satisfies SameFields<z.output<typeof IpRuleSchema>, IpRuleInput>;
 
 const addressCount = (hostBits: number) => (hostBits <= 32 ? (2 ** hostBits).toLocaleString("en-US") : `2^${hostBits}`);
 

@@ -1,9 +1,10 @@
 import { z } from "zod";
-import type { Invite, InviteView } from "@beamhop/sdk";
+import type { Invite, InviteCreateRequest, InviteView } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
 import { notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
+import type { SameFields } from "../util/contract";
 import { readBody } from "../util/request";
 
 const CreateSchema = z.object({
@@ -12,6 +13,7 @@ const CreateSchema = z.object({
   note: z.string().max(1000).optional(),
   count: z.number().int().min(1).max(100).default(1),
 });
+true satisfies SameFields<z.output<typeof CreateSchema>, InviteCreateRequest>;
 
 export function registerInviteRoutes(app: AdminApp, ctx: ApiContext) {
   const { invites } = ctx.deps.stores;
