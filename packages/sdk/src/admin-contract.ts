@@ -112,7 +112,15 @@ export interface BulkUserRequest {
   reason?: string;
   tag?: string;
 }
-export interface BulkResult { ok: number; failed: { pubkey: string; error: string }[] }
+export interface BulkResult {
+  ok: number;
+  failed: { pubkey: string; error: string }[];
+  /**
+   * Present only when the action stopped early (its time budget ran out, or the client went away): the inputs not
+   * reached, to which nothing was done — resend them
+   */
+  remaining?: string[];
+}
 /** GET /users/:pubkey/events?limit&until&kinds=1,7 → {items: NostrEvent[]} */
 /** POST /users  {pubkey, allowed?, notes?, tags?} — add user manually (e.g. allowlist) */
 

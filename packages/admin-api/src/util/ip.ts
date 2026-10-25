@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { networkInterfaces } from "node:os";
 
 /** Expands an IPv6 address to 8 hextets (embedded dotted IPv4 tail allowed); null if it doesn't parse. */
 export function ipv6Groups(ip: string): number[] | null {
@@ -52,3 +53,40 @@ export function isPrivateIp(ip: string): boolean {
   if (g[0] === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // discard-only
   return (g[0] & 0xfe00) === 0xfc00 || (g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0 || (g[0] & 0xff00) === 0xff00;
 }
+
+const OWN_ADDRESSES_TTL_MS = 60_000;
+let ownAddresses: { at: number; set: Set<string> } | undefined;
+/** for tests: the interface list to use instead of the host's (null: back to the host's) */
+export function setOwnAddressesForTest(list: string[] | null): void {
+  ownAddresses = list ? { at: Infinity, set: new Set(list.map(canonicalIp)) } : undefined;
+}
+
+/** One spelling per address: IPv6 as its 8 hextets, an IPv4-mapped IPv6 (`::ffff:a.b.c.d`) as the IPv4. */
+function canonicalIp(ip: string): string {
+  const bare = ip.toLowerCase().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  if (isIP(bare) !== 6) return bare;
+  const g = ipv6Groups(bare);
+  if (!g) return bare;
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return v4Of(g[6], g[7]);
+  return g.map((x) => x.toString(16)).join(":");
+}
+
+/**
+ * Addresses bound to this host's interfaces — including a public IP on a VPS, which no range check catches but which
+ * reaches the host's own services (as blossom's mirror guard also refuses). Re-read once a minute.
+ */
+export function isOwnAddress(ip: string): boolean {
+  if (!ownAddresses || Date.now() - ownAddresses.at > OWN_ADDRESSES_TTL_MS) {
+    const set = new Set<string>();
+    try {
+      for (const list of Object.values(networkInterfaces())) for (const a of list ?? []) set.add(canonicalIp(a.address));
+    } catch {
+      /* unavailable (sandbox): the range checks still apply */
+    }
+    ownAddresses = { at: Date.now(), set };
+  }
+  return ownAddresses.set.has(canonicalIp(ip));
+}
+
+/** Where the server must never send requests on a user's behalf: non-public ranges and this host's own addresses. */
+export const isForbiddenDestination = (ip: string): boolean => isPrivateIp(ip) || isOwnAddress(ip);

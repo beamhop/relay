@@ -103,6 +103,37 @@ CREATE INDEX IF NOT EXISTS admin_used_auth_expires ON admin_used_auth (expires_a
     id: "007_banned_event_role",
     up: "ALTER TABLE admin_banned_events ADD COLUMN by_role TEXT",
   },
+  {
+    // deliveries in a row a push service refused with 400/401/403; the device is dropped at MAX_PUSH_FAILURES
+    id: "008_push_failures",
+    up: "ALTER TABLE admin_push_subscriptions ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    // one row per stored report (kind 1984) with what the queue filters on, so listing, filters, counts and paging run
+    // in SQL over every report. Filled from bus "report.created" and backfilled once from the event store (see
+    // ReportService.backfill); `status` mirrors admin_report_status ('open' without a row there)
+    id: "009_report_index",
+    up: `
+CREATE TABLE IF NOT EXISTS admin_report_index (
+  id TEXT PRIMARY KEY,
+  created_at BIGINT NOT NULL,
+  reporter TEXT NOT NULL,
+  type TEXT NOT NULL,
+  target_key TEXT NOT NULL,
+  target_event TEXT,
+  target_blob TEXT,
+  subject_pubkey TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open'
+);
+CREATE INDEX IF NOT EXISTS admin_report_index_created ON admin_report_index (created_at);
+CREATE INDEX IF NOT EXISTS admin_report_index_status ON admin_report_index (status, created_at);
+CREATE INDEX IF NOT EXISTS admin_report_index_type ON admin_report_index (type, created_at);
+CREATE INDEX IF NOT EXISTS admin_report_index_target ON admin_report_index (target_key, status);
+CREATE INDEX IF NOT EXISTS admin_report_index_event ON admin_report_index (target_event);
+CREATE INDEX IF NOT EXISTS admin_report_index_blob ON admin_report_index (target_blob);
+CREATE INDEX IF NOT EXISTS admin_report_index_subject ON admin_report_index (subject_pubkey, created_at);
+`,
+  },
 ];
 
 export async function migrateAdmin(db: Db): Promise<void> {

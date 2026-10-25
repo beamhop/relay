@@ -6,6 +6,7 @@ import type { ProfileService } from "./services/profiles";
 import type { ReportService } from "./services/reports";
 import type { PushSender, PushService } from "./services/push";
 import type { UserService } from "./services/users";
+import type { ModerationService } from "./services/moderation";
 import type { CredentialService } from "./services/credentials";
 import type { ReplayGuard } from "./services/replay";
 import type { PasswordHasher, ScryptParams } from "./util/password";
@@ -43,8 +44,12 @@ export interface AdminApiOptions {
   importMaxBytes?: number;
   /** minimum time between two report push notifications; reports in between are sent as one digest. Default 60000 */
   reportPushIntervalMs?: number;
+  /** the same for alerts, per level and title: the first is pushed, the rest of the interval as one digest. Default 60000 */
+  alertPushIntervalMs?: number;
   /** how long (ms) the banned-event id cache is trusted before it is re-read from the database, default 5000 */
   bannedEventsTtlMs?: number;
+  /** time budget (ms) of one POST /users/bulk; targets not reached by then are returned as `remaining`. Default 20000 */
+  bulkBudgetMs?: number;
 }
 
 export interface ApiContext {
@@ -64,6 +69,8 @@ export interface ApiContext {
   users: UserService;
   reports: ReportService;
   push: PushService;
+  /** ban/unban, IP rules, user deletion: the effects every moderation path shares */
+  moderation: ModerationService;
   credentials: CredentialService;
   passwords: PasswordHasher;
   /** NIP-98 event ids already used (replay protection, shared through the database) */
