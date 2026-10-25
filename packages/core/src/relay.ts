@@ -45,6 +45,7 @@ import { UserCache } from "./users";
 import { randomHex } from "./util/hex";
 import { Lru } from "./util/lru";
 import { RateLimiter } from "./util/rate-limit";
+import { ipSiteKey } from "./util/cidr";
 import { toWsUrl } from "./util/url";
 
 const IP_RULES_REFRESH_MS = 30_000;
@@ -54,6 +55,8 @@ const EXPIRATION_PURGE_MS = 60_000;
  * may hold this many times that in total.
  */
 const V6_PREFIX_CONNECTION_FACTOR = 4;
+/** An IPv6 /48 (a site: many /64s) may hold this many times connectionsPerIp, unless limits.connectionsPerIpv6Site is set. */
+const V6_SITE_CONNECTION_FACTOR = 16;
 /** A connection refused more than this many times its message limit within a minute is closed. */
 const OVER_LIMIT_CLOSE_FACTOR = 3;
 /** CLOSE / NEG-CLOSE skip the message limit only up to this size (a subscription id is at most 64 chars). */
@@ -115,9 +118,15 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   }
   await ctx.ipRules.refresh();
 
-  /** open connections per address and (IPv6) per /64 */
+  /** open connections per address and (IPv6) per /64 and per /48 */
   const ipCounts = new Map<string, number>();
-  const countKeys = (conn: Connection) => (conn.addrKey === conn.ipKey ? [conn.addrKey] : [conn.addrKey, conn.ipKey]);
+  const countKeys = (conn: Connection) => (conn.addrKey === conn.ipKey ? [conn.addrKey] : [conn.addrKey, conn.ipKey, ipSiteKey(conn.ip) ?? conn.ipKey]);
+  /** caps for countKeys(conn), in the same order (0 = unlimited) */
+  const countCaps = (keys: string[]) => {
+    const L = ctx.s().limits;
+    const max = L.connectionsPerIp;
+    return keys.length === 1 ? [max] : [max, max * V6_PREFIX_CONNECTION_FACTOR, L.connectionsPerIpv6Site ?? max * V6_SITE_CONNECTION_FACTOR];
+  };
   const scheduler = new Scheduler(logger);
   let stopped = false;
 
@@ -263,10 +272,14 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     };
     if (stopped) return reject("error: relay is shutting down", "shutting down");
     if (verdict.blocked) return reject(`blocked: ${verdict.reason ?? "your IP address is blocked"}`, "blocked");
-    const max = ctx.s().limits.connectionsPerIp;
     const keys = countKeys(conn);
-    const over = keys.some((k, i) => (ipCounts.get(k) ?? 0) >= (i === 0 ? max : max * V6_PREFIX_CONNECTION_FACTOR));
-    if (!verdict.allowed && max > 0 && over) return reject("rate-limited: too many connections from your IP address", "too many connections");
+    if (!verdict.allowed) {
+      const maxConnections = ctx.s().limits.maxConnections;
+      if (maxConnections > 0 && conns.size >= maxConnections) return reject("rate-limited: relay has too many connections, try again later", "relay full");
+      const caps = countCaps(keys);
+      const over = keys.some((k, i) => caps[i] > 0 && (ipCounts.get(k) ?? 0) >= caps[i]);
+      if (over) return reject("rate-limited: too many connections from your IP address", "too many connections");
+    }
     for (const k of keys) ipCounts.set(k, (ipCounts.get(k) ?? 0) + 1);
     conns.set(id, conn);
     const state = { done: false };

@@ -212,6 +212,12 @@ export const RuntimeSettingsSchema = z.object({
       eventsPerMinute: z.number().int().min(0).default(120),
       reqPerMinute: z.number().int().min(0).default(240),
       connectionsPerIp: z.number().int().min(0).default(20),
+      /** open connections from one IPv6 /48 (a site), all its addresses together; unset = 16 × connectionsPerIp, 0 = unlimited */
+      connectionsPerIpv6Site: z.number().int().min(0).optional(),
+      /** open connections relay-wide (0 = unlimited); allow-listed IPs are exempt */
+      maxConnections: z.number().int().min(0).default(0),
+      /** filter values held by all open subscriptions together (live fan-out index), relay-wide; 0 = unlimited */
+      maxTotalFilterWeight: z.number().int().min(0).default(5_000_000),
     })
     .prefault({}),
   moderation: z

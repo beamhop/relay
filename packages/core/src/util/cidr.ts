@@ -113,6 +113,12 @@ export function ipKey(ip: string): string {
   return p.v === 4 ? `4:${p.value.toString(16)}` : `6:${(p.value >> 64n).toString(16)}/64`;
 }
 
+/** Key of an IPv6 address's /48 (typically one site or customer); undefined for IPv4 and unparsable input. */
+export function ipSiteKey(ip: string): string | undefined {
+  const p = parseIp(ip);
+  return p?.v === 6 ? `6:${(p.value >> 80n).toString(16)}/48` : undefined;
+}
+
 /** Canonical key for one address (IPv4-mapped forms collapse to IPv4); unlike ipKey(), IPv6 is not aggregated. */
 export function ipAddrKey(ip: string): string {
   const p = parseIp(ip);

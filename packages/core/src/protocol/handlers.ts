@@ -703,6 +703,10 @@ export async function handleReq(ctx: RelayContext, conn: Connection, subId: stri
     // not retryable as is: the client has to close subscriptions or send smaller filters
     return conn.closedSub(subId, `restricted: too many filter values across this connection's subscriptions (max ${MAX_FILTER_WEIGHT_PER_CONN})`);
   }
+  // relay-wide, the fan-out index is bounded too (transient: subscriptions elsewhere close)
+  if (L.maxTotalFilterWeight > 0 && ctx.subs.weight + weight > L.maxTotalFilterWeight) {
+    return conn.closedSub(subId, "rate-limited: relay holds too many subscriptions, try again later");
+  }
   let search: SearchCharge | null = null;
   if (filters.some((f) => f.limit !== 0 && isSearchFilter(f))) {
     const admitted = admitSearch(ctx, conn, rate === "staff");
