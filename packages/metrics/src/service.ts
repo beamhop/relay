@@ -26,9 +26,12 @@ export interface MetricsOptions {
   alerts?: Partial<AlertOptions>;
   tickIntervalMs?: number;
   flushIntervalMs?: number;
-  /** refresh interval for expensive store stats (event count / db size / media) */
+  /**
+   * refresh interval for expensive store stats (event COUNT / db size / media); default 60 s. Between refreshes the
+   * event total follows accepted events in memory.
+   */
   statsIntervalMs?: number;
-  /** after stored events or blobs change, store stats refresh this soon instead of waiting out statsIntervalMs */
+  /** after blobs change, media stats refresh this soon instead of waiting out statsIntervalMs */
   statsDirtyMs?: number;
   /** max distinct pubkeys tracked per flush interval (memory bound) */
   maxPubkeysPerBucket?: number;
@@ -71,6 +74,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     topPubkeysPerHour: opts.topPubkeysPerHour ?? 1000,
     maxRejectionReasonsPerHour: opts.maxRejectionReasonsPerHour,
     onDropped: (message) => logger.error(message),
+    now,
   });
   const collector = new Collector(startedAt, rollup, geo);
   collector.attach(bus);
@@ -85,17 +89,26 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     },
   );
 
-  const stats = { totalEvents: 0, dbBytes: 0, mediaBytes: 0, mediaCount: 0, at: -Infinity, inflight: false, dirty: false };
-  // stored events / blobs changed: the totals are stale, so refresh sooner than statsMs
+  const stats = {
+    totalEvents: 0, dbBytes: 0, mediaBytes: 0, mediaCount: 0, at: -Infinity, mediaAt: -Infinity, inflight: false,
+    mediaInflight: false, mediaDirty: false,
+    /** events stored since startup (counted from the bus), to carry the total between COUNTs */
+    accepted: 0,
+  };
+  // The event total is a COUNT(*) over the events table (a full index scan on SQLite): it runs every statsMs only,
+  // and newly stored events are added in memory meanwhile (deletions show up at the next COUNT). Blob changes
+  // refresh the (cheaper) media stats sooner.
   let statsUnsubs: (() => void)[] = [];
   const watchStores = () => {
     if (statsUnsubs.length) return;
-    const markDirty = () => void (stats.dirty = true);
     statsUnsubs = [
-      bus.on("event.accepted", (p) => p.status !== "ephemeral" && markDirty()),
-      bus.on("event.deleted", markDirty),
-      bus.on("blob.uploaded", markDirty),
-      bus.on("blob.deleted", markDirty),
+      bus.on("event.accepted", (p) => {
+        if (p.status !== "saved") return; // "replaced" swaps one stored event for another
+        stats.accepted++;
+        stats.totalEvents++;
+      }),
+      bus.on("blob.uploaded", () => void (stats.mediaDirty = true)),
+      bus.on("blob.deleted", () => void (stats.mediaDirty = true)),
     ];
   };
   watchStores();
@@ -113,29 +126,42 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
   async function refreshStats() {
     if (stats.inflight) return;
     stats.inflight = true;
-    stats.dirty = false;
     stats.at = now();
+    const acceptedBefore = stats.accepted;
     try {
-      const [ev, media] = await Promise.all([
+      const [ev] = await Promise.all([
         stores.events.stats().catch((err) => {
           logger.warn("event store stats failed", { error: String(err) });
           return undefined;
         }),
-        blossom?.stats().catch((err) => {
-          logger.warn("blossom stats failed", { error: String(err) });
-          return undefined;
-        }),
+        refreshMedia(),
       ]);
       if (ev) {
-        stats.totalEvents = ev.total;
+        // events stored while the COUNT was in flight may be missing from it
+        stats.totalEvents = ev.total + (stats.accepted - acceptedBefore);
         stats.dbBytes = ev.sizeBytes;
       }
+    } finally {
+      stats.inflight = false;
+    }
+  }
+
+  async function refreshMedia() {
+    if (!blossom || stats.mediaInflight) return;
+    stats.mediaInflight = true;
+    stats.mediaDirty = false;
+    stats.mediaAt = now();
+    try {
+      const media = await blossom.stats().catch((err) => {
+        logger.warn("blossom stats failed", { error: String(err) });
+        return undefined;
+      });
       if (media) {
         stats.mediaBytes = media.bytes;
         stats.mediaCount = media.count;
       }
     } finally {
-      stats.inflight = false;
+      stats.mediaInflight = false;
     }
   }
 
@@ -165,7 +191,8 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     const lag = loopLag();
     const [p50, p95, p99] = collector.latency.percentiles(t, 60_000, [50, 95, 99]);
 
-    if (t - stats.at >= (stats.dirty ? statsDirtyMs : statsMs)) void refreshStats().catch(() => {});
+    if (t - stats.at >= statsMs) void refreshStats().catch(() => {});
+    else if (stats.mediaDirty && t - stats.mediaAt >= statsDirtyMs) void refreshMedia().catch(() => {});
 
     snap = {
       at: Math.floor(t / 1000),

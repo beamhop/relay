@@ -105,6 +105,9 @@ export class FakeEventStore implements EventStore {
     const evs = await this.query(filters.map((f) => ({ ...f, limit: f.limit ?? 1e9 })), { maxLimit: 1e9 });
     return this.deleteByIds(evs.map((e) => e.id));
   }
+  async trimPubkey() {
+    return { deleted: 0, remaining: 0 };
+  }
   async deleteByPubkey(pubkey: string) {
     return this.deleteByFilter([{ authors: [pubkey] }]);
   }

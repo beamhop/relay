@@ -47,6 +47,23 @@ test("defaults, update merge, persistence, audit, bus + listeners", async () => 
   expect(again.get().moderation.kindBlocklist).toEqual([7]);
 });
 
+test("a failing audit write does not keep a persisted update from listeners and the bus", async () => {
+  const bus = new EventBus();
+  const settings = await createSettingsService(stores, bus);
+  let notified = 0;
+  let emitted = 0;
+  settings.onChange(() => notified++);
+  bus.on("settings.changed", () => void emitted++);
+  stores.audit.record = async () => {
+    throw new Error("audit table locked");
+  };
+  const next = await settings.update({ limits: { maxSubscriptions: 7 } }, "admin");
+  expect(next.limits.maxSubscriptions).toBe(7);
+  expect(settings.get().limits.maxSubscriptions).toBe(7);
+  expect({ notified, emitted }).toEqual({ notified: 1, emitted: 1 });
+  expect((await stores.kv.get<RuntimeSettings>("settings", "runtime"))?.limits.maxSubscriptions).toBe(7);
+});
+
 test("invalid updates are rejected and do not change state", async () => {
   const settings = await createSettingsService(stores, new EventBus());
   await expect(settings.update({ access: { mode: "nope" as never } }, "x")).rejects.toThrow();

@@ -16,7 +16,8 @@ export interface QueryOptions {
 
 export interface EventStoreStats {
   total: number;
-  byKind: { kind: number; count: number }[];
+  /** only with `stats({ byKind: true })` (a full scan of the events table) */
+  byKind?: { kind: number; count: number }[];
   sizeBytes: number;
 }
 
@@ -37,12 +38,24 @@ export interface EventStore {
   applyDeletion(deletion: NostrEvent): Promise<number>;
   /** Admin deletion, no ownership check. With `tombstone` (a reason / deletion id) the ids can't be re-published. */
   deleteByIds(ids: string[], opts?: { tombstone?: string }): Promise<number>;
-  deleteByFilter(filters: Filter[]): Promise<number>;
+  /**
+   * Each filter's `limit` bounds the number of newest matches removed. `exceptAuthors`: events of these pubkeys
+   * are kept (retention exemptions).
+   */
+  deleteByFilter(filters: Filter[], opts?: { exceptAuthors?: string[] }): Promise<number>;
+  /**
+   * Retention: deletes the events of `pubkey` (only among `kinds`, if given; expired ones included) beyond the
+   * newest `keep` (by created_at DESC, id ASC). `remaining`: how many of them are stored afterwards.
+   */
+  trimPubkey(pubkey: string, keep: number, opts?: { kinds?: number[] }): Promise<{ deleted: number; remaining: number }>;
   /** NIP-62 / admin purge of everything by pubkey (optionally only events with created_at <= until). */
   deleteByPubkey(pubkey: string, until?: number): Promise<number>;
-  /** NIP-40: delete events whose expiration tag < now. */
+  /**
+   * NIP-40: delete events whose expiration tag < now. Like the other bulk deletes it may run in several batches
+   * (the SQLite store yields to the event loop between them): not atomic as a whole.
+   */
   purgeExpired(now: number): Promise<number>;
-  stats(): Promise<EventStoreStats>;
+  stats(opts?: { byKind?: boolean }): Promise<EventStoreStats>;
 }
 
 export type UserStatus = "active" | "banned" | "muted";
@@ -72,6 +85,11 @@ export interface UserRecord {
   banReason: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
+  /**
+   * Lifetime accepted events (counted by touch(); deletions, replacements and retention don't decrement it). An
+   * upper bound of the events stored for the pubkey, except for events stored without passing the relay's write
+   * path (imports).
+   */
   eventCount: number;
 }
 
@@ -85,6 +103,10 @@ export interface UserQuery {
   role?: AdminRole;
   allowed?: boolean;
   tag?: string;
+  /** only users whose eventCount is greater than this */
+  minEventCount?: number;
+  /** keyset paging with `sort: "pubkey"`: only pubkeys greater than this one */
+  afterPubkey?: string;
   /** `pubkey`: ascending by pubkey alone, stable across pages (for callers paging through everything) */
   sort?: "lastSeen" | "firstSeen" | "eventCount" | "pubkey";
   limit?: number;
