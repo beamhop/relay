@@ -31,6 +31,9 @@ test.skipIf(!url)("postgres: end-to-end smoke", async () => {
   expect(await stores.events.applyDeletion(a.sign({ kind: 5, created_at: T + 2, tags: [["e", n1.id]] }))).toBe(1);
   expect((await stores.events.save(n1)).status).toBe("deleted");
   expect((await stores.events.stats()).sizeBytes).toBeGreaterThan(0);
+  expect(await stores.events.kindCounts(a.pubkey)).toEqual([{ kind: 0, count: 1 }]);
+  expect(await stores.kv.setIfAbsent("pg", "k", 1)).toBe(true);
+  expect(await stores.kv.setIfAbsent("pg", "k", 2)).toBe(false);
 
   await stores.users.touch(a.pubkey, 10);
   await stores.flush();
@@ -42,5 +45,8 @@ test.skipIf(!url)("postgres: end-to-end smoke", async () => {
   const settings = await createSettingsService(stores, new EventBus());
   await settings.update({ info: { name: "pg" } }, "me");
   expect((await stores.audit.list({}))[0].action).toBe("settings.update");
+  await stores.audit.record({ actor: "x", action: "old", target: null, details: {}, ip: null, at: 1 });
+  expect(await stores.audit.prune(2)).toBe(1);
+  expect((await stores.audit.list({ action: "old" })).length).toBe(0);
   await stores.close();
 });

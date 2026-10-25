@@ -56,6 +56,8 @@ export interface EventStore {
    */
   purgeExpired(now: number): Promise<number>;
   stats(opts?: { byKind?: boolean }): Promise<EventStoreStats>;
+  /** Stored events of one pubkey per kind, most frequent first (an index range scan, not a full table scan). */
+  kindCounts(pubkey: string): Promise<{ kind: number; count: number }[]>;
 }
 
 export type UserStatus = "active" | "banned" | "muted";
@@ -161,9 +163,9 @@ export interface KvStore {
   set(namespace: string, key: string, value: unknown): Promise<void>;
   /**
    * Stores `value` only if the key doesn't exist yet (atomic: concurrent callers, e.g. several instances, can't
-   * both win); returns whether it was written. Optional for alternative stores — callers fall back to get + set.
+   * both win); returns whether it was written.
    */
-  setIfAbsent?(namespace: string, key: string, value: unknown): Promise<boolean>;
+  setIfAbsent(namespace: string, key: string, value: unknown): Promise<boolean>;
   delete(namespace: string, key: string): Promise<void>;
   list<T = unknown>(namespace: string): Promise<Record<string, T>>;
 }
@@ -181,6 +183,11 @@ export interface AuditEntry {
 export interface AuditLog {
   record(entry: Omit<AuditEntry, "id" | "at"> & { at?: number }): Promise<void>;
   list(q: { actor?: string; action?: string; target?: string; before?: number; limit?: number }): Promise<AuditEntry[]>;
+  /**
+   * Retention: deletes the entries recorded before `before` (unix seconds). Runs in batches (yielding to the event loop
+   * between them), so it is not atomic as a whole. Returns how many were deleted.
+   */
+  prune(before: number): Promise<number>;
 }
 
 export type AdminRole = "owner" | "admin" | "moderator" | "viewer";

@@ -142,6 +142,11 @@ export class FakeEventStore implements EventStore {
   async stats() {
     return { total: this.events.size, byKind: [], sizeBytes: 0 };
   }
+  async kindCounts(pubkey: string) {
+    const m = new Map<number, number>();
+    for (const e of this.events.values()) if (e.pubkey === pubkey) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
+    return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind - b.kind);
+  }
 }
 
 const defaultUser = (pubkey: string): UserRecord => ({
@@ -222,6 +227,11 @@ export class FakeKv implements KvStore {
   async set(ns: string, key: string, value: unknown) {
     this.data.set(`${ns}/${key}`, value);
   }
+  async setIfAbsent(ns: string, key: string, value: unknown) {
+    if (this.data.has(`${ns}/${key}`)) return false;
+    this.data.set(`${ns}/${key}`, value);
+    return true;
+  }
   async delete(ns: string, key: string) {
     this.data.delete(`${ns}/${key}`);
   }
@@ -232,7 +242,7 @@ export class FakeKv implements KvStore {
   }
 }
 
-const fakeAudit: AuditLog = { async record() {}, async list() { return []; } };
+const fakeAudit: AuditLog = { async record() {}, async list() { return []; }, async prune() { return 0; } };
 
 function deepMerge<T>(base: T, patch: unknown): T {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return patch as T;

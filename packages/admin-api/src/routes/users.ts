@@ -82,22 +82,6 @@ const BULK_PERMISSION = {
 export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
   const { stores, bus } = ctx.deps;
 
-  async function kindStats(pubkey: string): Promise<{ kind: number; count: number }[]> {
-    try {
-      const rows = await stores.db.all<{ kind: number; count: number }>(
-        "SELECT kind, COUNT(*) AS count FROM events WHERE pubkey = ? GROUP BY kind ORDER BY count DESC",
-        [pubkey],
-      );
-      return rows.map((r) => ({ kind: Number(r.kind), count: Number(r.count) }));
-    } catch {
-      // fall back to a capped scan through the EventStore API
-      const evs = await stores.events.query([{ authors: [pubkey], limit: 5000 }], { maxLimit: 5000 });
-      const m = new Map<number, number>();
-      for (const e of evs) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
-      return [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count);
-    }
-  }
-
   /** Pubkeys matching a search by npub/hex or by profile name (kind-0 full-text search). */
   async function searchPubkeys(search: string): Promise<string[]> {
     const out = new Set<string>();
@@ -278,7 +262,7 @@ export function registerUserRoutes(app: AdminApp, ctx: ApiContext) {
     const [view, eventCount, kinds, usage, reportsAgainst, reportsFiled] = await Promise.all([
       ctx.users.toView(user),
       stores.events.count([{ authors: [pubkey] }]),
-      kindStats(pubkey),
+      stores.events.kindCounts(pubkey),
       ctx.deps.blossom ? ctx.deps.blossom.usage(pubkey) : Promise.resolve({ count: 0, bytes: 0 }),
       stores.events.count([{ kinds: [1984], "#p": [pubkey] }]),
       stores.events.count([{ kinds: [1984], authors: [pubkey] }]),

@@ -198,7 +198,7 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
       key = (async () => {
         // instances starting together on an empty kv all end up with one key
         const valid = (v: string | undefined): v is string => typeof v === "string" && !!v;
-        const k = await kvGetOrCreate(ctx.deps.stores, "admin", name, () => randomBytes(32).toString("base64"), ctx.nowSec(), valid);
+        const k = await kvGetOrCreate(ctx.deps.stores.kv, "admin", name, () => randomBytes(32).toString("base64"), valid);
         return Buffer.from(k, "base64");
       })().catch((err) => {
         persistedKeys.delete(name);

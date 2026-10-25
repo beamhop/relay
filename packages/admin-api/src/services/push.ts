@@ -236,10 +236,10 @@ export class PushService {
       // overwritten by another instance would invalidate every device subscribed with the first one)
       type Keys = { publicKey: string; privateKey: string };
       const valid = (k: Keys | undefined): k is Keys => !!k?.publicKey && !!k.privateKey;
-      const keys = await kvGetOrCreate(stores, "admin", "vapid", () => {
+      const keys = await kvGetOrCreate(stores.kv, "admin", "vapid", () => {
         const gen = webpush.generateVAPIDKeys();
         return { publicKey: gen.publicKey, privateKey: gen.privateKey };
-      }, this.nowSec(), valid);
+      }, valid);
       this.vapid = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject: fallbackSubject };
     } catch (err) {
       logger.warn("web push disabled: could not initialise VAPID keys", { error: String(err) });

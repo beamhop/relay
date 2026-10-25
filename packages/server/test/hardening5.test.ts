@@ -161,7 +161,7 @@ describe("relay key: insert-if-absent, then read back (item 6)", () => {
     }
   });
 
-  test("stores without setIfAbsent still get a key", async () => {
+  test("stores other than the SQL ones still get a key", async () => {
     const stores = stubStores();
     const c = testConfig();
     await ensureSecrets(c, stores, silent);
