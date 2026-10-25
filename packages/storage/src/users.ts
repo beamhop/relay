@@ -104,19 +104,37 @@ export interface UserStoreOptions {
   flushIntervalMs?: number;
   /** flush early when this many distinct pubkeys are buffered; default 5000 */
   maxBuffered?: number;
+  /**
+   * hard cap on buffered pubkeys while flushes fail (database down); touches of further new pubkeys are dropped
+   * (counted and logged); default 100_000
+   */
+  maxPending?: number;
 }
+
+/** automatic flushes back off after a failure: 2 s, 4 s, … up to this */
+const MAX_FLUSH_BACKOFF_MS = 60_000;
 
 /**
  * SQL UserStore. `touch()` is buffered in memory and flushed in batches (every ~2s, on demand via
  * `flush()`, and on `close()`); reads overlay pending touches so they're never visibly stale.
+ * At most one flush runs at a time (plus one queued behind it); after a failed flush the automatic ones
+ * (timer, buffer size) back off exponentially, and the buffer is capped at `maxPending` pubkeys.
  */
 export class SqlUserStore implements UserStore {
   private pending = new Map<string, Touch>();
   /** batch currently being written (still overlaid on reads until committed) */
   private inflight = new Map<string, Touch>();
   private flushing: Promise<void> | null = null;
+  /** flush waiting for the one in flight (shared by every caller meanwhile) */
+  private queued: Promise<void> | null = null;
+  private failures = 0;
+  /** no automatic flush before this time (ms) after a failure */
+  private retryAt = 0;
+  /** touches dropped since the buffer hit maxPending */
+  private dropped = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly maxBuffered: number;
+  private readonly maxPending: number;
 
   constructor(
     private db: Db,
@@ -124,7 +142,8 @@ export class SqlUserStore implements UserStore {
     opts: UserStoreOptions = {},
   ) {
     this.maxBuffered = opts.maxBuffered ?? 5000;
-    this.timer = setInterval(() => void this.flush(), opts.flushIntervalMs ?? 2000);
+    this.maxPending = Math.max(this.maxBuffered, opts.maxPending ?? 100_000);
+    this.timer = setInterval(() => this.autoFlush(), opts.flushIntervalMs ?? 2000);
     (this.timer as { unref?: () => void }).unref?.();
   }
 
@@ -205,8 +224,14 @@ export class SqlUserStore implements UserStore {
       if (at > t.last) t.last = at;
       if (at < t.first) t.first = at;
     } else {
+      if (this.pending.size >= this.maxPending) {
+        if (this.dropped++ === 0) {
+          this.logger.error("user activity buffer full (flushes failing): dropping touches of new pubkeys", { max: this.maxPending });
+        }
+        return;
+      }
       this.pending.set(pubkey, { first: at, last: at, count: 1 });
-      if (this.pending.size >= this.maxBuffered) void this.flush();
+      if (this.pending.size >= this.maxBuffered) this.autoFlush();
     }
   }
 
@@ -217,37 +242,69 @@ export class SqlUserStore implements UserStore {
 
   async delete(pubkey: string): Promise<void> {
     // a batch being written may contain this pubkey and would re-insert the row right after the DELETE
-    while (this.flushing) await this.flushing;
+    while (this.flushing || this.queued) await (this.queued ?? this.flushing);
     this.pending.delete(pubkey);
     await this.db.run("DELETE FROM users WHERE pubkey = ?", [pubkey]);
   }
 
-  /** Writes buffered touch() data. Safe to call concurrently. */
-  async flush(): Promise<void> {
-    while (this.flushing) await this.flushing;
-    if (!this.pending.size) return;
+  /**
+   * Writes buffered touch() data (everything buffered when called). Safe to call concurrently: callers share the
+   * flush in flight and the one queued behind it. Never rejects (a failed batch stays buffered).
+   */
+  flush(): Promise<void> {
+    if (this.queued) return this.queued;
+    if (this.flushing) {
+      const queued = this.flushing.then(() => {
+        this.queued = null;
+        return this.flushOnce();
+      });
+      this.queued = queued;
+      return queued;
+    }
+    return this.flushOnce();
+  }
+
+  /** Timer / buffer-size flush: skipped while one is running or queued, and during the backoff after a failure. */
+  private autoFlush() {
+    if (this.flushing || this.queued || Date.now() < this.retryAt) return;
+    void this.flush();
+  }
+
+  private flushOnce(): Promise<void> {
+    if (!this.pending.size) return Promise.resolve();
     const batch = this.pending;
     this.pending = new Map();
     this.inflight = batch;
     this.flushing = this.writeTouches(batch)
-      .catch((err) => {
-        this.logger.error("failed to flush user activity", { err: String(err), users: batch.size });
-        // put the data back so it is retried on the next flush
-        for (const [pk, t] of batch) {
-          const cur = this.pending.get(pk);
-          if (!cur) this.pending.set(pk, t);
-          else {
-            cur.count += t.count;
-            cur.first = Math.min(cur.first, t.first);
-            cur.last = Math.max(cur.last, t.last);
+      .then(
+        () => {
+          this.failures = 0;
+          this.retryAt = 0;
+          if (this.dropped) this.logger.warn("user activity was dropped while flushes failed", { touches: this.dropped });
+          this.dropped = 0;
+        },
+        (err) => {
+          this.failures++;
+          const backoff = Math.min(MAX_FLUSH_BACKOFF_MS, 1000 * 2 ** this.failures);
+          this.retryAt = Date.now() + backoff;
+          this.logger.error("failed to flush user activity", { err: String(err), users: batch.size, retryInMs: backoff });
+          // put the data back so it is retried on the next flush
+          for (const [pk, t] of batch) {
+            const cur = this.pending.get(pk);
+            if (!cur) this.pending.set(pk, t);
+            else {
+              cur.count += t.count;
+              cur.first = Math.min(cur.first, t.first);
+              cur.last = Math.max(cur.last, t.last);
+            }
           }
-        }
-      })
+        },
+      )
       .finally(() => {
         this.inflight = new Map();
         this.flushing = null;
       });
-    await this.flushing;
+    return this.flushing;
   }
 
   /** Stops the flush timer and writes pending data. */
