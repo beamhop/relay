@@ -9,9 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { bytesToHex } from "nostr-tools/utils";
-import { createBeamhop, type Beamhop } from "../../packages/server/src/app";
-import { loadConfig } from "../../packages/server/src/config";
-import { serve, type RunningServer } from "../../packages/server/src/server";
+import { createBeamhop, loadConfig, serve, type Beamhop, type RunningServer } from "@beamhop/server";
 
 export interface Relay {
   /** http://127.0.0.1:PORT */
