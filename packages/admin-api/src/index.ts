@@ -9,7 +9,7 @@ import { authenticate, isImportRequest } from "./middleware/auth";
 import { CredentialService } from "./services/credentials";
 import { ModerationService } from "./services/moderation";
 import { ProfileService } from "./services/profiles";
-import { PushCoalescer, PushService } from "./services/push";
+import { KeyedPushCoalescer, PushCoalescer, PushService } from "./services/push";
 import { ReplayGuard } from "./services/replay";
 import { ReportService } from "./services/reports";
 import { RoleService } from "./services/roles";
@@ -142,7 +142,19 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>)
       }
     })();
   });
+  // alerts too can come in floods (a word filter matching every event of a spam wave): per level and title, the first
+  // is pushed at once and the rest of the interval follow as one "N more" digest
+  const alertDigest = new KeyedPushCoalescer(ctx.opts.alertPushIntervalMs ?? 60_000, (key, n) => {
+    const { level, title } = JSON.parse(key) as { level: string; title: string };
+    void ctx.push.notify("alerts", {
+      title: `${n} more: ${title}`.slice(0, 200),
+      body: `${n} more alert${n === 1 ? "" : "s"} like this. Open the dashboard for details.`,
+      url: `${ctx.publicUrl}/admin`,
+      tag: `alert-${level}`,
+    });
+  });
   bus.on("alert", (a) => {
+    if (!ctx.push.enabled || !alertDigest.offer(JSON.stringify({ level: a.level, title: a.title }))) return;
     void ctx.push.notify("alerts", { title: a.title, body: a.message, url: a.url ?? `${ctx.publicUrl}/admin`, tag: `alert-${a.level}` });
   });
 }

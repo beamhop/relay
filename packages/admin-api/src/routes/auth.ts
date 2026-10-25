@@ -20,6 +20,7 @@ import type { LoginMethod } from "../services/sessions";
 import type { Accepts, Same } from "../util/contract";
 import { ExpiringMap } from "../util/lru";
 import { isNostrEventShape, verifyNip98 } from "../util/nip98";
+import { kvGetOrCreate } from "../util/kv";
 import { tryParsePubkey } from "../util/pubkey";
 import { LoginLimiter, WindowCounter } from "../util/ratelimit";
 import { rateKey, readBody } from "../util/request";
@@ -195,22 +196,9 @@ export function registerAuthRoutes(app: AdminApp, ctx: ApiContext) {
     let key = persistedKeys.get(name);
     if (!key) {
       key = (async () => {
-        const kv = ctx.deps.stores.kv;
-        let k = await kv.get<string>("admin", name);
-        if (typeof k !== "string" || !k) {
-          // insert-if-absent, then re-read: instances starting together on an empty kv all end up with one key
-          const fresh = randomBytes(32).toString("base64");
-          try {
-            await ctx.deps.stores.db.run(
-              "INSERT INTO kv (namespace, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (namespace, key) DO NOTHING",
-              ["admin", name, JSON.stringify(fresh), ctx.nowSec()],
-            );
-          } catch {
-            await kv.set("admin", name, fresh); // a kv store not backed by the SQL `kv` table
-          }
-          k = await kv.get<string>("admin", name);
-          if (typeof k !== "string" || !k) throw new Error(`${name} unavailable`);
-        }
+        // instances starting together on an empty kv all end up with one key
+        const valid = (v: string | undefined): v is string => typeof v === "string" && !!v;
+        const k = await kvGetOrCreate(ctx.deps.stores, "admin", name, () => randomBytes(32).toString("base64"), ctx.nowSec(), valid);
         return Buffer.from(k, "base64");
       })().catch((err) => {
         persistedKeys.delete(name);

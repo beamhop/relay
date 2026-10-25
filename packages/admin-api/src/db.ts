@@ -103,6 +103,11 @@ CREATE INDEX IF NOT EXISTS admin_used_auth_expires ON admin_used_auth (expires_a
     id: "007_banned_event_role",
     up: "ALTER TABLE admin_banned_events ADD COLUMN by_role TEXT",
   },
+  {
+    // deliveries in a row a push service refused with 400/401/403; the device is dropped at MAX_PUSH_FAILURES
+    id: "008_push_failures",
+    up: "ALTER TABLE admin_push_subscriptions ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
+  },
 ];
 
 export async function migrateAdmin(db: Db): Promise<void> {

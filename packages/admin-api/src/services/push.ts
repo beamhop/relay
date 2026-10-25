@@ -1,7 +1,8 @@
 import { lookup } from "node:dns/promises";
 import webpush from "web-push";
 import type { AdminApiDeps, Permission, PushTopic } from "@beamhop/sdk";
-import { isPrivateIp } from "../util/ip";
+import { isForbiddenDestination } from "../util/ip";
+import { kvGetOrCreate } from "../util/kv";
 import { permissionsFor, type RoleService } from "./roles";
 
 /** Topics the server sends. */
@@ -16,6 +17,16 @@ const TOPIC_PERMISSION: Record<SentPushTopic, Permission> = {
 export const MAX_SUBSCRIPTIONS_PER_ADMIN = 20;
 /** how often (sec) notify() deletes the devices of ended sessions (it skips them on every send regardless) */
 const PRUNE_INTERVAL_SEC = 60;
+/** pushes in flight at once, across all notifications (each is a DNS lookup plus an HTTPS request) */
+export const PUSH_CONCURRENCY = 8;
+/** a single delivery (lookup included) is given up after this long */
+export const PUSH_TIMEOUT_MS = 15_000;
+/**
+ * A device is dropped after this many deliveries in a row refused with 400/401/403 (a broken or foreign subscription,
+ * VAPID keys that changed): unlike 404/410 one such answer may be transient, an unbroken run of them is not.
+ */
+export const MAX_PUSH_FAILURES = 5;
+const PERMANENT_FAILURES = new Set([400, 401, 403]);
 
 /**
  * Push services used by browsers today: Chromium/Samsung/Opera (FCM), Edge (WNS), Firefox (Mozilla autopush),
@@ -46,9 +57,11 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
 export class PushCoalescer {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pending = 0;
+  /** `onIdle`: an interval ended with nothing to flush (the next offer goes out right away again) */
   constructor(
     private readonly intervalMs: number,
     private readonly flush: (count: number) => void,
+    private readonly onIdle?: () => void,
   ) {}
 
   offer(): boolean {
@@ -60,10 +73,17 @@ export class PushCoalescer {
     return true;
   }
 
+  /** Stops the timer; counted notifications are dropped. */
+  dispose() {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.pending = 0;
+  }
+
   private arm() {
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      if (!this.pending) return;
+      if (!this.pending) return this.onIdle?.();
       const n = this.pending;
       this.pending = 0;
       this.arm();
@@ -71,6 +91,68 @@ export class PushCoalescer {
     }, this.intervalMs);
     (this.timer as { unref?: () => void }).unref?.();
   }
+}
+
+/**
+ * One PushCoalescer per key (alerts: per level and title), so a burst of one kind of alert (a word filter matching every
+ * event of a spam wave) costs one push plus a digest per interval while a different alert still goes out at once. Idle
+ * keys are dropped; past `maxKeys` distinct keys in flight, further new keys are not pushed (`offer` → false, not counted).
+ */
+export class KeyedPushCoalescer {
+  private readonly windows = new Map<string, PushCoalescer>();
+  constructor(
+    private readonly intervalMs: number,
+    private readonly flush: (key: string, count: number) => void,
+    private readonly maxKeys = 100,
+  ) {}
+
+  offer(key: string): boolean {
+    let w = this.windows.get(key);
+    if (!w) {
+      if (this.windows.size >= this.maxKeys) return false;
+      w = new PushCoalescer(this.intervalMs, (n) => this.flush(key, n), () => this.windows.delete(key));
+      this.windows.set(key, w);
+    }
+    return w.offer();
+  }
+
+  get size() {
+    return this.windows.size;
+  }
+
+  dispose() {
+    for (const w of this.windows.values()) w.dispose();
+    this.windows.clear();
+  }
+}
+
+/** Runs at most `limit` tasks at once; the rest wait in order. */
+class Limiter {
+  private active = 0;
+  private readonly queue: (() => void)[] = [];
+  constructor(private readonly limit: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    // a finishing task hands its slot straight to the next waiter, so a new caller can't slip in between
+    if (this.active >= this.limit) await new Promise<void>((r) => this.queue.push(r));
+    else this.active++;
+    try {
+      return await fn();
+    } finally {
+      const next = this.queue.shift();
+      if (next) next();
+      else this.active--;
+    }
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 export interface PushPayload {
@@ -92,11 +174,19 @@ interface Vapid {
 
 export type PushSender = (sub: PushSubscriptionInput, payload: string, vapid: Vapid) => Promise<void>;
 
+interface PushRow {
+  endpoint: string;
+  pubkey: string;
+  subscription: string;
+  topics: string;
+  failures: number;
+}
+
 const defaultSender: PushSender = async (sub, payload, vapid) => {
   // defence in depth against split-horizon DNS for the allow-listed hosts (web-push itself never follows redirects)
   const host = new URL(sub.endpoint).hostname;
   const addrs = await lookup(host, { all: true });
-  if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) throw new Error(`push endpoint ${host} resolves to a private address`);
+  if (!addrs.length || addrs.some((a) => isForbiddenDestination(a.address))) throw new Error(`push endpoint ${host} resolves to a private address`);
   await webpush.sendNotification(sub, payload, {
     TTL: 3600,
     timeout: 10_000,
@@ -109,6 +199,11 @@ export class PushService {
   private lastPrune = 0;
   /** overridable for tests */
   sender: PushSender = defaultSender;
+  /** per-delivery timeout (ms), overridable for tests */
+  timeoutMs = PUSH_TIMEOUT_MS;
+  private readonly limiter = new Limiter(PUSH_CONCURRENCY);
+  /** the subscription read of the notification(s) being sent now: notifications started meanwhile share it */
+  private rowsInFlight: Promise<PushRow[]> | null = null;
 
   constructor(
     private readonly deps: AdminApiDeps,
@@ -137,13 +232,15 @@ export class PushService {
         this.vapid = { ...config.admin.vapid };
         return;
       }
-      let keys = await stores.kv.get<{ publicKey: string; privateKey: string }>("admin", "vapid");
-      if (!keys?.publicKey || !keys.privateKey) {
+      // insert-if-absent, then re-read: instances starting together on an empty kv agree on one key pair (a pair
+      // overwritten by another instance would invalidate every device subscribed with the first one)
+      type Keys = { publicKey: string; privateKey: string };
+      const valid = (k: Keys | undefined): k is Keys => !!k?.publicKey && !!k.privateKey;
+      const keys = await kvGetOrCreate(stores, "admin", "vapid", () => {
         const gen = webpush.generateVAPIDKeys();
-        keys = { publicKey: gen.publicKey, privateKey: gen.privateKey };
-        await stores.kv.set("admin", "vapid", keys);
-      }
-      this.vapid = { ...keys, subject: fallbackSubject };
+        return { publicKey: gen.publicKey, privateKey: gen.privateKey };
+      }, this.nowSec(), valid);
+      this.vapid = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject: fallbackSubject };
     } catch (err) {
       logger.warn("web push disabled: could not initialise VAPID keys", { error: String(err) });
       this.vapid = null;
@@ -162,7 +259,7 @@ export class PushService {
     const now = this.nowSec();
     await this.deps.stores.db.tx(async (db) => {
       const r = await db.run(
-        "UPDATE admin_push_subscriptions SET pubkey = ?, subscription = ?, topics = ?, created_at = ?, session_id = ? WHERE endpoint = ?",
+        "UPDATE admin_push_subscriptions SET pubkey = ?, subscription = ?, topics = ?, created_at = ?, session_id = ?, failures = 0 WHERE endpoint = ?",
         [pubkey, json, t, now, sessionId, sub.endpoint],
       );
       if (!r.changes) {
@@ -215,20 +312,53 @@ export class PushService {
     ]);
   }
 
-  /** Sends to all subscribers of `topic` whose role grants the topic permission. Never throws. */
+  /**
+   * Devices that may receive pushes now. Single-flight: notifications started while a read is running share it, so a
+   * burst of them costs one query (and one prune).
+   */
+  private subscriptions(): Promise<PushRow[]> {
+    if (!this.rowsInFlight) {
+      this.rowsInFlight = (async () => {
+        const now = this.nowSec();
+        if (now - this.lastPrune >= PRUNE_INTERVAL_SEC) await this.pruneEndedSessions().catch(() => {});
+        // devices of sessions that ended since the last prune are skipped all the same
+        const rows = await this.deps.stores.db.all<PushRow>(
+          `SELECT p.endpoint, p.pubkey, p.subscription, p.topics, p.failures FROM admin_push_subscriptions p WHERE p.session_id IS NULL OR EXISTS
+             (SELECT 1 FROM admin_sessions s WHERE s.id = p.session_id AND s.expires_at > ?)`,
+          [now],
+        );
+        return rows.map((r) => ({ ...r, failures: Number(r.failures ?? 0) }));
+      })().finally(() => (this.rowsInFlight = null));
+    }
+    return this.rowsInFlight;
+  }
+
+  private async drop(endpoint: string): Promise<void> {
+    await this.deps.stores.db.run("DELETE FROM admin_push_subscriptions WHERE endpoint = ?", [endpoint]).catch(() => {});
+  }
+
+  /** Counts a refused delivery; MAX_PUSH_FAILURES in a row drop the device. */
+  private async recordFailure(endpoint: string): Promise<void> {
+    const db = this.deps.stores.db;
+    try {
+      await db.run("UPDATE admin_push_subscriptions SET failures = failures + 1 WHERE endpoint = ?", [endpoint]);
+      const r = await db.run("DELETE FROM admin_push_subscriptions WHERE endpoint = ? AND failures >= ?", [endpoint, MAX_PUSH_FAILURES]);
+      if (r.changes) this.deps.logger.info("push device dropped after repeated refusals", { endpoint: new URL(endpoint).host });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /**
+   * Sends to all subscribers of `topic` whose role grants the topic permission, at most PUSH_CONCURRENCY deliveries at
+   * a time (across notifications) and each within `timeoutMs`. Never throws.
+   */
   async notify(topic: SentPushTopic, payload: PushPayload): Promise<number> {
     if (!this.vapid) return 0;
     const vapid = this.vapid;
-    let rows: { endpoint: string; pubkey: string; subscription: string; topics: string }[];
+    let rows: PushRow[];
     try {
-      const now = this.nowSec();
-      if (now - this.lastPrune >= PRUNE_INTERVAL_SEC) await this.pruneEndedSessions().catch(() => {});
-      // devices of sessions that ended since the last prune are skipped all the same
-      rows = await this.deps.stores.db.all(
-        `SELECT p.endpoint, p.pubkey, p.subscription, p.topics FROM admin_push_subscriptions p WHERE p.session_id IS NULL OR EXISTS
-           (SELECT 1 FROM admin_sessions s WHERE s.id = p.session_id AND s.expires_at > ?)`,
-        [now],
-      );
+      rows = await this.subscriptions();
     } catch {
       return 0;
     }
@@ -246,19 +376,18 @@ export class PushService {
           const topics = JSON.parse(row.topics) as string[];
           if (!topics.includes(topic) || !(await allowed(row.pubkey))) return;
           // rows stored before the endpoint allow-list existed
-          if (!isAllowedPushEndpoint(row.endpoint)) {
-            await this.deps.stores.db.run("DELETE FROM admin_push_subscriptions WHERE endpoint = ?", [row.endpoint]).catch(() => {});
-            return;
-          }
-          await this.sender(JSON.parse(row.subscription), body, vapid);
+          if (!isAllowedPushEndpoint(row.endpoint)) return await this.drop(row.endpoint);
+          const sub = JSON.parse(row.subscription) as PushSubscriptionInput;
+          await this.limiter.run(() => withTimeout(this.sender(sub, body, vapid), this.timeoutMs, "push delivery"));
           sent++;
+          if (row.failures > 0) {
+            await this.deps.stores.db.run("UPDATE admin_push_subscriptions SET failures = 0 WHERE endpoint = ?", [row.endpoint]).catch(() => {});
+          }
         } catch (err) {
           const status = (err as { statusCode?: number }).statusCode;
-          if (status === 404 || status === 410) {
-            await this.deps.stores.db.run("DELETE FROM admin_push_subscriptions WHERE endpoint = ?", [row.endpoint]).catch(() => {});
-          } else {
-            this.deps.logger.debug("push send failed", { status, error: String(err) });
-          }
+          if (status === 404 || status === 410) await this.drop(row.endpoint);
+          else if (status !== undefined && PERMANENT_FAILURES.has(status)) await this.recordFailure(row.endpoint);
+          else this.deps.logger.debug("push send failed", { status, error: String(err) });
         }
       }),
     );

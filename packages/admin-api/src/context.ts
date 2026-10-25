@@ -44,6 +44,8 @@ export interface AdminApiOptions {
   importMaxBytes?: number;
   /** minimum time between two report push notifications; reports in between are sent as one digest. Default 60000 */
   reportPushIntervalMs?: number;
+  /** the same for alerts, per level and title: the first is pushed, the rest of the interval as one digest. Default 60000 */
+  alertPushIntervalMs?: number;
   /** how long (ms) the banned-event id cache is trusted before it is re-read from the database, default 5000 */
   bannedEventsTtlMs?: number;
   /** time budget (ms) of one POST /users/bulk; targets not reached by then are returned as `remaining`. Default 20000 */
