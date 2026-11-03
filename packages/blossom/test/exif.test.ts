@@ -90,3 +90,60 @@ describe("image processor", () => {
     expect(meta.width).toBe(320);
   });
 });
+
+// regression: the pure-JS walkers handed back input they considered malformed unchanged, and that was stored with its
+// EXIF (GPS) intact although stripping was on; an APP1 between progressive scans was never looked at
+describe("metadata stripping fails closed", () => {
+  const A = (s: string) => [...s].map((c) => c.charCodeAt(0));
+  const seg = (m: number, p: number[]) => [0xff, m, (p.length + 2) >> 8, (p.length + 2) & 255, ...p];
+  const app0 = seg(0xe0, [...A("JFIF"), 0, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+  const app1 = seg(0xe1, [...A("Exif"), 0, 0, ...A("MM"), 0, 42, 0, 0, 0, 8, ...A("GPS 52.52N")]);
+  const dqt = seg(0xdb, [0, ...Array(64).fill(1)]);
+  const sos = seg(0xda, [1, 1, 0, 0, 63, 0]);
+  const scan = [0x12, 0x34, 0xff, 0, 0x56];
+  const jpeg = (...parts: number[][]) => Uint8Array.from([0xff, 0xd8, ...parts.flat(), 0xff, 0xd9]);
+  const chunked = (type: string, body: number[], len = body.length) => {
+    const b = Buffer.alloc(12 + body.length);
+    b.writeUInt32BE(len, 0);
+    b.write(type, 4, "ascii");
+    Buffer.from(body).copy(b, 8);
+    return [...b];
+  };
+
+  test("an APP1 between progressive scans is removed", () => {
+    const r = stripJpegMetadata(jpeg(app0, dqt, sos, scan, app1, sos, scan));
+    expect(r.stripped).toBe(true);
+    expect(has(r.data, "GPS")).toBe(false);
+    expect([...r.data]).toEqual([...jpeg(app0, dqt, sos, scan, sos, scan)]);
+  });
+
+  for (const useSharp of [false, true]) {
+    test(`files the walkers give up on are refused, never stored with their EXIF (sharp: ${useSharp})`, async () => {
+      if (useSharp && !(await loadSharp())) return;
+      const p = await createImageProcessor({ useSharp });
+      const exifPayload = [...A("Exif"), 0, 0, ...A("MM"), 0, 42, 0, 0, 0, 8, ...A("GPS 52.52N")];
+      const webpChunk = (fourcc: string, body: number[], size = body.length) => {
+        const b = Buffer.alloc(8 + body.length + (body.length & 1));
+        b.write(fourcc, 0, "ascii");
+        b.writeUInt32LE(size, 4);
+        Buffer.from(body).copy(b, 8);
+        return [...b];
+      };
+      const webpBody = [...A("WEBP"), ...webpChunk("EXIF", exifPayload), ...webpChunk("VP8L", [1, 2, 3, 4], 999)];
+      const riff = Buffer.alloc(8);
+      riff.write("RIFF", 0, "ascii");
+      riff.writeUInt32LE(webpBody.length, 4);
+      const cases: [string, string, Uint8Array][] = [
+        ["junk bytes between JPEG segments", "image/jpeg", jpeg(app0, app1, [0, 0], dqt, sos, scan)],
+        ["a stray RST marker in the JPEG header", "image/jpeg", jpeg(app0, app1, [0xff, 0xd0], dqt, sos, scan)],
+        ["PNG eXIf and an over-long last chunk", "image/png", Uint8Array.from([...PNG_1x1.subarray(0, 33), ...chunked("eXIf", exifPayload.slice(6)), ...chunked("IDAT", [1], 9999)])],
+        ["WebP EXIF and a truncated last chunk", "image/webp", Uint8Array.from([...riff, ...webpBody])],
+      ];
+      for (const [name, mime, data] of cases) {
+        const r = await p.stripMetadata(data, mime);
+        const leaked = !r.unsafe && (has(r.data, "GPS") || has(r.data, "MM\0*"));
+        expect([name, leaked]).toEqual([name, false]);
+      }
+    });
+  }
+});

@@ -13,6 +13,7 @@
     "e2e": {
       "name": "@beamhop/e2e",
       "dependencies": {
+        "@beamhop/blossom": "workspace:*",
         "@beamhop/server": "workspace:*",
         "nostr-tools": "^2.25.2",
       },

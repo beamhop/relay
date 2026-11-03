@@ -1,5 +1,5 @@
 import type { Logger } from "@beamhop/sdk";
-import { jpegHasTrailer, pngHasPrivateText, stripMetadata, type StripResult } from "./exif";
+import { hasLeftoverMetadata, jpegHasTrailer, pngHasPrivateText, stripMetadata, type StripResult } from "./exif";
 import { Semaphore } from "./limits";
 
 // Minimal structural type of the parts of sharp we use (sharp is optional and loaded dynamically).
@@ -154,6 +154,23 @@ export async function createImageProcessor(
     }
   }
 
+  /** JPEG/PNG/WebP: sharp re-encodes what it sees metadata in; the pure-JS stripper covers what it doesn't */
+  async function strip(data: Uint8Array, mime: string): Promise<StripResult> {
+    const r = sharp ? await gate.run(() => sharpStrip(data, mime)) : undefined;
+    if (r?.stripped) return r;
+    if (r) {
+      // sharp says clean, but it only looks at the primary image's metadata. libvips doesn't surface PNG
+      // tEXt/zTXt/iTXt chunks, so an EXIF/XMP/IPTC profile smuggled in one (ImageMagick's "Raw profile type exif",
+      // with GPS) still needs the pure-JS pass, and so does a JPEG with images appended after its EOI (MPF/MPO
+      // secondary images carry their own EXIF). Anything else stays byte-identical so the client's sha256 keeps
+      // matching.
+      const hidden = mime === "image/png" ? pngHasPrivateText(data) : mime === "image/jpeg" && jpegHasTrailer(data);
+      return hidden ? stripMetadata(data, mime) : r;
+    }
+    // sharp unavailable or the image is too large to decode: lossless pure-JS stripping (keeps orientation)
+    return stripMetadata(data, mime);
+  }
+
   return {
     sharp: !!sharp,
     async stripMetadata(data, mime) {
@@ -165,19 +182,14 @@ export async function createImageProcessor(
         return hasMetadataMarker(data, mime) ? { data, stripped: false, unsafe: true } : { data, stripped: false };
       }
       if (!STRIPPABLE_TYPES.has(mime)) return { data, stripped: false };
-      const r = sharp ? await gate.run(() => sharpStrip(data, mime)) : undefined;
-      if (r?.stripped) return r;
-      if (r) {
-        // sharp says clean, but it only looks at the primary image's metadata. libvips doesn't surface PNG
-        // tEXt/zTXt/iTXt chunks, so an EXIF/XMP/IPTC profile smuggled in one (ImageMagick's "Raw profile type exif",
-        // with GPS) still needs the pure-JS pass, and so does a JPEG with images appended after its EOI (MPF/MPO
-        // secondary images carry their own EXIF). Anything else stays byte-identical so the client's sha256 keeps
-        // matching.
-        const hidden = mime === "image/png" ? pngHasPrivateText(data) : mime === "image/jpeg" && jpegHasTrailer(data);
-        return hidden ? stripMetadata(data, mime) : r;
-      }
-      // sharp unavailable or the image is too large to decode: lossless pure-JS stripping (keeps orientation)
-      return stripMetadata(data, mime);
+      const r = await strip(data, mime);
+      if (!hasLeftoverMetadata(r.data, mime)) return r;
+      // Still EXIF/XMP in there: a file the pure-JS walker gave up on (junk between JPEG segments, a stray marker,
+      // an over-long last chunk, all of which decoders read fine), or metadata sharp doesn't look at. One more
+      // lossless pass over the result, else refuse rather than publish it (the caller turns `unsafe` into a 415).
+      const again = stripMetadata(r.data, mime);
+      if (again.stripped && !hasLeftoverMetadata(again.data, mime)) return again;
+      return { data, stripped: false, unsafe: true };
     },
     async thumbnail(data, mime) {
       if (!sharp || !THUMBNAIL_TYPES.has(mime)) return undefined;

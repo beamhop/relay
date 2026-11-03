@@ -157,6 +157,8 @@ describe("HEAD /upload preflight (BUD-06)", () => {
     expect((await preflight({ Authorization: auth, "X-SHA-256": "zz", "X-Content-Length": "100" })).status).toBe(400);
     expect((await preflight({ Authorization: auth, "X-SHA-256": sha })).status).toBe(411);
     expect((await preflight({ Authorization: auth, "X-SHA-256": sha, "X-Content-Length": "abc" })).status).toBe(400);
+    // PUT refuses an empty body, so the preflight does too (regression: it answered 200)
+    expect((await preflight({ Authorization: auth, "X-SHA-256": sha, "X-Content-Length": "0" })).status).toBe(400);
     expect((await preflight({ "X-SHA-256": sha, "X-Content-Length": "100" })).status).toBe(401);
   });
 

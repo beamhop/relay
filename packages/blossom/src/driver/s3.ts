@@ -246,7 +246,10 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     },
     async get(sha256, range, opts) {
       assertSha256(sha256);
-      return getFirst(ordered(keysOf(sha256), opts), range);
+      const obj = await getFirst(ordered(keysOf(sha256), opts), range);
+      // gone from the bucket (lifecycle rule, removed by hand): stop vouching for it, so a re-upload stores it again
+      if (!obj) present.delete(sha256);
+      return obj;
     },
     async has(sha256, opts) {
       assertSha256(sha256);

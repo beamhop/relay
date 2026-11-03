@@ -14,6 +14,8 @@ import type { BlossomCore } from "./service";
 const BLOB_PATH = "/:name{[0-9a-f]{64}(?:\\.[A-Za-z0-9]{1,16}){0,2}}";
 const THUMB_PATH = "/thumb/:name{[0-9a-f]{64}\\.webp}";
 const LIST_PATH = "/list/:pubkey{[0-9a-f]{64}}";
+/** BUD-05 media optimisation and BUD-09 reports */
+const UNSUPPORTED = ["/media", "/report"];
 /** PUT /mirror JSON body (`{"url": …}`) */
 const MAX_MIRROR_BODY = 16 * 1024;
 
@@ -73,7 +75,18 @@ export function createRoutes(core: BlossomCore): Hono {
   };
 
   const preflight = () => new Response(null, { status: 204, headers: CORS_HEADERS });
-  for (const p of ["/upload", "/mirror", LIST_PATH, THUMB_PATH, BLOB_PATH]) app.options(p, preflight);
+  for (const p of ["/upload", "/mirror", LIST_PATH, THUMB_PATH, BLOB_PATH, ...UNSUPPORTED]) app.options(p, preflight);
+
+  // Blossom endpoints this server doesn't implement: a 404 that carries CORS headers (BUD-01: on all responses), so a
+  // browser client probing for them (e.g. `HEAD /media`) sees "not supported" rather than a CORS/network failure
+  for (const p of UNSUPPORTED) {
+    app.all(
+      p,
+      wrap(async () => {
+        throw new BlossomError(404, "not supported by this server");
+      }),
+    );
+  }
 
   /** Loads a blob row the requester may see: approved for everyone, pending for owners/staff, blocked for staff. */
   const loadVisible = async (c: Context, sha256: string) => {
@@ -122,8 +135,18 @@ export function createRoutes(core: BlossomCore): Hono {
     if (dest && SCRIPT_DESTINATIONS.has(dest)) throw new BlossomError(403, "blobs can't be loaded as scripts");
   };
 
+  /** If-None-Match (weak comparison; `*` matches any blob that exists) */
   const notModified = (c: Context, etag: string) =>
-    !!c.req.header("if-none-match")?.split(",").some((t) => t.trim().replace(/^W\//, "") === etag);
+    !!c.req.header("if-none-match")?.split(",").some((t) => t.trim() === "*" || t.trim().replace(/^W\//, "") === etag);
+
+  /**
+   * If-Range (RFC 9110 §13.1.5): the Range header only applies when this is our strong ETag. A weak tag or a date
+   * (we send no Last-Modified) never matches, so the client gets the whole blob instead of a range of something else.
+   */
+  const rangeHeader = (c: Context, etag: string) => {
+    const ifRange = c.req.header("if-range");
+    return ifRange === undefined || ifRange.trim() === etag ? c.req.header("range") : undefined;
+  };
 
   // ---------------------------------------------------------------- GET|HEAD /thumb/<sha256>.webp
   app.get(
@@ -173,7 +196,7 @@ export function createRoutes(core: BlossomCore): Hono {
         return new Response(null, { status: 307, headers });
       }
 
-      const range = parseRange(c.req.header("range"), row.size);
+      const range = parseRange(rangeHeader(c, etag), row.size);
       if (range === "unsatisfiable") {
         const res = errorResponse(416, "range not satisfiable");
         res.headers.set("Content-Range", `bytes */${row.size}`);
@@ -243,6 +266,8 @@ export function createRoutes(core: BlossomCore): Hono {
       if (lenHeader === undefined) throw new BlossomError(411, "missing X-Content-Length header");
       if (!/^\d+$/.test(lenHeader)) throw new BlossomError(400, "invalid X-Content-Length header");
       const size = Number(lenHeader);
+      // PUT /upload refuses an empty body
+      if (size === 0) throw new BlossomError(400, "empty blob");
       const a = requireAuth(c, "upload", shaHeader, true);
       const user = await core.admission.assertCanUpload(a.pubkey);
       if (size > settings.maxUploadBytes) throw new BlossomError(413, `blob too large (max ${settings.maxUploadBytes} bytes)`);
@@ -400,14 +425,21 @@ export function createRoutes(core: BlossomCore): Hono {
       // a bad token still gets the public listing
       const a = optionalAuth(c, "list");
       const includeUnapproved = !!a && (a.pubkey === pubkey || (await core.admission.isStaff(a.pubkey)));
-      // clamped: digit strings past 2^53 overflow postgres bigint
-      const int = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Math.min(Number(v), Number.MAX_SAFE_INTEGER) : undefined);
-      const cursor = c.req.query("cursor")?.toLowerCase();
-      const limit = int(c.req.query("limit"));
+      // Malformed parameters are a 400 (BUD-12), not ignored: a bad cursor quietly answered with the first page
+      // would send a paginating client round in circles. Clamped: digit strings past 2^53 overflow postgres bigint.
+      const int = (name: string) => {
+        const v = c.req.query(name);
+        if (v === undefined || v === "") return undefined;
+        if (!/^\d+$/.test(v)) throw new BlossomError(400, `invalid ${name}`);
+        return Math.min(Number(v), Number.MAX_SAFE_INTEGER);
+      };
+      const cursor = c.req.query("cursor")?.toLowerCase() || undefined;
+      if (cursor !== undefined && !SHA256_RE.test(cursor)) throw new BlossomError(400, "invalid cursor");
+      const limit = int("limit");
       const rows = await core.repo.listByOwner(pubkey, {
-        since: int(c.req.query("since")),
-        until: int(c.req.query("until")),
-        cursor: cursor && SHA256_RE.test(cursor) ? cursor : undefined,
+        since: int("since"),
+        until: int("until"),
+        cursor,
         limit: limit !== undefined ? Math.min(Math.max(limit, 1), 10_000) : 10_000,
         includeUnapproved,
       });
