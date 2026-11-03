@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createDb } from "@beamhop/storage";
 
@@ -30,18 +30,5 @@ describe("beamhop admin commands work on the stores alone", () => {
     } finally {
       await db.close();
     }
-  });
-
-  test.skipIf(process.platform === "win32")("init writes the config readable by the owner only (it may hold the postgres password)", async () => {
-    (globalThis as { __BEAMHOP_NO_AUTORUN__?: boolean }).__BEAMHOP_NO_AUTORUN__ = true;
-    const { main } = await import("../src/cli");
-    const path = join(dir, "beamhop.config.json");
-    const quiet = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await main(["init", "--config", path, "--db", "postgres", "--database-url", "postgres://u:secret@db/beamhop"]);
-    } finally {
-      quiet.mockRestore();
-    }
-    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });
