@@ -14,6 +14,7 @@ import { formatDate, timeAgo } from "@/lib/format";
 import { displayName, getTag, getTags, shortHex } from "@/lib/nostr";
 import { parseProfileContent, repostContent } from "@/lib/sanitize";
 import { usePluginRegistry } from "@/plugins/registry";
+import { useCan } from "@/queries/auth";
 import { copyText } from "./copy-button";
 import { ErrorBoundary } from "./error-boundary";
 import { JsonView } from "./json-view";
@@ -58,7 +59,10 @@ function BrokenEvent({ event, className }: { event: NostrEvent; className?: stri
 
 function EventCardInner({ event, author, reports, selected, onSelect, onDelete, className, compact, footer }: EventCardProps) {
   const [json, setJson] = React.useState(false);
-  const { eventActions } = usePluginRegistry();
+  const { eventActions: registered } = usePluginRegistry();
+  const can = useCan();
+  // plugin actions call the plugin's admin routes, which need plugins.use
+  const eventActions = can("plugins.use") ? registered : [];
   return (
     <div className={cn("rounded-xl border bg-card p-3 text-card-foreground transition-colors sm:p-4", selected && "border-primary/60 bg-primary/5", className)}>
       <div className="flex items-start gap-3">
