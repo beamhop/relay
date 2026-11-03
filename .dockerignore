@@ -19,6 +19,21 @@
 **/.env
 **/.env.*
 **/beamhop.config.json
+# credentials and key material that may sit in a working tree (registry tokens, TLS keys, nsec backups)
+**/.npmrc
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.nsec
+# backups and dumps (contain every event plus admin credentials and the relay secret key)
+**/*.bak
+**/*.dump
+**/*.pgc
+**/*.sql.gz
+**/backups
+**/*.log
+**/*.tgz
 **/.tmp-*
 **/coverage
 # test suites and their artifacts (e2e/.tmp holds generated owner keys and session cookies) never ship; e2e keeps only
