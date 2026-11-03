@@ -340,7 +340,10 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
 
     const ev = parseNostrAuthorization(req.headers.get("authorization"));
     if (!ev) return reply({ result: null, error: "unauthorized: missing NIP-98 authorization" }, 401);
-    const v = verifyNip98(ev, { urls: relayUrls, method: "POST", body: buf, requirePayload: true, nowSec: ctx.nowSec() });
+    // NIP-98: u is the absolute request URL, query included (the host part may be the relay's ws:// or http:// URL)
+    const query = new URL(req.url).search;
+    const urls = query ? relayUrls.map((u) => u + query) : relayUrls;
+    const v = verifyNip98(ev, { urls, method: "POST", body: buf, requirePayload: true, nowSec: ctx.nowSec() });
     if (!v.ok) return reply({ result: null, error: `unauthorized: ${v.reason}` }, 401);
 
     const role = await ctx.roles.resolve(ev.pubkey);
