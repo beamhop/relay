@@ -63,8 +63,8 @@ async function boot(driver: "fs" | "s3", overrides: Record<string, any> = {}, op
   const beamhop = await createBeamhop(config, {
     autoDiscoverNpm: false,
     // mirror sources in these tests are local servers
-    factories: { createBlossom: (deps) => createBlossomService(deps, { ...optionsFromConfig(deps.config), allowPrivateMirror: true, ...options }) },
-  } as never);
+    factories: { createBlossom: (deps) => createBlossomService(deps, { ...optionsFromConfig(deps.config), allowPrivateMirror: true, ...options }) as never },
+  });
   await beamhop.start();
   const server = await serve(beamhop, { runtime: "bun", port, host: "127.0.0.1" });
   return {
