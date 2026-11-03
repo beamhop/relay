@@ -30,6 +30,8 @@ export interface StartRelayOptions {
   overrides?: Record<string, unknown>;
   /** reuse a fixed owner key (hex) instead of generating one */
   ownerSkHex?: string;
+  /** host of the public URL (default 127.0.0.1); "localhost" gives the panel a secure context where WebAuthn works */
+  publicHost?: string;
   /** createBeamhop extras (e.g. `pluginsEnabled` to enable plugins on first boot) */
   extras?: Record<string, unknown>;
 }
@@ -84,7 +86,7 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
   const port = opts.port ?? (await freePort());
   const sk = opts.ownerSkHex ? Uint8Array.from(Buffer.from(opts.ownerSkHex, "hex")) : generateSecretKey();
   const pubkey = getPublicKey(sk);
-  const http = `http://127.0.0.1:${port}`;
+  const http = `http://${opts.publicHost ?? "127.0.0.1"}:${port}`;
   const base = {
     logLevel: "error",
     server: { host: "127.0.0.1", port, publicUrl: http },
@@ -100,7 +102,7 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
   let stopped = false;
   return {
     http,
-    ws: `ws://127.0.0.1:${port}`,
+    ws: http.replace(/^http/, "ws"),
     port,
     dir,
     owner: { sk, skHex: bytesToHex(sk), pubkey, npub: nip19.npubEncode(pubkey), nsec: nip19.nsecEncode(sk) },

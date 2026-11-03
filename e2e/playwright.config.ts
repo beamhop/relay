@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env.E2E_PORT ?? 3399);
-export const BASE = `http://127.0.0.1:${PORT}`;
+// E2E_HOST=localhost serves the panel from a secure context, where the passkey specs can use WebAuthn
+const HOST = process.env.E2E_HOST ?? "127.0.0.1";
+export const BASE = `http://${HOST}:${PORT}`;
 
 export default defineConfig({
   testDir: "./admin",
@@ -31,7 +33,7 @@ export default defineConfig({
   webServer: {
     command: "bun harness/serve.ts",
     url: `${BASE}/admin/`,
-    env: { E2E_PORT: String(PORT) },
+    env: { E2E_PORT: String(PORT), E2E_HOST: HOST },
     reuseExistingServer: false,
     timeout: 60_000,
     stdout: "pipe",
