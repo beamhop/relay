@@ -14,7 +14,21 @@ export async function readBody<S extends z.ZodType>(c: Context, schema: S): Prom
       throw badRequest("invalid JSON body", "invalid_json");
     }
   }
+  if (hasNul(raw)) throw badRequest(NUL_MESSAGE, "validation");
   return validate(schema, raw);
+}
+
+export const NUL_MESSAGE = "input must not contain U+0000";
+
+/**
+ * Whether a parsed JSON value has U+0000 in any string (keys included). Postgres can't store or even compare it in
+ * a text value (the query fails), so it's refused up front: both backends answer the same 400 instead of a 500.
+ */
+export function hasNul(v: unknown, depth = 0): boolean {
+  if (typeof v === "string") return v.includes("\u0000");
+  if (!v || typeof v !== "object" || depth > 64) return false;
+  if (Array.isArray(v)) return v.some((x) => hasNul(x, depth + 1));
+  return Object.entries(v).some(([k, x]) => k.includes("\u0000") || hasNul(x, depth + 1));
 }
 
 export function readQuery<S extends z.ZodType>(c: Context, schema: S): z.output<S> {
