@@ -180,6 +180,36 @@ describe("challenge login and cookie sessions", () => {
     expect((await withCookie(cookie, "GET", "/users")).status).toBe(401);
   });
 
+  test("sign out everywhere else: lists your own sessions, ends one or all the others", async () => {
+    const m = user();
+    await api(relay.http, relay.owner.sk, "PUT", `/users/${m.pubkey}/role`, { role: "moderator" });
+    const [a, b, c] = [await login(m.sk), await login(m.sk), await login(m.sk)];
+    const other = await login(relay.owner.sk);
+    const csrf = { "X-Requested-With": "beamhop" };
+    const list = await (await withCookie(a, "GET", "/auth/sessions")).json();
+    expect(list.items.length).toBe(3);
+    expect(list.items.filter((s: { current: boolean }) => s.current).length).toBe(1);
+    expect(list.items[0]).toMatchObject({ method: "nostr", ip: expect.any(String) });
+    expect(JSON.stringify(list)).not.toContain(a.split("=")[1]);
+    // one session, by id; someone else's id is not found
+    const bId = (await (await withCookie(b, "GET", "/auth/sessions")).json()).items.find((s: { current: boolean }) => s.current).id;
+    const ownerId = (await (await withCookie(other, "GET", "/auth/sessions")).json()).items.find((s: { current: boolean }) => s.current).id;
+    expect((await withCookie(a, "DELETE", `/auth/sessions/${ownerId}`, undefined, csrf)).status).toBe(404);
+    expect((await withCookie(a, "DELETE", `/auth/sessions/${bId}`, undefined, csrf)).status).toBe(200);
+    expect((await withCookie(b, "GET", "/auth/me")).status).toBe(401);
+    // all the others; the current one and other admins' sessions stay
+    const r = await withCookie(a, "POST", "/auth/sessions/end-others", undefined, csrf);
+    expect(await r.json()).toEqual({ ended: 1 });
+    expect((await withCookie(c, "GET", "/auth/me")).status).toBe(401);
+    expect((await withCookie(a, "GET", "/auth/me")).status).toBe(200);
+    expect((await withCookie(other, "GET", "/auth/me")).status).toBe(200);
+    // with NIP-98 there is no current session: every one ends
+    expect((await api(relay.http, m.sk, "POST", "/auth/sessions/end-others")).body).toEqual({ ended: 1 });
+    expect((await withCookie(a, "GET", "/auth/me")).status).toBe(401);
+    const audit = await api(relay.http, relay.owner.sk, "GET", `/audit?action=auth.session.end-others&actor=${m.pubkey}`);
+    expect(audit.body.items.map((e: { details: { ended: number } }) => e.details.ended)).toEqual([1, 1]);
+  });
+
   test("garbage session cookie is treated as anonymous", async () => {
     const r = await withCookie("bh_session=deadbeef", "GET", "/auth/me");
     expect(r.status).toBe(401);
