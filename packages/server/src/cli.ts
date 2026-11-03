@@ -175,7 +175,8 @@ function cmdInit(v: Values) {
     plugins: { dir: v["plugins-dir"] ?? "./plugins", packages: [], enabled: [] as string[] },
     logLevel: v["log-level"] ?? "info",
   };
-  writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+  // may hold the postgres URL with its password (and later S3 keys / the metrics token): owner-only
+  writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
   console.log(`wrote ${path}`);
   if (!owners.length) {
     console.log(`

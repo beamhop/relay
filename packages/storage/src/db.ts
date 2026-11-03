@@ -1,6 +1,6 @@
 import type { BeamhopConfig, Db, Dialect, Logger, Migration } from "@beamhop/sdk";
 import { isBun, yieldToEventLoop } from "@beamhop/sdk";
-import { mkdirSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -28,7 +28,12 @@ const keepLeadingBom = (p: unknown) => {
 const bunParams = (params: unknown[] = []) => params.map(keepLeadingBom);
 
 async function openSqlite(path: string): Promise<SqliteDriver> {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") {
+    // the database holds the relay's secret key, admin password hashes, 2FA secrets and session ids: a new one (and
+    // a new data dir) is created readable by the server's user only. SQLite gives -wal/-shm the same mode.
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (!existsSync(path)) closeSync(openSync(path, "a", 0o600));
+  }
   if (isBun) {
     const mod = "bun:sqlite";
     const { Database } = (await import(/* @vite-ignore */ mod)) as typeof import("bun:sqlite");
