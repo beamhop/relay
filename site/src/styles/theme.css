@@ -1,0 +1,70 @@
+/* beamhop palette: cream paper, deep indigo ink, coral scarf, lantern yellow. */
+:root {
+  --bh-cream: #fffaf2;
+  --bh-paper: #fff3e2;
+  --bh-ink: #23255a;
+  --bh-coral: #f0583a;
+  --bh-coral-deep: #c63d22;
+  --bh-yellow: #ffcf4a;
+  --bh-radius: 1.25rem;
+
+  --sl-font: 'Nunito Variable', ui-rounded, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sl-font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Dark theme (Starlight's default block). */
+  --sl-color-accent-low: #46201a;
+  --sl-color-accent: #f0583a;
+  --sl-color-accent-high: #ffc3b2;
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #f1eefa;
+  --sl-color-gray-2: #c9c6e0;
+  --sl-color-gray-3: #9894bd;
+  --sl-color-gray-4: #5d5a8a;
+  --sl-color-gray-5: #3b3966;
+  --sl-color-gray-6: #24234a;
+  --sl-color-black: #16152f;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ffe1d6;
+  --sl-color-accent: #d9452a;
+  --sl-color-accent-high: #8f2c17;
+  --sl-color-white: #1b1c45;
+  --sl-color-gray-1: #23255a;
+  --sl-color-gray-2: #3b3d6e;
+  --sl-color-gray-3: #6a6b92;
+  --sl-color-gray-4: #9d9cb8;
+  --sl-color-gray-5: #e4ddd0;
+  --sl-color-gray-6: #f7efe2;
+  --sl-color-gray-7: #fffaf2;
+  --sl-color-black: #fffcf7;
+}
+
+:root[data-theme='light'] {
+  --sl-color-bg-nav: #fffaf2;
+  --sl-color-bg-sidebar: #fffaf2;
+}
+
+h1, h2, h3, .site-title {
+  letter-spacing: -0.01em;
+}
+.site-title {
+  font-weight: 800;
+  font-size: 1.3rem;
+}
+.site-title img {
+  height: 2.25rem;
+}
+
+.sl-markdown-content h2 {
+  font-weight: 800;
+}
+
+.sl-markdown-content img:not(:where(.not-content *)) {
+  border-radius: 0.75rem;
+  border: 1px solid var(--sl-color-gray-5);
+}
+
+.expressive-code .frame {
+  border-radius: 0.75rem;
+}

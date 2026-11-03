@@ -1,0 +1,36 @@
+---
+title: Plugins
+description: See which plugins your relay runs, switch them on and off without a restart, change their settings and open their pages.
+sidebar:
+  order: 14
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import plugins from '../../../assets/screens/plugins-desktop.png';
+
+Plugins add features to your relay: extra policies, integrations, admin pages and dashboard cards. **Plugins** lists every plugin the relay has loaded.
+
+<Image src={plugins} alt="The Plugins page with two plugin cards, 'hello' and 'spam-filter', each with a version, a green 'running' badge, a description, an on/off switch and a Settings link; the hello card also links to its Hello page." />
+
+Each card shows the plugin's name, version and status: **running**, **disabled**, **error**, or **UI failed** when its admin page couldn't load. If something went wrong, the error is shown in red on the card.
+
+## Turn a plugin on or off
+
+Use the switch on the card. The change takes effect right away, without restarting the relay.
+
+## Change its settings
+
+Click **Settings** (or the plugin's name) to open its page. Besides the on/off switch, it shows a **Settings** form generated from what the plugin accepts, with a short explanation for each field. Changes are applied to the running plugin when you save. A plugin without options says *This plugin has no configurable settings.*
+
+## Plugin pages and cards
+
+A plugin can bring its own admin pages. They show up in a **Plugins** group in the sidebar (under **More** on a phone), as links on the plugin's card, and in the [command palette](/relay/admin/#search-and-jump-anywhere). Plugins can also add cards to the bottom of the [dashboard](/relay/admin/dashboard/) and actions to the **⋯** menus on [users](/relay/admin/users/).
+
+## Installing plugins
+
+The admin app doesn't install plugins. You add them in `beamhop.config.json` (npm packages or local folders) and restart the relay; after that you manage them here. If none are installed, the page says so. To write your own, see [Plugins & API](/relay/build/).
+
+<Aside title="Permissions">
+Everyone except viewers can open plugin pages (`plugins.use`); every role can see the list (`plugins.view`); turning plugins on and off and changing their settings needs `plugins.manage` (owners and admins).
+</Aside>

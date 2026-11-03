@@ -1,0 +1,31 @@
+---
+title: What is beamhop?
+description: A self-hostable Nostr relay, media server and admin app in one process.
+sidebar:
+  order: 1
+---
+
+import { CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+
+beamhop gives you your own place on Nostr. It is one small program that does the job of several:
+
+- **A Nostr relay.** Any Nostr app can connect to it to publish and read notes.
+- **A media server.** People can upload images and video to it using [Blossom](https://github.com/hzrd149/blossom).
+- **An admin app.** A web app you can install on your phone to watch traffic, manage people, handle reports and change settings.
+- **A plugin system.** Add your own rules, routes, jobs and admin screens.
+
+Everything runs in one process and answers on one port. You don't need to set up a database server, a separate media service or a dashboard: the defaults work out of the box, and you can switch to PostgreSQL or S3 storage later.
+
+<Aside type="tip" title="New to Nostr?">
+  Nostr is an open network where your identity is a key pair, not an account on someone's server. Relays store and
+  pass on messages. Running your own relay means your community's notes and media live somewhere you control.
+</Aside>
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard title="Quickstart" description="Get a relay running and sign in to the admin app." href="/relay/start/quickstart/" />
+  <LinkCard title="Install & deploy" description="Docker, Bun, a single binary, reverse proxies and production tips." href="/relay/deploy/" />
+  <LinkCard title="Admin app" description="A tour of every screen, with screenshots." href="/relay/admin/" />
+  <LinkCard title="Plugins & API" description="Extend beamhop or script it from outside." href="/relay/build/" />
+</CardGrid>

@@ -1,0 +1,143 @@
+---
+title: Reverse proxy & TLS
+description: Put nginx or Caddy in front of beamhop for HTTPS, WebSockets, large uploads and correct client IPs.
+sidebar:
+  order: 6
+---
+
+import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
+
+You'll end up with your relay reachable at `wss://relay.example.com` and `https://relay.example.com`, with TLS handled by a reverse proxy, and beamhop seeing each visitor's real IP address so rate limits work per person.
+
+beamhop serves everything on one port: the relay (WebSockets on `/`), Blossom media (`/upload`, `/<sha256>`, …), the admin app (`/admin/`) and plugin routes. So one proxy rule for the whole site is enough. The proxy needs to:
+
+- pass **WebSocket upgrades** through,
+- keep **long-lived connections** open,
+- accept **uploads** up to Blossom's size limit (100 MiB by default; you can change it in the admin app),
+- tell beamhop the **client's IP**.
+
+## Set it up
+
+<Steps>
+
+1. Point your domain's DNS at the server.
+
+2. Make beamhop listen on loopback only, so nobody can go around the proxy, and tell it to trust the proxy:
+
+   ```sh
+   BEAMHOP_HOST=127.0.0.1
+   BEAMHOP_PUBLIC_URL=https://relay.example.com
+   BEAMHOP_TRUST_PROXY=true
+   BEAMHOP_TRUSTED_PROXIES=127.0.0.1/32,::1/128
+   ```
+
+   In Docker, publish the port on loopback instead (`127.0.0.1:3334:3334`) and leave `BEAMHOP_HOST` alone. See [Docker: behind a reverse proxy](/relay/deploy/docker/#behind-a-reverse-proxy).
+
+3. Configure the proxy:
+
+   <Tabs>
+   <TabItem label="Caddy">
+
+   Caddy gets a TLS certificate for you and handles WebSockets and `X-Forwarded-For` on its own.
+
+   ```txt title="Caddyfile"
+   relay.example.com {
+       request_body {
+           max_size 100MB
+       }
+       reverse_proxy 127.0.0.1:3334
+   }
+   ```
+
+   </TabItem>
+   <TabItem label="nginx">
+
+   ```nginx title="/etc/nginx/conf.d/beamhop.conf"
+   map $http_upgrade $connection_upgrade {
+       default upgrade;
+       ''      close;
+   }
+
+   server {
+       listen 443 ssl http2;
+       server_name relay.example.com;
+       # ssl_certificate     /etc/letsencrypt/live/relay.example.com/fullchain.pem;
+       # ssl_certificate_key /etc/letsencrypt/live/relay.example.com/privkey.pem;
+
+       client_max_body_size 100m;          # at least Blossom's max upload size
+       proxy_request_buffering off;        # stream uploads; beamhop enforces its own limits
+
+       location / {
+           proxy_pass http://127.0.0.1:3334;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection $connection_upgrade;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_read_timeout 1h;
+           proxy_send_timeout 1h;
+       }
+   }
+   ```
+
+   Get a certificate with your usual tool (for example certbot) and fill in the two `ssl_` lines.
+
+   </TabItem>
+   </Tabs>
+
+4. Restart beamhop and the proxy, then check from outside:
+
+   ```sh
+   curl https://relay.example.com/health
+   curl -H 'Accept: application/nostr+json' https://relay.example.com/
+   ```
+
+   The first shows `"ok":true`; the second shows your relay's NIP-11 information document.
+
+</Steps>
+
+If you raise Blossom's maximum upload size in the admin app, raise `max_size` / `client_max_body_size` to match.
+
+## Getting the real client IP right
+
+beamhop applies per-IP limits: connections, rate limits, and four concurrent uploads per IP. Behind a proxy, every request comes from the proxy's address, so without the right settings **all your users share one set of limits**.
+
+Three settings work together:
+
+| Setting | What it does |
+| --- | --- |
+| `BEAMHOP_TRUST_PROXY=true` | Read the client IP from a header instead of the connection. |
+| `BEAMHOP_TRUSTED_PROXIES` | Only believe that header from these addresses (comma-separated IPs or CIDR ranges). Everyone else is identified by their own address, whatever headers they send. |
+| `BEAMHOP_PROXY_IP_HEADER` | Which header to read. Default `x-forwarded-for`. |
+
+<Aside type="danger" title="Only trust a proxy you actually have">
+Turn on `BEAMHOP_TRUST_PROXY` only when exactly one reverse proxy sits in front and clients can't reach beamhop's port directly. Otherwise anyone can fake their IP and dodge rate limits or bans.
+</Aside>
+
+The default `BEAMHOP_TRUSTED_PROXIES` trusts loopback and all private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and similar). That works out of the box for a proxy on the same host or in a neighbouring container. For production, narrow it to your proxy's actual address.
+
+### How the header is read
+
+With the default `x-forwarded-for`, beamhop takes the **rightmost** entry: the one your proxy added. Anything the client put in the header itself is ignored. nginx's `$proxy_add_x_forwarded_for`, Caddy, Traefik and HAProxy's `option forwardfor` all work this way. If a request has no `X-Forwarded-For` at all, `X-Real-IP` is used instead.
+
+If your proxy instead **sets** a single-address header and passes the client's own `X-Forwarded-For` through untouched, point beamhop at that header, or the IP can be spoofed:
+
+```sh
+BEAMHOP_PROXY_IP_HEADER=x-real-ip        # nginx with only: proxy_set_header X-Real-IP $remote_addr;
+```
+
+### Behind Cloudflare or another CDN
+
+- **CDN in front of your own proxy:** configure your proxy to restore the visitor's IP (for nginx, the `real_ip` module with the CDN's ranges), and leave beamhop as above.
+- **CDN connects straight to beamhop:** list the CDN's published IP ranges in `BEAMHOP_TRUSTED_PROXIES`, and if it sends a dedicated header, use it, for example `BEAMHOP_PROXY_IP_HEADER=cf-connecting-ip`.
+
+Make sure the CDN allows WebSockets and uploads as large as your Blossom limit.
+
+## Why the public URL matters
+
+`BEAMHOP_PUBLIC_URL` must be the exact `https://` address people use. beamhop checks NIP-42 relay tags, NIP-98 and passkey admin logins against it, and builds Blossom media links from it. If it still says `http://localhost:3334`, NIP-42 auth, some admin sign-in methods and Blossom media links won't work for your users.
+
+## Metrics behind a proxy
+
+With `BEAMHOP_TRUST_PROXY` on, `/metrics` is switched off unless you set `BEAMHOP_METRICS_TOKEN`, because proxied internet clients would otherwise look like local ones. See [Monitoring](/relay/deploy/monitoring/#prometheus-metrics). You may also want your proxy to block `/metrics` from the internet entirely.

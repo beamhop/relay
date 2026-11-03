@@ -1,0 +1,76 @@
+---
+title: Admins and roles
+description: Give people access to the admin app as owner, admin, moderator or viewer, and see exactly what each role may do.
+sidebar:
+  order: 6
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps } from '@astrojs/starlight/components';
+import admins from '../../../assets/screens/admins-desktop.png';
+
+The **Admins** page lists everyone who can sign in to the admin app, with their role. Only owners see it.
+
+<Image src={admins} alt="The Admins page: a list of people with a role picker next to each (owner, moderator, viewer), and a Role permissions card describing each role with its permission badges." />
+
+## The four roles
+
+| Role | In short |
+| --- | --- |
+| **Owner** | Full control, including managing other admins. |
+| **Admin** | Everything except managing admins. |
+| **Moderator** | Users, content, reports and media moderation. |
+| **Viewer** | Read-only access. |
+
+The **Role permissions** card at the bottom of the page lists every permission each role has. In detail:
+
+| Permission | Owner | Admin | Moderator | Viewer |
+| --- | :-: | :-: | :-: | :-: |
+| `dashboard.view`: dashboard and live stream | ✓ | ✓ | ✓ | ✓ |
+| `connections.manage`: list and disconnect connections, see IPs in the live stream | ✓ | ✓ | | |
+| `users.view` | ✓ | ✓ | ✓ | ✓ |
+| `users.edit`: notes, tags, lists, limits | ✓ | ✓ | ✓ | |
+| `users.ban`: ban, mute | ✓ | ✓ | ✓ | |
+| `users.delete` | ✓ | ✓ | | |
+| `invites.manage` | ✓ | ✓ | ✓ | |
+| `ip.manage`: IP rules | ✓ | ✓ | | |
+| `content.view` | ✓ | ✓ | ✓ | ✓ |
+| `content.delete` | ✓ | ✓ | ✓ | |
+| `content.import`, `content.export` | ✓ | ✓ | | |
+| `reports.view` | ✓ | ✓ | ✓ | ✓ |
+| `reports.resolve` | ✓ | ✓ | ✓ | |
+| `media.view` | ✓ | ✓ | ✓ | ✓ |
+| `media.moderate`: approve, block, delete | ✓ | ✓ | ✓ | |
+| `groups.view` | ✓ | ✓ | ✓ | ✓ |
+| `groups.manage`: delete groups | ✓ | ✓ | | |
+| `settings.view` | ✓ | ✓ | ✓ | ✓ |
+| `settings.edit` | ✓ | ✓ | | |
+| `admins.manage` | ✓ | | | |
+| `plugins.view` | ✓ | ✓ | ✓ | ✓ |
+| `plugins.manage`: enable, disable, configure | ✓ | ✓ | | |
+| `plugins.use`: plugin pages and dashboard cards | ✓ | ✓ | ✓ | |
+| `audit.view` | ✓ | ✓ | | |
+
+The app hides what a role can't use, and the server refuses it anyway.
+
+## Add an admin
+
+<Steps>
+
+1. On **Admins**, click **Add admin**.
+2. Paste their npub or hex pubkey and pick a role.
+3. Click **Grant access**. They can now [sign in](/relay/admin/signing-in/) with their Nostr key.
+
+</Steps>
+
+You can also set a role from anyone's [user page](/relay/admin/users/#a-users-page), in the **Admin role** card.
+
+## Change or remove a role
+
+Pick a new role from the menu next to the person. **Remove access** takes their role away after you confirm. On a user's page, making someone an owner asks for confirmation too, since owners can manage every other admin.
+
+You can't change your own role, so there is always someone who can undo a mistake.
+
+<Aside title="From the command line">
+The server operator can manage admins without the app: `beamhop admin add npub1… --role moderator`, and `beamhop admin remove npub1…`, which also ends their sessions, push notifications, password, TOTP and passkeys. Owners listed in `BEAMHOP_OWNERS` always keep the owner role.
+</Aside>

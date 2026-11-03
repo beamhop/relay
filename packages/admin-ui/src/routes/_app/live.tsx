@@ -254,7 +254,7 @@ function Connections() {
               </TableCell>
               <TableCell className="text-right tabular-nums">{c.subscriptions}</TableCell>
               <TableCell className="text-right tabular-nums">{formatNumber(c.messagesIn)} / {formatNumber(c.messagesOut)}</TableCell>
-              <TableCell className="text-right text-muted-foreground tabular-nums">{formatDuration(nowSec() - c.connectedAt)}</TableCell>
+              <TableCell className="text-right text-muted-foreground tabular-nums">{formatDuration(nowSec() - Math.floor(c.connectedAt / 1000))}</TableCell>
               {manage && (
                 <TableCell>
                   <div className="flex gap-1">
@@ -278,7 +278,7 @@ function ConnMeta({ c }: { c: ConnectionView }) {
       <span>
         {formatNumber(c.messagesIn)}↓ {formatNumber(c.messagesOut)}↑
       </span>
-      <span className="text-right">{formatDuration(nowSec() - c.connectedAt)}</span>
+      <span className="text-right">{formatDuration(nowSec() - Math.floor(c.connectedAt / 1000))}</span>
       {c.authedPubkeys.length > 0 && <span className="col-span-3 truncate font-mono">auth: {c.authedPubkeys.map((p) => shortNpub(p, 4)).join(", ")}</span>}
       {c.userAgent && <span className="col-span-3 truncate">{c.userAgent}</span>}
     </div>

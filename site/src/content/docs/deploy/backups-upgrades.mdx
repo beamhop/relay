@@ -1,0 +1,150 @@
+---
+title: Backups & upgrades
+description: Back up the database and media safely while beamhop runs, restore them, and upgrade to a new version.
+sidebar:
+  order: 10
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+You'll end up with a backup routine you can run while the relay is live, a restore you've tried once, and a safe way to upgrade.
+
+## What to back up
+
+1. **The database**: SQLite's `beamhop.db` or your PostgreSQL database. It holds events, users, settings, admin accounts, password hashes, two-factor secrets and the relay's own secret key.
+2. **Media files**: the `blobs` folder, or your S3 bucket.
+3. **Your configuration**: `beamhop.config.json` and/or your environment file.
+
+**Order matters: database first, then media.** A file uploaded in between just ends up as an unused file in the backup. The other order can leave database rows pointing at files that aren't there.
+
+<Aside type="caution" title="Backups are as sensitive as the database">
+A backup contains the relay's secret key and admin credentials. Keep it private: create it with `umask 077`, and store it somewhere only you can read.
+</Aside>
+
+## SQLite
+
+Never copy `beamhop.db` with `cp` while beamhop runs. The database is in WAL mode, so recent writes live in a separate `beamhop.db-wal` file and a plain copy can be inconsistent. Use an online backup instead. It's safe under write load and gives a consistent snapshot.
+
+<Tabs syncKey="install">
+<TabItem label="Bun / Node / binary">
+
+With the `sqlite3` command-line tool:
+
+```sh
+umask 077
+mkdir -p backups
+sqlite3 data/beamhop.db "VACUUM INTO 'backups/beamhop-$(date +%F-%H%M).db'"   # needs SQLite 3.27+
+# or
+sqlite3 data/beamhop.db ".backup 'backups/beamhop-$(date +%F-%H%M).db'"
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+The image doesn't include `sqlite3`, but Bun's built-in SQLite can do the same job inside the container:
+
+```sh
+name=beamhop-$(date +%F-%H%M).db
+docker compose exec beamhop bun -e \
+  "const { Database } = require('bun:sqlite'); new Database('/data/beamhop.db').run('VACUUM INTO ?', ['/data/$name'])"
+mkdir -p backups
+docker compose cp beamhop:/data/$name backups/
+docker compose exec beamhop rm /data/$name
+```
+
+</TabItem>
+</Tabs>
+
+Check a backup:
+
+```sh
+sqlite3 backups/beamhop-….db "PRAGMA integrity_check"    # → ok
+```
+
+**To restore:** stop beamhop, replace `beamhop.db` with the backup, delete any `beamhop.db-wal` and `beamhop.db-shm` next to it, and start again.
+
+## PostgreSQL
+
+```sh
+# back up (online, consistent)
+pg_dump -Fc -f beamhop-$(date +%F-%H%M).pgc "$BEAMHOP_DATABASE_URL"
+
+# restore (with beamhop stopped)
+pg_restore --exit-on-error --clean --if-exists -d "$BEAMHOP_DATABASE_URL" beamhop-….pgc
+```
+
+If beamhop lives in its own schema (`?search_path=…` in the URL), add `-n <schema>` to both commands.
+
+## Media files
+
+- **Filesystem:** copy the blobs folder, for example `rsync -a data/blobs/ backup-host:beamhop-blobs/`. Files are named by their content hash and never change once written, so incremental copies are fast. Files starting with `.` and ending in `.tmp` are uploads still in progress; you can skip them.
+- **S3:** turn on bucket versioning or replication at your provider.
+
+## Move events between relays
+
+`beamhop export` and `beamhop import` copy **events** as JSON lines, for example from SQLite to PostgreSQL or from one relay to another:
+
+```sh
+beamhop export > events.jsonl
+beamhop export --filter '{"kinds":[0,3]}' > profiles-and-follows.jsonl
+beamhop import < events.jsonl
+```
+
+This is not a full backup: users, settings, admin state and media aren't included. Search filters (NIP-50) can't be used with `--filter`.
+
+## Upgrading
+
+<Steps>
+
+1. **Back up** the database and media as above. There are no down-migrations, so a backup is your only way back.
+
+2. Get the new version and rebuild:
+
+   <Tabs syncKey="install">
+   <TabItem label="Docker">
+
+   ```sh
+   git pull
+   docker compose build
+   docker compose up -d
+   ```
+
+   </TabItem>
+   <TabItem label="Bun">
+
+   ```sh
+   git pull
+   bun install
+   bun run build:ui && bun run build:plugins
+   ```
+
+   Then restart beamhop (for example `sudo systemctl restart beamhop`).
+
+   </TabItem>
+   <TabItem label="Node / binary">
+
+   ```sh
+   git pull
+   bun install
+   bun run build:ui
+   bun run build:node      # or: bun run build:binary
+   ```
+
+   Copy the new build into place and restart beamhop.
+
+   </TabItem>
+   </Tabs>
+
+3. Watch the log as it starts. Database migrations run automatically, each in its own transaction. Then check `GET /health`.
+
+</Steps>
+
+To run migrations on their own, for example before switching traffic over, use `beamhop migrate`. It applies the migrations and exits.
+
+**To roll back:** stop beamhop, restore the backup from step 1, and start the previous version.
+
+Read the [changelog](https://github.com/beamhop/relay/blob/main/CHANGELOG.md) before upgrading. It lists anything that affects operators.
+
+## How migrations work
+
+Every part of beamhop (relay, admin, Blossom, enabled plugins) owns its own tables and migrations. Applied migrations are recorded in a `_migrations` table, so a second start applies nothing. On PostgreSQL, a lock makes sure two instances starting at the same time don't migrate twice. Upgrades from earlier development versions have been tested on both SQLite and PostgreSQL with events, deletions, search, bans, settings and media intact.

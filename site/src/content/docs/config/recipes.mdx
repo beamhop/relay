@@ -1,0 +1,107 @@
+---
+title: Common recipes
+description: Settings for a public relay, a private relay, an invite-only relay, an AUTH-required relay, a relay without media, and a relay behind a reverse proxy.
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A few setups people ask for often. Most of them are admin-panel settings (**Settings → Access** and friends), which apply as soon as you save. The last two are startup config and need a restart. Key names link up with the [configuration reference](/relay/config/reference/).
+
+First, one word that comes up a lot: a **member** is an owner, anyone with an admin role, or a user on the allow-list (**Users → Allow-list**, or anyone who redeemed an invite).
+
+## An open public relay
+
+This is what you get out of the box: anyone can read and anyone can publish.
+
+| Setting | Value |
+| --- | --- |
+| `access.mode` | `public` |
+| `access.authForRead` | off |
+| `access.authForWrite` | off |
+
+<Aside type="caution" title="Uploads are open too">
+`blossom.uploadAccess` defaults to `members`, and on a public relay everyone counts as a member. So by default anyone can upload media, up to the 1 GiB default quota each. If you'd rather keep media for yourself and your staff, set **Settings → Blossom → Who can upload** to `admins`, or turn media off entirely ([see below](#a-relay-without-media)).
+</Aside>
+
+On an open relay the limits in **Settings → Limits** are your main protection. The defaults are a reasonable start; `limits.eventsPerMinute`, `limits.connectionsPerIp` and `limits.maxConnections` are the ones to look at first if the relay gets busy.
+
+## A private relay for you and your friends
+
+Only people you pick can publish, and readers have to sign in.
+
+<Steps>
+
+1. In **Settings → Access**, set the mode to `whitelist`.
+
+2. Turn on **Require AUTH to read** (`access.authForRead`), so clients have to sign in with NIP-42 before they can read anything.
+
+   This keeps anonymous visitors out, but note that it checks for a sign-in, not for membership: someone who isn't a member can still sign in with their own key and read.
+
+3. Decide on **Accept inbound events for members** (`access.allowInboundToMembers`). When it's on (the default), people outside the relay can still send your members replies, DMs, reactions and the like, as long as the event tags that member. Turn it off for a relay that only stores what members write themselves.
+
+4. Add people on the **Users** page by putting them on the allow-list. Owners and admins are members already.
+
+</Steps>
+
+Leave **Require AUTH to read** off if you want a relay where only friends post but anyone may read.
+
+## An invite-only relay
+
+Like the private relay, but people let themselves in with an invite link instead of you adding each one.
+
+<Steps>
+
+1. In **Settings → Access**, set the mode to `invite`.
+
+2. Open the **Invites** page and create one or more invite links.
+
+3. Send the links. Whoever opens one signs in with a NIP-07 browser extension and is added to the allow-list. From then on they can publish.
+
+</Steps>
+
+You can revoke a link on the **Invites** page at any time; it stops working immediately. Turn on **Require AUTH to read** as well if readers should have to sign in.
+
+## Anyone, but signed in
+
+In `auth-required` mode, anyone may use the relay, but only after signing in with NIP-42, and they may only publish events they signed themselves (gift-wrapped messages are the exception, since those are signed by throwaway keys).
+
+| Setting | Value |
+| --- | --- |
+| `access.mode` | `auth-required` |
+
+Reading needs a sign-in too in this mode, whatever **Require AUTH to read** says. It's a good middle ground when you want to know who is using the relay without picking members by hand.
+
+## A relay without media
+
+To run a plain Nostr relay without the Blossom media server, turn it off in the startup config and restart:
+
+```json title="beamhop.config.json"
+{
+  "blossom": { "enabled": false }
+}
+```
+
+or set `BEAMHOP_BLOSSOM_ENABLED=false`.
+
+## Behind a reverse proxy
+
+When nginx, Caddy, Traefik or a CDN sits in front of beamhop, tell beamhop so it sees each client's real IP. Otherwise every client looks like the proxy, and they all share one set of per-IP limits. This is startup config, so restart afterwards.
+
+```json title="beamhop.config.json"
+{
+  "server": {
+    "host": "127.0.0.1",
+    "publicUrl": "https://relay.example.com",
+    "trustProxy": true
+  }
+}
+```
+
+- `server.publicUrl` must be the address people actually use, with `https://`.
+- `server.trustProxy` makes beamhop read the client IP from `X-Forwarded-For` (or the header in `server.proxyIpHeader`).
+- `server.trustedProxies` decides whose header is believed. The default (loopback and private networks) fits a proxy on the same machine or in the same container network; narrow it to your proxy's address if you can.
+- `server.host: "127.0.0.1"` keeps clients from reaching beamhop directly around the proxy, when the proxy runs on the same machine.
+
+With `trustProxy` on, `/metrics` is only served with a token, so set `server.metricsToken` (or `BEAMHOP_METRICS_TOKEN`) if you scrape it. The [reverse proxy guide](/relay/deploy/reverse-proxy/) has full nginx and Caddy setups.

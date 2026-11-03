@@ -1,0 +1,101 @@
+---
+title: S3-compatible storage
+description: Keep Blossom media in an S3-compatible bucket such as AWS S3, Cloudflare R2 or MinIO, optionally served straight from a CDN.
+sidebar:
+  order: 8
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+You'll end up with Blossom media (images, videos and other uploads) stored in an S3-compatible bucket instead of the local `data/blobs` folder. Optionally, people download files straight from the bucket or a CDN, so they don't pass through your relay.
+
+By default beamhop stores media on the local filesystem (`BEAMHOP_BLOSSOM_FS_PATH`, default `./data/blobs`). That's fine for many relays. Switch to a bucket when you want media off the server's disk.
+
+## Set it up
+
+<Steps>
+
+1. Create a bucket, for example `beamhop`, and an access key that can read, write and delete objects in it. beamhop uses `PUT` (including server-side copy), `GET`, `HEAD` and `DELETE`.
+
+2. Configure beamhop:
+
+   ```sh
+   BEAMHOP_BLOSSOM_DRIVER=s3
+   BEAMHOP_S3_ENDPOINT=https://s3.example.com
+   BEAMHOP_S3_REGION=auto
+   BEAMHOP_S3_BUCKET=beamhop
+   BEAMHOP_S3_ACCESS_KEY_ID=…
+   BEAMHOP_S3_SECRET_ACCESS_KEY=…
+   ```
+
+   or in `beamhop.config.json`:
+
+   ```json
+   {
+     "blossom": {
+       "driver": "s3",
+       "s3": {
+         "endpoint": "https://s3.example.com",
+         "region": "auto",
+         "bucket": "beamhop",
+         "accessKeyId": "…",
+         "secretAccessKey": "…"
+       }
+     }
+   }
+   ```
+
+3. Start beamhop and read the startup log. If the endpoint, bucket, credentials or permissions are wrong, you'll see **`blob storage is not usable`** with the reason. No message means the bucket is ready.
+
+</Steps>
+
+The region defaults to `auto`, which is what Cloudflare R2 expects. For AWS, use your bucket's region (for example `eu-central-1`).
+
+<Aside type="note" title="Path-style URLs">
+beamhop addresses objects as `endpoint/bucket/<sha256>`, so set the **endpoint without the bucket name** in it. Objects are stored flat: `<sha256>` for the file and `<sha256>.thumb.webp` for its thumbnail.
+</Aside>
+
+## Serving media from the bucket or a CDN
+
+Without a public URL, beamhop downloads each file from the bucket and passes it on. That keeps the bucket private, but all media traffic goes through your server.
+
+To send downloads straight to the bucket or a CDN in front of it, make the bucket publicly readable and set:
+
+```sh
+BEAMHOP_S3_PUBLIC_URL=https://cdn.example.com
+```
+
+Now a request for an approved image, video or other safe-to-display file gets a `307` redirect to `https://cdn.example.com/<sha256>`.
+
+<Aside type="caution" title="What changes with a public bucket">
+Anyone can fetch `https://cdn.example.com/<sha256>` directly, so beamhop protects the bucket for you:
+
+- Files that aren't safe to show in a browser (SVG, HTML and the like) are stored with a download-only content type.
+- Pending and blocked files are kept under a hidden, unguessable name and only moved to `<sha256>` once approved.
+
+That hidden name is derived from your **secret access key**. If you rotate the key, files still waiting for approval are orphaned, so approve or delete pending media first.
+</Aside>
+
+## Trying it locally with MinIO
+
+The Docker Compose file includes MinIO for testing:
+
+```sh title=".env"
+BEAMHOP_BLOSSOM_DRIVER=s3
+MINIO_ROOT_PASSWORD=a-long-random-password
+```
+
+```sh
+docker compose --profile s3 up -d
+```
+
+The bucket is created for you, and beamhop is already pointed at `http://minio:9000`. The MinIO console is at `http://127.0.0.1:9001`. It gives full access to every file, so keep it private.
+
+## How it works
+
+- **Health.** The bucket isn't part of `GET /health`. A short S3 hiccup won't take your relay out of the load balancer. Its state at startup is in the log.
+- **Retries.** Requests to the bucket time out and are retried on network errors, `429` and `5xx` responses.
+- **Large files under Bun.** When beamhop passes a file through from S3 under Bun, the response is sent without a `Content-Length` header (a `HEAD` request still reports the size). A public URL avoids this.
+- **Backups.** Turn on versioning or replication for the bucket at your provider. See [Backups & upgrades](/relay/deploy/backups-upgrades/#media-files).
+
+Upload sizes, quotas and allowed file types are runtime settings you change in the [admin app](/relay/admin/). Upload abuse limits are boot-time options listed in the [configuration reference](/relay/config/reference/).

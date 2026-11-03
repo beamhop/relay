@@ -1,0 +1,145 @@
+---
+title: Quickstart
+description: Get a beamhop relay running on your own machine in about two minutes, then sign in to the admin app.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+By the end of this page you'll have a working Nostr relay, a Blossom media server and the admin app running on your computer at `http://localhost:3334`, with you as its owner.
+
+## What you need
+
+- **Your Nostr public key** (an `npub1…`). This makes you the relay's owner, so you can sign in to the admin app.
+- **A browser signer** such as a NIP-07 extension. You can also sign in by pasting a private key, which stays in your browser.
+- **One of:** [Node.js](https://nodejs.org) 22 or newer (for `npx`), Docker with Compose, or [Bun](https://bun.sh) 1.2 or newer. Docker and Bun also need `git`.
+
+## Start the relay
+
+<Tabs syncKey="install">
+<TabItem label="npx">
+
+<Steps>
+
+1. Start beamhop straight from GitHub, with your key as the owner:
+
+   ```sh
+   npx github:beamhop/relay#dist start --owner npub1…
+   ```
+
+   The first run downloads the latest build, which takes a moment. The log tells you it's listening on port 3334. Leave this terminal open.
+
+2. In another terminal, check that it's up:
+
+   ```sh
+   curl http://localhost:3334/health
+   ```
+
+   You'll see something like `{"ok":true,"status":"ready",…}`.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Docker">
+
+<Steps>
+
+1. Get the code:
+
+   ```sh
+   git clone https://github.com/beamhop/relay.git
+   cd relay
+   ```
+
+2. Start beamhop with your key as the owner:
+
+   ```sh
+   BEAMHOP_OWNERS=npub1… docker compose up -d
+   ```
+
+   The first run builds the image, which takes a few minutes. After that, starts are quick.
+
+3. Check that it's up:
+
+   ```sh
+   curl http://localhost:3334/health
+   ```
+
+   You'll see something like `{"ok":true,"status":"ready",…}`.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Bun">
+
+<Steps>
+
+1. Get the code and install dependencies:
+
+   ```sh
+   git clone https://github.com/beamhop/relay.git
+   cd relay
+   bun install
+   ```
+
+2. Build the admin app (this only needs to happen once per update):
+
+   ```sh
+   bun run build:ui
+   ```
+
+3. Start beamhop with your key as the owner:
+
+   ```sh
+   BEAMHOP_OWNERS=npub1… bun run start
+   ```
+
+   The log tells you it's listening on port 3334. Leave this terminal open.
+
+4. In another terminal, check that it's up:
+
+   ```sh
+   curl http://localhost:3334/health
+   ```
+
+   You'll see something like `{"ok":true,"status":"ready",…}`.
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+## Try it out
+
+- **Open the admin app** at [http://localhost:3334/admin/](http://localhost:3334/admin/) and sign in with the key you set as owner. You'll land on the live dashboard.
+- **Connect a Nostr client** to `ws://localhost:3334`. Post a note and watch it appear on the dashboard.
+- **Visit** [http://localhost:3334/](http://localhost:3334/) in a browser for the relay's landing page.
+
+<Aside type="tip" title="Forgot to set an owner?">
+Nobody can sign in to the admin app without an owner. Stop beamhop and start it again with `BEAMHOP_OWNERS` set, or add yourself from the command line:
+
+```sh
+# npx
+npx github:beamhop/relay#dist admin add npub1… --role owner
+# Docker
+docker compose exec beamhop bun packages/server/src/cli.ts admin add npub1… --role owner
+# Bun
+bun run beamhop admin add npub1… --role owner
+```
+</Aside>
+
+## Where your data lives
+
+Everything is stored in a SQLite database and a folder of media files. With npx they're in `./data` in the folder you ran it from; with Docker they live in the `beamhop-data` volume; with Bun they're in `./data` inside the repo. Both are kept when you stop and start again.
+
+## Next steps
+
+This setup is great for trying beamhop. To put a relay on the internet, you'll want a domain, TLS and a few safety settings.
+
+<CardGrid>
+  <LinkCard title="Choose how to deploy" href="/relay/deploy/" description="Docker, Bun, Node or a single binary." />
+  <LinkCard title="Put it behind a reverse proxy" href="/relay/deploy/reverse-proxy/" description="HTTPS, WebSockets and real client IPs." />
+  <LinkCard title="Production checklist" href="/relay/deploy/production-checklist/" description="Everything to check before you go live." />
+  <LinkCard title="Tour the admin app" href="/relay/admin/" description="Users, moderation, media, settings and plugins." />
+</CardGrid>

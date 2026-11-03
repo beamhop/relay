@@ -1,0 +1,45 @@
+---
+title: Push notifications
+description: Get a notification on your phone or computer when someone files a report or the relay needs attention, even with the admin app closed.
+sidebar:
+  order: 18
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps } from '@astrojs/starlight/components';
+import prefs from '../../../assets/screens/account-preferences-desktop.png';
+
+The admin app can send push notifications to your devices, so you hear about new reports and problems without keeping it open.
+
+<Image src={prefs} alt="The lower part of the Account page: the Notifications card with 'New reports' and 'System alerts' ticked and an 'Enable notifications' button, next to the Privacy card with two switches, and the Appearance card below." />
+
+## Turn them on
+
+<Steps>
+
+1. On the device you want notified, open [Account](/relay/admin/account/) and scroll to **Notifications**.
+2. Tick the topics you want:
+   - **New reports**: when a user files a report.
+   - **System alerts**: rejection spikes, memory and event-loop pressure, auto-bans and word-filter matches.
+3. Click **Enable notifications** and allow notifications when the browser asks.
+
+</Steps>
+
+That's it for this device. Repeat on each phone or computer you want notified. Change the topics any time by ticking or unticking them; **Disable on this device** turns notifications off here.
+
+Tapping a notification opens the matching page: a new report opens that report in the [Reports](/relay/admin/reports/) queue, an alert opens the dashboard. When lots happen at once (a spam wave, say), you get the first right away and then one "N more" summary instead of a flood.
+
+You only get topics your role can see: report notifications need access to reports, and alerts need the dashboard.
+
+## If it says it can't
+
+- *This browser doesn't support web push. On iOS, add the app to your home screen first.* On iPhone and iPad, notifications only work from the [installed app](/relay/admin/#install-it-as-an-app); open beamhop from your home screen and try again. Other browsers need a secure page (`https://`).
+- *Push notifications are not configured on this server.* The server couldn't set up its push keys; check its logs.
+
+<Aside title="Signing out stops them">
+Signing out, ending a session on the [Account](/relay/admin/account/#sessions) page, or losing your admin role stops that device's notifications too, so a shared or lost device stops receiving alerts.
+</Aside>
+
+<Aside title="For operators">
+Push works out of the box: beamhop creates its Web Push (VAPID) keys on first start and keeps them in the database. To use your own keys, set `BEAMHOP_VAPID_PUBLIC_KEY`, `BEAMHOP_VAPID_PRIVATE_KEY` and `BEAMHOP_VAPID_SUBJECT`; see the [configuration reference](/relay/config/reference/#adminvapid).
+</Aside>

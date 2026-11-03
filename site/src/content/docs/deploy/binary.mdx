@@ -1,0 +1,92 @@
+---
+title: Single binary
+description: Compile beamhop into one self-contained executable with the admin app built in, and run it anywhere.
+sidebar:
+  order: 5
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+You'll end up with one file, `beamhop`, that contains the server, the Bun runtime and the admin app. Copy it to a server, run it, done. Nothing else to install.
+
+## Build it
+
+You need Bun and a checkout of the repository on the machine where you build:
+
+<Steps>
+
+1. Clone and install:
+
+   ```sh
+   git clone https://github.com/beamhop/relay.git
+   cd relay
+   bun install
+   ```
+
+2. Build the admin app, then the binary:
+
+   ```sh
+   bun run build:ui
+   bun run build:binary
+   ```
+
+   You'll see `built …/packages/server/dist/beamhop (N admin-ui files embedded)`.
+
+3. Run it:
+
+   ```sh
+   ./packages/server/dist/beamhop init     # writes beamhop.config.json
+   ./packages/server/dist/beamhop start
+   ```
+
+</Steps>
+
+If you skip `build:ui`, the build warns you and the binary serves a placeholder at `/admin/`.
+
+## Build for another platform
+
+By default the binary is built for the machine you're on. To build for a Linux server from your laptop, set a Bun compile target:
+
+```sh
+BEAMHOP_BINARY_TARGET=bun-linux-x64 bun run build:binary
+```
+
+Use `BEAMHOP_BINARY_OUT=path/to/file` to change where it's written.
+
+## Put it on a server
+
+<Steps>
+
+1. Copy the binary to the server, for example to `/usr/local/bin/beamhop`, and make a home for its data:
+
+   ```sh
+   sudo useradd --system --home /var/lib/beamhop --create-home beamhop
+   ```
+
+2. Write a config file there (it's created readable only by its owner):
+
+   ```sh
+   cd /var/lib/beamhop
+   sudo -u beamhop beamhop init --owner npub1… --public-url https://relay.example.com
+   ```
+
+3. Run it with systemd. Use the [systemd example](/relay/deploy/bun/#run-it-as-a-service-with-systemd) with these two lines changed:
+
+   ```ini
+   WorkingDirectory=/var/lib/beamhop
+   ExecStart=/usr/local/bin/beamhop start
+   ```
+
+</Steps>
+
+Relative paths in the config, such as `./data/beamhop.db` and `./data/blobs`, are resolved against the config file's folder. So everything ends up under `/var/lib/beamhop/data`.
+
+## What's different about the binary
+
+- **SQLite only through Bun's built-in driver.** PostgreSQL works too.
+- **No thumbnails.** `sharp` isn't bundled, so Blossom doesn't generate thumbnails. EXIF stripping still works.
+- **Plugins aren't embedded.** The example plugins from the repository's `plugins/` folder aren't part of the binary. If you use plugins, test them with your binary build before relying on them.
+
+<Aside type="note" title="No prebuilt binaries yet">
+There are no release downloads at the moment, so build the binary yourself as shown above.
+</Aside>

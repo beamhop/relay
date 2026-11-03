@@ -31,6 +31,8 @@ jobs:
       - run: bun test ./packages ./plugins
       - run: bun run build:ui && bun run build:plugins
       - run: bun run test:e2e:relay
+      - name: docs config reference is up to date
+        run: bun site/scripts/gen-config-ref.ts && git diff --exit-code site/src/content/docs/config/reference.md
 
   admin-e2e:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

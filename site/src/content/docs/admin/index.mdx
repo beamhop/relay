@@ -1,0 +1,114 @@
+---
+title: The admin app
+description: A tour of beamhop's admin app, how to open it, find your way around and install it on your phone or desktop.
+sidebar:
+  order: 1
+  label: Overview
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import dashboard from '../../../assets/screens/dashboard-desktop.png';
+import more from '../../../assets/screens/more-menu-phone.png';
+import palette from '../../../assets/screens/command-palette-desktop.png';
+
+Every beamhop relay comes with an admin app. It runs in your browser at `/admin/` on your relay, for example `https://relay.example.com/admin/`, and it is where you watch traffic, look after people and content, and change how the relay behaves. There is nothing extra to install or host: the same process that serves the relay serves the app.
+
+<Image src={dashboard} alt="The admin app's dashboard: a sidebar with Overview, Community, Content and System sections, and cards showing connections, events per second, storage, CPU and memory, above traffic and system charts." />
+
+The screenshots in this guide come from a demo relay called Driftwood, filled with invented people and posts.
+
+## Finding your way around
+
+On a computer, the sidebar on the left groups the pages:
+
+| Group | Pages |
+| --- | --- |
+| **Overview** | [Dashboard](/relay/admin/dashboard/), [Live](/relay/admin/live/) |
+| **Community** | [Users](/relay/admin/users/), [Admins](/relay/admin/roles/), [Invites](/relay/admin/invites/), [IP rules](/relay/admin/ip-rules/) |
+| **Content** | [Events](/relay/admin/events/), [Reports](/relay/admin/reports/), [Media](/relay/admin/media/), [Groups](/relay/admin/groups/) |
+| **System** | [Settings](/relay/admin/settings/), [Plugins](/relay/admin/plugins/), [Audit log](/relay/admin/audit-log/), [System](/relay/admin/system/), [Account](/relay/admin/account/) |
+
+Plugins can add their own pages; they appear in an extra **Plugins** group. You only see the pages your [role](/relay/admin/roles/) allows, so a viewer's sidebar is shorter than an owner's. **System** and **Account** are always there.
+
+A few things stay on screen wherever you are:
+
+- **The live dot** in the top bar. Green means the app is receiving live updates from the relay; amber means it is reconnecting; red means it is offline.
+- **The red number next to Reports** counts open reports waiting for you.
+- **Your name** at the bottom of the sidebar opens a menu with Account & security, the theme (light, dark or system) and Sign out.
+- <kbd>⌘</kbd> <kbd>B</kbd> (<kbd>Ctrl</kbd> <kbd>B</kbd> on Windows and Linux) collapses the sidebar to icons.
+
+### On a phone
+
+On a narrow screen the sidebar becomes a bar at the bottom with **Dashboard**, **Users**, **Events** and **Reports**. Everything else is under **More**, along with the theme and Sign out. Lists work with your thumb: swipe a row to act on it and long-press to start selecting several. Each page explains its gestures.
+
+<Image src={more} alt="The admin app on a phone, with the More sheet open showing tiles for Live, Admins, Invites, IP rules, Media, Groups, Settings, Plugins, Audit log, System, Account and a plugin page called Hello." width={390} />
+
+## Search and jump anywhere
+
+Press <kbd>⌘</kbd> <kbd>K</kbd> (<kbd>Ctrl</kbd> <kbd>K</kbd>), or click **Search…** in the top bar, to open the command palette. Type part of a page name to jump to it. You can also paste:
+
+- an `npub` or hex pubkey, to open that user or list their events;
+- a `note1…` id or hex event id, to find that event;
+- any other text, to search users or run a full-text search over events.
+
+The palette also switches the theme and signs you out.
+
+<Image src={palette} alt="The command palette open over the dashboard, with the text 'jun' typed and options to search users and events for it." />
+
+## Install it as an app
+
+The admin app is a Progressive Web App: you can install it so it opens in its own window, with its own icon, like any other app. It keeps working on a flaky connection (a simple offline page shows when the relay can't be reached), and installing it is what makes [push notifications](/relay/admin/notifications/) possible on iPhone and iPad.
+
+<Tabs syncKey="pwa">
+<TabItem label="Chrome / Edge">
+
+<Steps>
+
+1. Open your relay's `/admin/` page and sign in.
+2. Click the install icon at the right end of the address bar, or open the browser menu and choose **Install beamhop admin** (in Edge: **Apps → Install this site as an app**).
+3. Confirm. The app opens in its own window and is added to your apps.
+
+</Steps>
+
+</TabItem>
+<TabItem label="iPhone / iPad">
+
+<Steps>
+
+1. Open your relay's `/admin/` page in Safari.
+2. Tap the **Share** button, then **Add to Home Screen**.
+3. Tap **Add**. Open beamhop from your home screen from now on.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Android">
+
+<Steps>
+
+1. Open your relay's `/admin/` page in Chrome.
+2. Open the menu (⋮) and tap **Install app** or **Add to Home screen**.
+3. Confirm. beamhop appears with your other apps.
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+When a new version of beamhop is deployed, the app picks it up on its own and shows a **New version available** message with a **Reload** button.
+
+<Aside title="Use HTTPS">
+Browsers only install apps, run the offline support and allow push notifications on secure pages: `https://…`, or `http://localhost` while you try things out. Put your relay behind a [reverse proxy with TLS](/relay/deploy/reverse-proxy/) before you rely on the app day to day.
+</Aside>
+
+## Who can use it
+
+Only people with an admin role can sign in. The first owner comes from your configuration (`BEAMHOP_OWNERS` or `beamhop admin add npub1… --role owner`); after that, owners can give others access from the [Admins](/relay/admin/roles/) page. See [Signing in](/relay/admin/signing-in/) for the ways to log in.
+
+<CardGrid>
+  <LinkCard title="Signing in" href="/relay/admin/signing-in/" description="Extension, remote signer, private key, password with TOTP, or passkey." />
+  <LinkCard title="Dashboard" href="/relay/admin/dashboard/" description="Health, traffic and where your users connect from." />
+  <LinkCard title="Reports" href="/relay/admin/reports/" description="Work through the moderation queue." />
+  <LinkCard title="Settings" href="/relay/admin/settings/" description="Change how the relay behaves, live." />
+</CardGrid>

@@ -1,6 +1,6 @@
 /**
  * Node build: bundles the CLI for `node` (>= 22) into dist/node/cli.js, copies the built admin UI next to it
- * and writes a publishable package.json (published to npm as `beamhop`, so `npx beamhop` works).
+ * and writes a publishable package.json (pushed to the `dist` branch by CI, so `npx github:beamhop/relay#dist` works).
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";

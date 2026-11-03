@@ -1,0 +1,54 @@
+---
+title: Reports
+description: Work through the NIP-56 moderation queue, dismiss reports or act on them, one at a time or in bulk.
+sidebar:
+  order: 10
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import reports from '../../../assets/screens/reports-desktop.png';
+import phone from '../../../assets/screens/reports-phone.png';
+
+When someone on Nostr reports a post, a profile or a file (a NIP-56 report), it lands in **Reports**. The red number next to Reports in the sidebar is how many are waiting.
+
+<Image src={reports} alt="The Reports page with Open, Resolved and Dismissed tabs and a type filter. The first report, of type Other, shows a blurred image and Dismiss and Ban user buttons; the second, marked Spam with '2 reports on target', shows the reported note with links and Dismiss, Delete and Delete & ban buttons." />
+
+## Read a report
+
+Each card tells you:
+
+- **the type**, such as spam, impersonation, nudity, profanity, illegal, malware or other;
+- **who reported whom**, with both people's names; click one to open their page;
+- **the reporter's comment**, in quotes;
+- **the reported content**: the note itself, or the reported file. Reported images are blurred and never load on their own; hover or tap to look;
+- **"N reports on target"** when several reports name the same thing.
+
+Sometimes a report names one person but points at content someone else posted. The card then warns that the report names someone *instead of the content's author*, and any ban goes to the author.
+
+Use the tabs to switch between **Open**, **Resolved** and **Dismissed** reports, and the menu on the right to show one type only.
+
+## Act on it
+
+| Button | What happens |
+| --- | --- |
+| **Dismiss** | Nothing is removed; the report moves to Dismissed. |
+| **Delete** | The reported event is deleted. |
+| **Delete & ban** | The event is deleted and its author banned. |
+| **Ban user** | The author is banned; shown when the report is about a person rather than a post. |
+| **⋯ → Ban user only** | Ban without deleting the post. |
+| **⋯ → Delete media** | Delete the reported file. |
+
+Everything except Dismiss asks you to confirm and lets you add a **resolution note**. Resolved reports show what was done, by whom, when, and your note.
+
+To handle several at once, tick their boxes (or **Select all**) and use **Dismiss**, **Delete** or **Delete & ban** in the bar at the bottom.
+
+## On your phone
+
+Swipe a report right to dismiss it, or left to ban (and delete the reported event, if there is one).
+
+<Image src={phone} alt="The Reports page on a phone, with a hint 'Swipe right to dismiss, left to ban' above a report card." width={390} />
+
+<Aside title="Never miss one">
+Turn on [push notifications](/relay/admin/notifications/) for **New reports** and your phone tells you when a report comes in; tapping it opens that report. If people keep reporting the same account, **Auto-ban after N reports** in [Settings → Moderation](/relay/admin/settings/#moderation) can ban it for you. A word filter set to **Report** also files matching events here.
+</Aside>

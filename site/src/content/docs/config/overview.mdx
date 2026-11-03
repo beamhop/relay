@@ -1,0 +1,157 @@
+---
+title: How configuration works
+description: Config file, environment variables, command-line flags and admin-panel settings, which one wins, and what needs a restart.
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
+
+beamhop has two kinds of settings, and it helps to know which is which.
+
+- **Startup config** is about the machine: the port, the public URL, the database, where media files go, who the owners are. It comes from a JSON file, environment variables and command-line flags. beamhop reads it once when it starts, so **changing it needs a restart**.
+- **Admin-panel settings** are about how the relay behaves: its name, who may post, limits, moderation, uploads. They live in the database and you change them in the admin panel under **Settings**. They apply **right away**, no restart needed.
+
+Every key, variable and setting is listed in the [configuration reference](/relay/config/reference/).
+
+## Startup config
+
+### Where it comes from
+
+beamhop builds its startup config in layers. Each layer overrides the one before it:
+
+<Steps>
+
+1. **Built-in defaults.** beamhop runs with no config at all: SQLite in `./data/beamhop.db`, media in `./data/blobs`, port `3334`.
+
+2. **The config file**, `beamhop.config.json`.
+
+3. **Environment variables** starting with `BEAMHOP_`, such as `BEAMHOP_PORT`.
+
+4. **Command-line flags**, such as `beamhop start --port 8080`.
+
+</Steps>
+
+So an environment variable beats the file, and a flag beats both. Layers are merged key by key: setting `BEAMHOP_PORT` changes only the port and leaves the rest of the file's `server` section alone.
+
+<Aside type="note">
+`--owner` is the one flag that adds instead of replacing: owners from `--owner` are added to the ones from the file or `BEAMHOP_OWNERS`.
+</Aside>
+
+### Where the file lives
+
+By default beamhop looks for `beamhop.config.json` in the folder you start it from. To use another file, pass `--config` (or `-c`), or set `BEAMHOP_CONFIG`:
+
+```sh
+beamhop start --config /etc/beamhop/beamhop.config.json
+```
+
+If you name a file that doesn't exist, beamhop stops with an error. If you name none and there is no `beamhop.config.json`, it simply runs on defaults and environment variables.
+
+The quickest way to get a file is to let beamhop write one:
+
+```sh
+beamhop init --owner npub1yourkey... --public-url https://relay.example.com
+```
+
+`beamhop init` writes `beamhop.config.json` with sensible defaults and makes it readable by your user only, since it may later hold a database password or other secrets. It won't overwrite an existing file unless you add `--force`.
+
+**Relative paths in the file** (`database.sqlitePath`, `blossom.fsPath`, `plugins.dir`, `metrics.geoipDbPath`, `admin.uiDir`, and plugin paths starting with `.`) are resolved against the folder the config file is in, not the folder you started beamhop from. Without a config file, they are resolved against the working directory.
+
+### File or environment variables?
+
+Use whichever suits how you run beamhop. Most keys have a matching variable; the reference shows it next to each key.
+
+<Tabs>
+<TabItem label="beamhop.config.json">
+
+```json
+{
+  "server": {
+    "port": 3334,
+    "publicUrl": "https://relay.example.com",
+    "trustProxy": true
+  },
+  "database": { "driver": "sqlite", "sqlitePath": "./data/beamhop.db" },
+  "blossom": { "enabled": true, "driver": "fs", "fsPath": "./data/blobs" },
+  "admin": { "owners": ["npub1yourkey..."] },
+  "logLevel": "info"
+}
+```
+
+</TabItem>
+<TabItem label="Environment variables">
+
+```sh
+BEAMHOP_PORT=3334
+BEAMHOP_PUBLIC_URL=https://relay.example.com
+BEAMHOP_TRUST_PROXY=true
+BEAMHOP_DB_DRIVER=sqlite
+BEAMHOP_SQLITE_PATH=./data/beamhop.db
+BEAMHOP_BLOSSOM_ENABLED=true
+BEAMHOP_BLOSSOM_DRIVER=fs
+BEAMHOP_BLOSSOM_FS_PATH=./data/blobs
+BEAMHOP_OWNERS=npub1yourkey...
+BEAMHOP_LOG_LEVEL=info
+```
+
+</TabItem>
+</Tabs>
+
+A few things about environment variables:
+
+- `true`/`false` values accept `1`, `true`, `yes` or `on` for true.
+- Lists are comma-separated: `BEAMHOP_OWNERS=npub1...,npub1...`.
+- An empty variable counts as not set, so a compose file can list `BEAMHOP_X: ${BEAMHOP_X:-}` safely.
+- Owners can be written as `npub` or hex, and the relay key as `nsec` or hex, in both the file and the environment.
+
+A complete example file ships with the code as `beamhop.config.example.json`.
+
+<Aside type="caution" title="Running in Docker">
+The beamhop image already sets a few variables: `BEAMHOP_HOST`, `BEAMHOP_PORT`, `BEAMHOP_SQLITE_PATH=/data/beamhop.db`, `BEAMHOP_BLOSSOM_FS_PATH=/data/blobs`, `BEAMHOP_PLUGINS_DIR` and `BEAMHOP_ADMIN_UI_DIR`. Because variables beat the file, the same keys in a mounted config file are ignored. Override them with `-e` or in your compose file instead. See [Docker](/relay/deploy/docker/).
+</Aside>
+
+### Mistakes and typos
+
+beamhop checks the whole config at startup and refuses to start if something is wrong, listing every problem it found. For example a port that isn't a number, a log level it doesn't know, `blossom.driver` set to `s3` without a `blossom.s3` section, or `database.driver` set to `postgres` without a `postgresUrl`.
+
+Unknown keys are different: a misspelled key like `blosom` or an unknown `BEAMHOP_` variable gets a warning in the log, and beamhop starts anyway with that key ignored. If a setting doesn't seem to take effect, check the startup log for an `unknown key` warning.
+
+### Changing startup config
+
+Edit the file or the variables, then restart beamhop. Every startup config key needs a restart: there is no live reload.
+
+<Aside type="tip">
+Keep secrets (the database URL, S3 keys, `relaySecretKey`, `metricsToken`) in environment variables or in a config file only your user can read. Don't commit them to a repository.
+</Aside>
+
+## Admin-panel settings
+
+Everything about how the relay behaves day to day lives in the admin panel, under **Settings**:
+
+| Section | What it covers |
+| --- | --- |
+| Relay info | Name, description, icon, contact and policy links (shown in NIP-11 and on the landing page) |
+| Access | Public, allow-list, invite-only or AUTH-required, and whether reading or writing needs AUTH |
+| Limits | Message and event sizes, subscriptions, rate limits, connection limits |
+| Moderation | Allowed and blocked kinds, word filters, auto-ban on reports |
+| Retention | Deleting old events, how long to keep the audit log |
+| NIP-05 | `name@domain` identifiers |
+| Groups | NIP-29 groups and who can create them |
+| Blossom | Upload size, quotas, file types, who can upload, thumbnails, approval |
+
+These settings are stored in the database, so they survive restarts and upgrades, and they take effect the moment you save. They can't be set from the config file or environment variables: a new relay starts with the defaults shown in the [reference](/relay/config/reference/#admin-panel-settings), and you adjust from there.
+
+Some things sit on both sides of the line. Two worth knowing:
+
+- **Plugins.** `plugins.enabled` in the file (or `BEAMHOP_PLUGINS_ENABLED`) only decides which plugins start switched on. Once you toggle a plugin in the admin panel, the panel's choice wins.
+- **Owners.** `admin.owners` (or `BEAMHOP_OWNERS`) always have the `owner` role. Other admins are added in the panel or with `beamhop admin add`.
+
+<Aside type="note">
+If a stored setting is ever invalid (say, after an upgrade renames something), beamhop drops just that field, raises an alert in the panel, and carries on. Access settings never fall back to "public": they lock down instead, so a private relay can't open up by accident.
+</Aside>
+
+## What's next
+
+- Look up any key in the [configuration reference](/relay/config/reference/).
+- Set up a private, invite-only or public relay with the [common recipes](/relay/config/recipes/).

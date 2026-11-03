@@ -47,6 +47,7 @@ export interface ConnectionSummary {
   userAgent?: string;
   authedPubkeys: string[];
   subscriptions: number;
+  /** epoch milliseconds */
   connectedAt: number;
   messagesIn: number;
   messagesOut: number;

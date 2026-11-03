@@ -1,0 +1,268 @@
+---
+title: Your first plugin
+description: Write, load and enable a beamhop plugin, with a walk through plugins/hello — the example that uses every plugin capability.
+sidebar:
+  order: 4
+---
+
+import { Steps, Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
+
+A beamhop plugin is an ES module whose **default export** is a `BeamhopPlugin` object. It runs inside the relay
+process, so it can do anything the relay can: decide which events are stored, change what readers see, check
+uploads, serve HTTP, run background jobs and add pages to the admin panel.
+
+This page builds a tiny plugin first, then tours [`plugins/hello`](https://github.com/beamhop/relay/tree/main/plugins/hello),
+the example that uses every capability.
+
+## A plugin in one file
+
+<Steps>
+
+1. Create `plugins/word-guard.ts` next to your config file. A single file in the plugins directory is a valid plugin.
+
+   ```ts title="plugins/word-guard.ts"
+   import { z } from "zod";
+   import type { BeamhopPlugin } from "@beamhop/sdk";
+
+   const Settings = z.object({
+     word: z.string().default("spam").describe("Reject notes containing this word"),
+   });
+
+   const plugin: BeamhopPlugin<typeof Settings> = {
+     name: "word-guard",
+     version: "1.0.0",
+     description: "Rejects notes containing a word",
+     settings: Settings,
+     async setup(ctx) {
+       ctx.hooks.onWrite((event) => {
+         if (event.content.includes(ctx.settings.get().word)) {
+           return { action: "reject", reason: "blocked: bad word" };
+         }
+       });
+     },
+   };
+
+   export default plugin;
+   ```
+
+2. Restart beamhop. Plugins are discovered and imported at boot. The default plugins directory is `./plugins`
+   (`plugins.dir`, or `BEAMHOP_PLUGINS_DIR`).
+
+3. Open **Admin → Plugins**, find `word-guard` and enable it. `setup()` runs right away; no restart needed.
+
+4. Change the word in the plugin's settings form. The next event is checked against the new value, because the hook
+   calls `ctx.settings.get()` each time.
+
+</Steps>
+
+<Aside type="note" title="definePlugin">
+`@beamhop/sdk` also exports `definePlugin(plugin)`, which returns its argument and only helps type inference. It's
+a runtime import, though. The first-party plugins use `import type` only, so they run without resolving the SDK
+package at runtime — a good default.
+</Aside>
+
+## Where plugins are loaded from
+
+| Source | Example |
+| --- | --- |
+| A subfolder of `plugins.dir` | `plugins/my-plugin/package.json` plus its entry |
+| A single file in `plugins.dir` | `plugins/my-plugin.ts` |
+| Packages listed in `plugins.packages` / `BEAMHOP_PLUGINS` | `"packages": ["beamhop-plugin-foo"]` |
+| npm auto-discovery (off by default) | every `beamhop-plugin-*` or `@scope/beamhop-plugin-*` in `node_modules`, with `plugins.autoDiscoverNpm: true` |
+
+For a folder, the entry is resolved in this order: `package.json` → `"beamhop": { "entry": "…" }`, then `main`,
+`exports`, `module`, and finally `index.ts`, `index.js`, `index.mjs`, `src/index.ts`, `src/index.js` or
+`dist/index.js`. Folders whose names start with `_` or `.` are skipped.
+
+The plugin's `name` must be URL-safe (letters, digits, `.`, `_`, `-`, starting with a letter or digit): it becomes
+part of route paths and the admin UI.
+
+<Aside type="caution" title="Plugins are trusted code">
+Plugins are **not sandboxed**. Every discovered module is imported at boot (so its top-level code runs even while
+disabled), and an enabled plugin has full database access, the key-value store, `process.env` and the filesystem.
+`ctx.config` has the obvious secrets removed, but that is hygiene, not isolation. Only install plugins you trust,
+and keep side effects inside `setup()`.
+</Aside>
+
+## Bun or Node
+
+On Bun, any TypeScript works. On Node (22.18 or newer), `.ts` entries outside `node_modules` run through type
+stripping, which only supports *erasable* TypeScript:
+
+- no `enum`, no parameter properties, no `namespace`;
+- `import type` for types;
+- explicit `.ts` extensions on relative imports.
+
+Plugins published to npm should ship compiled `.js`.
+
+## Tour of `plugins/hello`
+
+`hello` is the reference plugin. Copy it to start a real one.
+
+<FileTree>
+- plugins/hello/
+  - package.json      `main: ./src/index.ts`, script `build:ui`
+  - src/
+    - index.ts        the plugin
+  - ui/
+    - host.ts         reads React from the admin panel
+    - index.tsx       admin page, dashboard widget, user action
+    - tsconfig.json   JSX compiled to `h(...)`
+  - dist/
+    - ui.js           built admin UI bundle
+</FileTree>
+
+### The plugin object
+
+```ts title="plugins/hello/src/index.ts (shape)"
+import { z } from "zod";
+import type { BeamhopPlugin, NostrEvent } from "@beamhop/sdk";
+
+const Settings = z.object({
+  blockedWord: z.string().default("forbidden-word").describe("Reject events containing this word"),
+  greeting: z.string().default("Hello from beamhop!").describe("Greeting served at /plugins/hello/"),
+  maxQueryLimit: z.number().int().min(1).max(5000).default(500).describe("Clamp REQ filter limits"),
+  hiddenKinds: z.array(z.number().int()).default([]).describe("Kinds hidden from REQ results"),
+  tickSeconds: z.number().int().min(5).default(60).describe("Heartbeat job interval"),
+});
+
+const plugin: BeamhopPlugin<typeof Settings> = {
+  name: "hello",
+  version: "0.1.0",
+  description: "Example plugin: word filter, query clamp, routes, job, metrics and an admin page.",
+  settings: Settings,
+  migrations: [/* … */],
+  ui: "./dist/ui.js",
+  async setup(ctx) { /* … */ },
+  async teardown() { /* … */ },
+};
+
+export default plugin;
+```
+
+Every field has a `.default()`, so a freshly enabled plugin starts with valid settings.
+
+### What `setup()` registers
+
+Each of these is covered on its own page; here is how `hello` uses them.
+
+<Tabs>
+<TabItem label="Hooks">
+
+```ts
+// write hook: reject a configurable word
+ctx.hooks.onWrite((event: NostrEvent) => {
+  const word = settings.get().blockedWord.trim().toLowerCase();
+  if (!word || !event.content.toLowerCase().includes(word)) return undefined;
+  rejectedCounter.add(1, { kind: String(event.kind) });
+  return { action: "reject", reason: `blocked: contains a forbidden word` };
+});
+
+// query hook: clamp limits
+ctx.hooks.onQuery((filters) => {
+  const max = settings.get().maxQueryLimit;
+  if (!filters.some((f) => (f.limit ?? 0) > max)) return undefined;
+  return filters.map((f) => (f.limit !== undefined && f.limit > max ? { ...f, limit: max } : f));
+});
+
+// visibility hook: hide kinds from readers (must be sync & fast)
+ctx.hooks.onVisibility((event) => !settings.get().hiddenKinds.includes(event.kind));
+```
+
+See [Hooks](/relay/build/plugin-hooks/).
+
+</TabItem>
+<TabItem label="Routes">
+
+```ts
+// public: /plugins/hello/ and /plugins/hello/ping
+ctx.http.get("/", (c) => c.json({ greeting: settings.get().greeting, relay: ctx.runtimeSettings().info.name, seen, rejected }));
+ctx.http.get("/ping", (c) => c.text("pong"));
+
+// admin only: /admin/api/plugins/x/hello/stats and /reset
+ctx.adminHttp.get("/stats", async (c) => {
+  await flush();
+  const recent = await db.all("SELECT id, pubkey, at, reason FROM plugin_hello_rejections ORDER BY at DESC LIMIT 20");
+  return c.json({ seen, rejected, recent });
+});
+```
+
+See [HTTP routes](/relay/build/plugin-routes/).
+
+</TabItem>
+<TabItem label="Jobs, events, metrics">
+
+```ts
+const rejectedCounter = ctx.metrics.counter("hello_rejected_total", "events rejected by the hello plugin");
+const seenGauge = ctx.metrics.gauge("hello_events_seen", "accepted events observed since the plugin started");
+
+ctx.on("event.accepted", () => {
+  seen++;
+  seenGauge.set(seen);
+});
+
+const stopFlush = ctx.jobs.every("flush-rejections", 5_000, flush);
+```
+
+See [Jobs, events and metrics](/relay/build/plugin-jobs-metrics/).
+
+</TabItem>
+<TabItem label="Settings changes">
+
+```ts
+const startJob = (s: HelloSettings) =>
+  ctx.jobs.every("heartbeat", s.tickSeconds * 1000, () => logger.debug("heartbeat", { seen, rejected }));
+let stopJob = startJob(settings.get());
+const offSettings = settings.onChange((s) => {
+  stopJob();
+  stopJob = startJob(s);
+});
+```
+
+See [Settings](/relay/build/plugin-settings/).
+
+</TabItem>
+</Tabs>
+
+### A pattern worth copying: buffer, then write
+
+`hello` logs rejected events to its own table. Writing a row per rejection would put a database write on the
+publish path for every spam event, so it buffers rejections in memory and a job writes them in one transaction every
+5 seconds. The table is capped at 1000 rows because anonymous writers fill it.
+
+```ts
+const flush = async () => {
+  if (!pending.length) return;
+  const batch = pending;
+  pending = [];
+  await db.tx(async (tx) => {
+    for (const r of batch) {
+      await tx.run("INSERT INTO plugin_hello_rejections (id, pubkey, at, reason) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING", [r.id, r.pubkey, r.at, r.reason]);
+    }
+    await tx.run(
+      "DELETE FROM plugin_hello_rejections WHERE id NOT IN (SELECT id FROM plugin_hello_rejections ORDER BY at DESC, id DESC LIMIT ?)",
+      [MAX_REJECTION_ROWS],
+    );
+  });
+};
+```
+
+### Teardown
+
+Hooks, routes, jobs, bus listeners and settings listeners are removed by the host when the plugin is disabled.
+`teardown()` is only for things you created yourself. `hello` uses it to write what is still buffered:
+
+```ts
+async teardown() {
+  const fn = teardownFn;
+  teardownFn = undefined;
+  await fn?.(); // stops its jobs and flushes the buffer
+},
+```
+
+## Next steps
+
+- [Plugin context](/relay/build/plugin-context/): everything `ctx` gives you.
+- [Admin UI extensions](/relay/build/plugin-admin-ui/): how `hello`'s page, widget and user action are built.
+- [`plugins/spam-filter`](https://github.com/beamhop/relay/tree/main/plugins/spam-filter): a real-world write hook
+  with scoring, LRU-capped caches and admin routes.

@@ -1,0 +1,471 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Tabs, TabItem, Code } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+import hero from '../assets/mascot/hero.png';
+import relay from '../assets/mascot/relay.png';
+import build from '../assets/mascot/build.png';
+import teams from '../assets/mascot/teams.png';
+import reading from '../assets/mascot/reading.png';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const href = (p: string) => `${base}${p}`;
+
+// Screenshots come from `bun run screens`; the page still builds without them.
+const screens = import.meta.glob<{ default: ImageMetadata }>('../assets/screens/dashboard-*.png', { eager: true });
+const shot = (name: string) => screens[`../assets/screens/${name}.png`]?.default;
+const desktop = shot('dashboard-desktop');
+const phone = shot('dashboard-phone');
+
+const paths = [
+  {
+    img: relay,
+    title: 'Run a relay',
+    text: 'For you, your friends or your community. Start it, sign in, and manage everything from your phone.',
+    link: '/start/quickstart/',
+    cta: 'Start in two minutes',
+  },
+  {
+    img: build,
+    title: 'Build on it',
+    text: 'Plugins hook into every event, query and upload. Add routes, jobs, settings and admin screens.',
+    link: '/build/',
+    cta: 'Explore plugins & API',
+  },
+  {
+    img: teams,
+    title: 'For teams',
+    text: 'Roles, moderation, reports and an audit log, with passkeys and two-factor sign-in.',
+    link: '/admin/',
+    cta: 'Tour the admin app',
+  },
+];
+
+const features = [
+  { icon: 'M4 12h4l3-8 4 16 3-8h2', title: 'Many NIPs', text: 'Search, auth, groups, proof-of-work, expiration and negentropy sync.' },
+  { icon: 'M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4', title: 'Media built in', text: 'A Blossom server on disk or any S3-compatible bucket, with quotas.' },
+  { icon: 'M5 4h14v6H5zM5 14h14v6H5zM8 7h.01M8 17h.01', title: 'SQLite or Postgres', text: 'Zero setup by default. Switch to PostgreSQL when you grow.' },
+  { icon: 'M4 19V9M10 19V5M16 19v-7M22 19H2', title: 'See what happens', text: 'Live dashboard, Prometheus metrics, OpenTelemetry and a world map.' },
+  { icon: 'M12 3l7 4v5c0 4-3 7.5-7 9-4-1.5-7-5-7-9V7z', title: 'Safe by default', text: 'Rate limits, IP rules, allow and ban lists. Media is never served as script.' },
+  { icon: 'M9 3v4M15 3v4M7 7h10v5a5 5 0 01-10 0zM12 17v4', title: 'Plugins', text: 'Turn plugins on and off from the admin app, no restart needed.' },
+];
+
+const faq = [
+  {
+    q: 'What do I need to run it?',
+    a: 'A machine with Node 22+ (then it is one npx command), Bun or Docker. SQLite is the default, so there is nothing else to set up. A small VPS is plenty for a community relay.',
+  },
+  {
+    q: 'Does it work with my Nostr app?',
+    a: 'Yes. beamhop speaks standard NIP-01 over WebSockets, so any Nostr client can use it. Media uploads work with clients that support Blossom.',
+  },
+  {
+    q: 'Can I keep my relay private?',
+    a: 'Yes. Require sign-in (NIP-42), keep an allow list, or open it to everyone with rate limits. You change these live from the admin app.',
+  },
+  {
+    q: 'Is it free?',
+    a: 'Yes. beamhop is open source under the MIT license, so you can run it, change it and build on it.',
+  },
+];
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Your own corner of Nostr',
+    description: 'beamhop is a self-hostable Nostr relay with a media server, an admin app and plugins, in one process.',
+    template: 'splash',
+    hero: {
+      title: 'Your own corner of Nostr',
+      tagline:
+        'beamhop is a Nostr relay, a media server and a friendly admin app in one small process. Run it anywhere, manage it from your phone.',
+      image: { file: hero, alt: 'The beamhop rabbit, hopping with a lantern' },
+      actions: [
+        { text: 'Get started', link: href('/start/quickstart/'), icon: 'right-arrow' },
+        { text: 'View on GitHub', link: 'https://github.com/beamhop/relay', icon: 'github', variant: 'minimal' },
+      ],
+    },
+  }}
+  hasSidebar={false}
+>
+  <div class="landing not-content">
+    <section class="quick" aria-labelledby="quick-title">
+      <h2 id="quick-title" class="sr-only">Quickstart</h2>
+      <Tabs syncKey="install">
+        <TabItem label="npx">
+          <Code lang="sh" code={`npx github:beamhop/relay#dist start --owner npub1…`} />
+        </TabItem>
+        <TabItem label="Docker">
+          <Code lang="sh" code={`git clone https://github.com/beamhop/relay.git && cd relay\nBEAMHOP_OWNERS=npub1… docker compose up -d`} />
+        </TabItem>
+        <TabItem label="Bun">
+          <Code lang="sh" code={`git clone https://github.com/beamhop/relay.git && cd relay\nbun install && bun run build:ui\nBEAMHOP_OWNERS=npub1… bun run start`} />
+        </TabItem>
+        <TabItem label="Single binary">
+          <Code lang="sh" code={`bun run build:ui && bun run build:binary\n./packages/server/dist/beamhop start`} />
+        </TabItem>
+      </Tabs>
+      <p class="hint">Then open <code>http://localhost:3334/admin/</code> and sign in with your Nostr key.</p>
+    </section>
+
+    <section aria-labelledby="paths-title">
+      <h2 id="paths-title" class="section-title">Where do you want to start?</h2>
+      <div class="paths">
+        {
+          paths.map((p) => (
+            <a class="path" href={href(p.link)}>
+              <Image src={p.img} alt="" width={180} height={180} />
+              <h3>{p.title}</h3>
+              <p>{p.text}</p>
+              <span class="cta">{p.cta} →</span>
+            </a>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="split" aria-labelledby="port-title">
+      <div>
+        <p class="eyebrow">How it fits together</p>
+        <h2 id="port-title" class="section-title">One port. Everything included.</h2>
+        <p>
+          No stack of services to wire up. A single beamhop process answers on one port and routes each request to the
+          right place: Nostr clients, media uploads, your admin app and your plugins.
+        </p>
+        <a class="more" href={href('/deploy/')}>Ways to deploy →</a>
+      </div>
+      <figure class="diagram">
+        <svg viewBox="0 0 420 300" role="img" aria-labelledby="diagram-title">
+          <title id="diagram-title">One beamhop process on port 3334 serving the relay, Blossom media, the admin app, plugins and metrics</title>
+          <g class="beams">
+            <path d="M120 150 C200 150 200 40 290 40" />
+            <path d="M120 150 C200 150 200 95 290 95" />
+            <path d="M120 150 L290 150" />
+            <path d="M120 150 C200 150 200 205 290 205" />
+            <path d="M120 150 C200 150 200 260 290 260" />
+          </g>
+          <g class="hub">
+            <rect x="20" y="110" width="100" height="80" rx="18" />
+            <text x="70" y="146" class="hub-name">beamhop</text>
+            <text x="70" y="167" class="hub-port">:3334</text>
+          </g>
+          <g class="leaf">
+            <rect x="290" y="22" width="120" height="36" rx="12" /><text x="350" y="45">Nostr relay</text>
+            <rect x="290" y="77" width="120" height="36" rx="12" /><text x="350" y="100">Blossom media</text>
+            <rect x="290" y="132" width="120" height="36" rx="12" /><text x="350" y="155">Admin app</text>
+            <rect x="290" y="187" width="120" height="36" rx="12" /><text x="350" y="210">Plugins</text>
+            <rect x="290" y="242" width="120" height="36" rx="12" /><text x="350" y="265">Metrics & health</text>
+          </g>
+        </svg>
+      </figure>
+    </section>
+
+    <section class="admin" aria-labelledby="admin-title">
+      <p class="eyebrow">The admin app</p>
+      <h2 id="admin-title" class="section-title">Run your relay from your pocket</h2>
+      <p class="lede">
+        Install it on your phone like an app. Watch traffic live, handle reports, manage people and media, and change
+        settings without touching a config file.
+      </p>
+      {
+        desktop && (
+          <div class="devices">
+            <div class="browser">
+              <div class="browser-bar"><span /><span /><span /></div>
+              <Image src={desktop} alt="The beamhop dashboard in a desktop browser" widths={[720, 1440]} sizes="(min-width: 72rem) 56rem, 90vw" />
+            </div>
+            {phone && (
+              <div class="phone">
+                <Image src={phone} alt="The beamhop dashboard installed on a phone" widths={[260, 520]} sizes="13rem" />
+              </div>
+            )}
+          </div>
+        )
+      }
+      <a class="more" href={href('/admin/')}>Tour every screen →</a>
+    </section>
+
+    <section aria-labelledby="features-title">
+      <h2 id="features-title" class="section-title">Small, but not missing much</h2>
+      <div class="features">
+        {
+          features.map((f) => (
+            <div class="feature">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d={f.icon} /></svg>
+              <h3>{f.title}</h3>
+              <p>{f.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="split faq-wrap" aria-labelledby="faq-title">
+      <div class="faq-intro">
+        <Image src={reading} alt="" width={220} height={220} />
+        <h2 id="faq-title" class="section-title">Questions</h2>
+        <p>Something missing? <a href="https://github.com/beamhop/relay/issues">Ask on GitHub</a>.</p>
+      </div>
+      <div class="faq">
+        {
+          faq.map((f) => (
+            <details>
+              <summary>{f.q}</summary>
+              <p>{f.a}</p>
+            </details>
+          ))
+        }
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span>beamhop · <a href="https://github.com/beamhop/relay/blob/main/LICENSE">MIT license</a></span>
+      <span><a href={href('/start/introduction/')}>Docs</a> · <a href="https://github.com/beamhop/relay">GitHub</a> · <a href="https://github.com/beamhop/relay/blob/main/CHANGELOG.md">Changelog</a></span>
+    </footer>
+  </div>
+</StarlightPage>
+
+<style>
+  :global(:root:has(.landing)) {
+    --sl-content-width: 72rem;
+  }
+  :global(:root:has(.landing) .hero) {
+    padding-block: 2.5rem 1rem;
+  }
+  :global(:root:has(.landing) .hero h1) {
+    font-weight: 900;
+  }
+  :global(:root:has(.landing) .hero img) {
+    animation: hop 3.2s ease-in-out infinite;
+  }
+  @keyframes hop {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-14px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(:root:has(.landing) .hero img) { animation: none; }
+  }
+
+  .landing {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: clamp(4rem, 10vw, 7rem);
+    padding-bottom: 2rem;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .section-title {
+    font-size: clamp(1.6rem, 3.5vw, 2.3rem);
+    font-weight: 900;
+    line-height: 1.15;
+    color: var(--sl-color-white);
+    margin: 0 0 1rem;
+  }
+  .eyebrow {
+    margin: 0 0 0.5rem;
+    color: var(--sl-color-accent);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.8rem;
+  }
+  .more {
+    font-weight: 800;
+    color: var(--sl-color-accent);
+    text-decoration: none;
+  }
+  .more:hover { text-decoration: underline; }
+
+  .quick {
+    max-width: 46rem;
+    width: 100%;
+    margin-inline: auto;
+  }
+  .hint {
+    color: var(--sl-color-gray-3);
+    font-size: 0.9rem;
+    text-align: center;
+    margin-top: 0.75rem;
+  }
+
+  .paths {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+    gap: 1.25rem;
+  }
+  .path {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 1.5rem;
+    border-radius: var(--bh-radius);
+    background: var(--sl-color-gray-6);
+    border: 2px solid transparent;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+  }
+  .path:hover,
+  .path:focus-visible {
+    transform: translateY(-4px);
+    border-color: var(--sl-color-accent);
+  }
+  .path img {
+    width: 10rem;
+    height: auto;
+    align-self: center;
+    margin-bottom: 0.5rem;
+  }
+  .path h3 {
+    margin: 0;
+    font-size: 1.3rem;
+    font-weight: 900;
+    color: var(--sl-color-white);
+  }
+  .path p { margin: 0; flex: 1; }
+  .cta {
+    margin-top: 0.75rem;
+    font-weight: 800;
+    color: var(--sl-color-accent);
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+    gap: 2.5rem;
+    align-items: center;
+  }
+  .split p { color: var(--sl-color-gray-2); font-size: 1.1rem; }
+  .diagram { margin: 0; }
+  .diagram svg { width: 100%; height: auto; overflow: visible; }
+  .beams path {
+    fill: none;
+    stroke: var(--sl-color-accent);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 2 9;
+    animation: flow 1.6s linear infinite;
+  }
+  @keyframes flow { to { stroke-dashoffset: -22; } }
+  @media (prefers-reduced-motion: reduce) { .beams path { animation: none; } }
+  .hub rect { fill: var(--sl-color-white); }
+  .hub text { text-anchor: middle; fill: var(--sl-color-black); }
+  .hub-name { font-weight: 900; font-size: 17px; }
+  .hub-port { font-family: var(--sl-font-mono); font-size: 13px; opacity: 0.75; }
+  .leaf rect { fill: var(--sl-color-gray-6); stroke: var(--sl-color-gray-5); stroke-width: 1.5; }
+  .leaf text { text-anchor: middle; fill: var(--sl-color-white); font-weight: 700; font-size: 13px; }
+
+  .admin { text-align: center; }
+  .lede {
+    max-width: 38rem;
+    margin: 0 auto 2.5rem;
+    color: var(--sl-color-gray-2);
+    font-size: 1.1rem;
+  }
+  .devices {
+    position: relative;
+    max-width: 60rem;
+    margin: 0 auto 2rem;
+    padding-right: clamp(0rem, 8vw, 6rem);
+  }
+  .browser {
+    border-radius: 0.9rem;
+    overflow: hidden;
+    background: var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    box-shadow: 0 30px 60px -30px rgb(35 37 90 / 0.45);
+  }
+  .browser-bar {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--sl-color-gray-5);
+  }
+  .browser-bar span {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    background: var(--sl-color-gray-4);
+  }
+  .browser img, .phone img { display: block; width: 100%; height: auto; }
+  .phone {
+    position: absolute;
+    right: 0;
+    bottom: -2rem;
+    width: clamp(7rem, 22%, 13rem);
+    border-radius: 1.6rem;
+    overflow: hidden;
+    border: 6px solid var(--bh-ink);
+    background: var(--bh-ink);
+    box-shadow: 0 30px 50px -20px rgb(35 37 90 / 0.5);
+  }
+
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+    gap: 2rem 1.75rem;
+  }
+  .feature svg {
+    width: 2.4rem;
+    height: 2.4rem;
+    padding: 0.5rem;
+    border-radius: 0.8rem;
+    background: var(--sl-color-accent-low);
+    fill: none;
+    stroke: var(--sl-color-accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .feature h3 {
+    margin: 0.75rem 0 0.25rem;
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--sl-color-white);
+  }
+  .feature p { margin: 0; color: var(--sl-color-gray-3); }
+
+  .faq-wrap { align-items: start; }
+  .faq-intro img { width: 9rem; height: auto; }
+  .faq details {
+    border-bottom: 1px solid var(--sl-color-gray-5);
+    padding: 1rem 0;
+  }
+  .faq summary {
+    cursor: pointer;
+    font-weight: 800;
+    font-size: 1.1rem;
+    color: var(--sl-color-white);
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after {
+    content: '+';
+    color: var(--sl-color-accent);
+    font-weight: 900;
+    transition: transform 0.2s ease;
+  }
+  .faq details[open] summary::after { transform: rotate(45deg); }
+  .faq details p { margin: 0.6rem 0 0; font-size: 1rem; }
+
+  .foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--sl-color-gray-5);
+    color: var(--sl-color-gray-3);
+    font-size: 0.9rem;
+  }
+  .foot a { color: inherit; }
+</style>

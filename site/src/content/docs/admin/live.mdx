@@ -1,0 +1,44 @@
+---
+title: Live and connections
+description: Watch events arrive in real time, see why some are rejected, and list or disconnect open connections.
+sidebar:
+  order: 4
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import live from '../../../assets/screens/live-desktop.png';
+
+**Live** shows what is happening on your relay right now. The header sums it up: open connections, events per second coming in, and rejections per second.
+
+## Event stream
+
+Every event a client publishes shows up here as it arrives, newest first, whether the relay accepted it or not.
+
+<Image src={live} alt="The Live page's event stream: rows with an avatar, the author's short npub, the event kind, an accepted or rejected badge, a country flag and IP address, the time and the content. Rejected rows show the reason in red, such as 'blocked: pubkey is banned'." />
+
+Each row shows the author, the event kind, **accepted** or **rejected**, the client's country (with GeoIP) and IP address, the time, and the start of the content. Rejected events show the reason in red, for example *blocked: pubkey is banned* or *shadow: pubkey muted*. Click a row to see the whole event, rendered and as JSON.
+
+- **All / Accepted / Rejected** narrows the list.
+- **Filter kinds** keeps only the kinds you type, for example `1` for notes or `7` for reactions.
+- **Pause** freezes the list so you can read it; new events wait and appear when you **Resume**.
+- The bin icon clears the list.
+
+The page keeps the 300 most recent events. It only shows events that arrive while it is open; to search stored events, use [Events](/relay/admin/events/).
+
+## Connections
+
+The **Connections** tab lists every open websocket connection: the client's IP address (with flag and city when GeoIP is on), its app name, which pubkeys it signed in as with NIP-42, how many subscriptions it holds, messages in and out, and how long it has been connected. On a phone each connection is a card.
+
+- **Disconnect** closes that one connection.
+- **All from IP** closes every connection from the same address, after you confirm.
+
+Disconnecting doesn't stop a client from coming back. To keep an address out, add a [block rule](/relay/admin/ip-rules/); to keep a person out, [ban them](/relay/admin/users/#ban-mute-or-delete).
+
+<Aside>
+The Connections tab is only there for roles with the `connections.manage` permission (owners and admins). Moderators and viewers see the event stream only. IP addresses in the stream are shown to the same roles.
+</Aside>
+
+<Aside type="caution" title="Behind a reverse proxy">
+If every connection shows the same address, the relay sees your proxy instead of your users. Turn on `BEAMHOP_TRUST_PROXY` when beamhop runs behind exactly one reverse proxy; see [Reverse proxy](/relay/deploy/reverse-proxy/).
+</Aside>

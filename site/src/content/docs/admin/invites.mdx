@@ -1,0 +1,38 @@
+---
+title: Invites
+description: Create invite links so new people can join an invite-only relay, track how often they are used, and revoke them.
+sidebar:
+  order: 7
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps } from '@astrojs/starlight/components';
+import invites from '../../../assets/screens/invites-desktop.png';
+
+Invite links let new people join when your relay is **invite-only**. Each link carries a code; whoever redeems it is added to the allow-list and can publish from then on.
+
+<Image src={invites} alt="The Invites page: a table of invite codes, each with an active or used-up badge, a note such as 'Photo walk meetup', a uses counter with a progress bar, the expiry date, who created it, and copy and delete buttons." />
+
+## Create invites
+
+<Steps>
+
+1. Click **Create invites**.
+2. Choose **How many** links to make (1 to 500), **Uses each** (`0` for unlimited), and optionally **Expires in (days)** and a **Note** to remember who they are for.
+3. Click **Create**. The new links are listed; copy them one by one or with **Copy all**, and send them to your people.
+
+</Steps>
+
+## Keep track
+
+The table shows each code with its state: **active**, **used up** (every use taken) or **expired**. **Uses** counts redemptions against the limit. Copy a link again with the copy button, or click the bin to **revoke** it: the link stops working immediately. People who already joined with it stay members.
+
+On a phone, tap a card to copy its link and swipe left to revoke it.
+
+## What the invitee sees
+
+An invite link looks like `https://relay.example.com/invite/<code>`. It opens a small page on your relay with the code and a button that signs the redemption with the person's NIP-07 browser extension. After that they are on the allow-list, and their [user page](/relay/admin/users/#a-users-page) shows who invited them.
+
+<Aside title="Turn on invite-only mode">
+Links only matter when **Settings → Access → Access mode** is **Invite only**. In public mode anyone can already write. See [Settings](/relay/admin/settings/#access). Moderators can manage invites too.
+</Aside>

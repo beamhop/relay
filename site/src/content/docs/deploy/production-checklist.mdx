@@ -1,0 +1,51 @@
+---
+title: Production checklist
+description: Everything to check before opening your beamhop relay to the public.
+sidebar:
+  order: 11
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Go through this list before you share your relay's address. When every box is ticked, you'll have a relay that's reachable over HTTPS, safe from IP spoofing, backed up and watched.
+
+## Identity and access
+
+- [ ] **Public URL.** `BEAMHOP_PUBLIC_URL` is the `https://` address users reach. NIP-42 auth, NIP-98 and passkey admin logins, and Blossom media links depend on it. → [Reverse proxy](/relay/deploy/reverse-proxy/#why-the-public-url-matters)
+- [ ] **Owner.** `BEAMHOP_OWNERS=npub1…` is set, or you ran `beamhop admin add npub1… --role owner`. Without an owner nobody can sign in to `/admin/`. → [Admin app](/relay/admin/)
+
+## Network
+
+- [ ] **Reverse proxy** in front, handling TLS and WebSockets, with an upload limit at least as large as Blossom's. → [Reverse proxy](/relay/deploy/reverse-proxy/)
+- [ ] **Private port.** beamhop listens on loopback or a private network only: `BEAMHOP_HOST=127.0.0.1`, or a `127.0.0.1:3334:3334` port mapping in Docker.
+- [ ] **Proxy trust.** `BEAMHOP_TRUST_PROXY=true` behind that proxy, and `BEAMHOP_TRUSTED_PROXIES` narrowed to the proxy's address (`127.0.0.1/32,::1/128` for one on the same host). Without it every client shares one set of per-IP limits. **Never** turn it on when clients can reach the port directly.
+- [ ] **Metrics token.** `BEAMHOP_METRICS_TOKEN` is a long random value (`openssl rand -hex 32`) if anything other than a local process scrapes `/metrics`. → [Monitoring](/relay/deploy/monitoring/#prometheus-metrics)
+
+## Storage
+
+- [ ] **Database.** SQLite on a local disk (not NFS), or PostgreSQL 12+ with a dedicated role that owns its database or schema. → [PostgreSQL](/relay/deploy/postgres/)
+- [ ] **Media.** A persistent blobs folder (`BEAMHOP_BLOSSOM_FS_PATH`, or the `/data` volume in Docker), or an S3 bucket. The startup log shows no `blob storage is not usable` message. → [S3-compatible storage](/relay/deploy/s3/)
+- [ ] **Backups** are scheduled, and you've tried a restore once. → [Backups & upgrades](/relay/deploy/backups-upgrades/)
+- [ ] **File permissions.** The data directory is `0700` and the database files `0600`. New installs get this automatically; on an older install run `chmod 700 data && chmod 600 data/beamhop.db*`.
+
+## Running
+
+- [ ] **Stop grace period** above beamhop's 10-second shutdown budget: `--stop-timeout 30` in Docker (the compose file already sets 30 s), `TimeoutStopSec=30` in systemd.
+- [ ] **Probes.** Load balancer uses `GET /health`; container or process supervisor uses `GET /health/live`. → [Monitoring](/relay/deploy/monitoring/#health-probes)
+- [ ] **Disk space alert**, set up separately: `/health` stays green when the disk is full.
+- [ ] **Logs.** `BEAMHOP_LOG_FORMAT=json` if they go to a log shipper.
+- [ ] **Secrets** (`BEAMHOP_DATABASE_URL`, `BEAMHOP_S3_SECRET_ACCESS_KEY`, `BEAMHOP_METRICS_TOKEN`, `BEAMHOP_RELAY_SECRET_KEY`) come from the environment or a `0600` config file, never from the image or the repository.
+- [ ] **Dev passwords replaced** if you use the Compose add-ons: `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`. → [Docker](/relay/deploy/docker/#optional-add-ons)
+
+## Recommended for busier relays
+
+These come from the project's pre-production load testing:
+
+- **`BEAMHOP_VERIFY_WORKERS=4`** checks event signatures on worker threads, for about 2.3× the write throughput when many clients publish at once.
+- **Plan for 10,000 to 20,000 connections per instance.** Raise the open-file limit (`LimitNOFILE` in systemd, `--ulimit nofile=…` in Docker) and the kernel's listen backlog (`net.core.somaxconn`).
+- **Keep the default rate limits.**
+- **PostgreSQL:** each instance opens up to 20 connections. The default `max_connections` of 100 fits about four instances; use pgbouncer beyond that.
+
+<Aside type="tip" title="Then configure the relay itself">
+Once it's running, most of what makes your relay *yours* (name and description, who may write, limits, upload sizes, plugins) is set live in the [admin app](/relay/admin/). Boot-time options are in the [configuration reference](/relay/config/reference/).
+</Aside>

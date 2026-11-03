@@ -1,0 +1,51 @@
+---
+title: Media
+description: Browse the files people upload to your Blossom media server, approve or block them, delete them and keep them from coming back.
+sidebar:
+  order: 11
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import media from '../../../assets/screens/media-desktop.png';
+import phone from '../../../assets/screens/media-phone.png';
+
+**Media** shows every file stored on your relay's Blossom server: pictures, videos, audio and documents that people upload for their posts and profiles.
+
+<Image src={media} alt="The Media page: stat tiles for Blobs (24), Storage (470 KB), Pending review (2, highlighted) and a By type bar, filters for status, type and owner, and a grid of image thumbnails with their sizes, two of them marked 'pending'." />
+
+## At a glance
+
+The tiles at the top show how many files there are (**Blobs**), how much space they take (**Storage**), how many are **Pending review**, and a bar of space by file type. Click **Pending review** to see just those.
+
+Below, filter by status (**approved**, **pending**, **blocked**), by type (images, videos, audio, documents, text), or by owner (paste an npub or hex and press Enter). The grid loads more as you scroll.
+
+## Look closer
+
+Click a thumbnail to open it large. You see its status, type, size, upload time, hash (with a copy button) and who uploaded it. Use the arrows to move to the next file, and **Open** to view the original.
+
+From there you can:
+
+- **Approve** a pending or blocked file, so it is served again;
+- **Block** it, so it stays stored but isn't served;
+- **Delete** it from storage. The confirmation offers **Also block this hash from being re-uploaded** (on by default).
+
+To act on many files, hover a tile and tick its box (or **Select all**), then use **Approve**, **Block** or **Delete** in the bar at the bottom.
+
+## Blocked hashes
+
+Files deleted with "also block" are remembered by their hash and refused if anyone uploads or mirrors them again. **Blocked hashes** at the top right lists them with the reason and date; **Unblock** lets that file be uploaded again.
+
+## On your phone
+
+Swipe a tile right to approve it, or left to delete it. Long-press a tile to start selecting.
+
+<Image src={phone} alt="The Media page on a phone with stat tiles and a two-column grid of thumbnails." width={390} />
+
+<Aside title="Review uploads before they go public">
+Turn on **Require approval** in [Settings → Blossom](/relay/admin/settings/#blossom) and new uploads wait as *pending* until a moderator approves them here. The same section sets the upload size limit, the default quota per user, who may upload and which file types are allowed. Per-person quotas are on each [user's page](/relay/admin/users/#details).
+</Aside>
+
+<Aside>
+Viewing media needs `media.view` (every role); approving, blocking and deleting need `media.moderate` (moderators and up).
+</Aside>

@@ -1,0 +1,125 @@
+---
+title: From source with Bun
+description: Clone the repository and run beamhop directly with Bun, for development or as a systemd service.
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+You'll end up with beamhop running straight from a checkout of the repository, using Bun. This is the most direct way to run it, and the one to use when you're working on plugins or the admin app.
+
+Bun is beamhop's main runtime. You need **Bun 1.2 or newer** and `git`.
+
+## Run it
+
+<Steps>
+
+1. Clone and install:
+
+   ```sh
+   git clone https://github.com/beamhop/relay.git
+   cd relay
+   bun install
+   ```
+
+2. Build the admin app and the bundled plugins' UIs:
+
+   ```sh
+   bun run build:ui
+   bun run build:plugins
+   ```
+
+   `build:ui` puts the admin app in `packages/admin-ui/dist`. Without it, `/admin/` only shows a placeholder. `build:plugins` builds the admin pages that plugins add.
+
+3. Write a config file (optional, but handy for servers):
+
+   ```sh
+   bun run beamhop init
+   ```
+
+   This writes `beamhop.config.json` with sensible defaults, readable only by you. Open it and fill in `admin.owners` and `server.publicUrl`.
+
+4. Start:
+
+   ```sh
+   bun run start
+   ```
+
+   Or skip the config file and use environment variables:
+
+   ```sh
+   BEAMHOP_OWNERS=npub1… BEAMHOP_PUBLIC_URL=https://relay.example.com bun run start
+   ```
+
+</Steps>
+
+beamhop listens on `0.0.0.0:3334` and keeps its data in `./data` (`beamhop.db` and `blobs/`).
+
+<Aside type="tip" title="Developing?">
+`bun run dev` restarts the server whenever you change a file. For the admin app with hot reload, also run `bun run --filter @beamhop/admin-ui dev`.
+</Aside>
+
+## The command-line tool
+
+From the repo, `bun run beamhop …` runs the CLI. Some useful commands:
+
+```sh
+bun run beamhop admin add npub1… --role owner   # make someone an owner
+bun run beamhop admin password npub1…           # enable password login for an admin
+bun run beamhop migrate                         # apply database migrations, then exit
+bun run beamhop --help                          # everything else
+```
+
+Global flags such as `--config`, `--port`, `--host`, `--public-url` and `--log-level` work with every command. The [configuration reference](/relay/config/reference/) lists them all.
+
+## Run it as a service with systemd
+
+On a server, let systemd start beamhop at boot and restart it if it stops. Here's a starting point. Adjust the user, paths and Bun location (`which bun`) to match your machine.
+
+```ini title="/etc/systemd/system/beamhop.service"
+[Unit]
+Description=beamhop Nostr relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=beamhop
+WorkingDirectory=/opt/beamhop/relay
+ExecStart=/usr/local/bin/bun packages/server/src/cli.ts start
+Environment=BEAMHOP_HOST=127.0.0.1
+Environment=BEAMHOP_TRUST_PROXY=true
+Environment=BEAMHOP_TRUSTED_PROXIES=127.0.0.1/32,::1/128
+EnvironmentFile=-/etc/beamhop.env
+Restart=on-failure
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Put secrets such as `BEAMHOP_OWNERS`, `BEAMHOP_PUBLIC_URL` and `BEAMHOP_DATABASE_URL` in `/etc/beamhop.env` and make it readable only by root (`chmod 600`). Then:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now beamhop
+journalctl -u beamhop -f
+```
+
+<Aside type="note" title="Why these settings?">
+- `TimeoutStopSec=30` gives beamhop time for its 10-second graceful shutdown, so queued events aren't lost.
+- `BEAMHOP_HOST=127.0.0.1` plus the two proxy settings assume a [reverse proxy](/relay/deploy/reverse-proxy/) on the same host. Drop all three if clients connect to beamhop directly.
+- `LimitNOFILE` raises the open-file limit. Every WebSocket connection uses one, and a busy relay can hold thousands.
+</Aside>
+
+## Updating
+
+```sh
+git pull
+bun install
+bun run build:ui && bun run build:plugins
+sudo systemctl restart beamhop
+```
+
+Database migrations run automatically at start. **Back up first**: see [Backups & upgrades](/relay/deploy/backups-upgrades/).

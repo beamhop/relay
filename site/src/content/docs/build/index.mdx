@@ -1,0 +1,65 @@
+---
+title: Building on beamhop
+description: What you can build on top of beamhop — Nostr clients, Blossom media apps, plugins and admin tooling — and where each surface lives.
+sidebar:
+  order: 1
+  label: Overview
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+beamhop is one process on one port, but it speaks several protocols. That makes it a good base for a lot of
+different projects: a Nostr client that just needs a relay, a media app that needs somewhere to put files, a
+community with its own rules, or an ops script that manages users from a cron job.
+
+This section is for people who want to talk to beamhop from code, or change what it does from the inside.
+
+## The surfaces
+
+Everything is served from the same origin. With a relay at `https://relay.example.com`:
+
+```
+wss://relay.example.com/            → Nostr relay (NIP-01 and friends)
+https://relay.example.com/          → NIP-11 (Accept: application/nostr+json), NIP-86 management RPC
+https://relay.example.com/<sha256>  → Blossom blobs (BUD-01/02/04/06/08/11/12)
+https://relay.example.com/admin/    → admin panel (PWA)
+https://relay.example.com/admin/api → admin REST API
+https://relay.example.com/plugins/… → plugin public routes
+https://relay.example.com/metrics   → Prometheus metrics
+https://relay.example.com/health    → readiness probe
+```
+
+<CardGrid>
+  <Card title="Nostr clients" icon="rocket">
+    Any NIP-01 client works. beamhop adds search, COUNT, negentropy sync, groups, auth and more.
+    See the [NIP support matrix](/relay/build/nips/).
+  </Card>
+  <Card title="Media apps" icon="document">
+    A Blossom server is built in: upload, mirror, list, delete and range requests, on disk or S3.
+    See [Blossom endpoints](/relay/build/blossom/).
+  </Card>
+  <Card title="Plugins" icon="puzzle">
+    In-process TypeScript modules that filter writes, rewrite queries, hide events, check uploads, serve HTTP,
+    run jobs and add pages to the admin panel. Start with [your first plugin](/relay/build/plugin-quickstart/).
+  </Card>
+  <Card title="Admin automation" icon="setting">
+    Manage the relay from scripts with the [admin REST API](/relay/build/admin-api/) or from any
+    [NIP-86](/relay/build/nip86/) management client.
+  </Card>
+</CardGrid>
+
+## Which one do I need?
+
+- **You're building a client.** You only need the relay and Blossom endpoints. Nothing here is beamhop-specific:
+  standard libraries for Nostr and Blossom just work.
+- **You want the relay to behave differently.** Write a [plugin](/relay/build/plugin-quickstart/). Hooks run inside
+  the write and read pipelines, so you can enforce rules no client can get around.
+- **You want to manage the relay from outside.** Use NIP-86 if a management client already speaks it, or the admin
+  REST API for everything the panel can do.
+- **You want to watch it.** Scrape [`/metrics` and the health probes](/relay/build/health-metrics/).
+
+<LinkCard
+  title="Write your first plugin"
+  description="A guided tour of plugins/hello, the example plugin that uses every capability."
+  href="/relay/build/plugin-quickstart/"
+/>

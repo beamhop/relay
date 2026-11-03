@@ -1,0 +1,20 @@
+---
+title: System
+description: Check which beamhop version you run, on which runtime and database, which optional features are on, and which NIPs the relay advertises.
+sidebar:
+  order: 16
+---
+
+import { Image } from 'astro:assets';
+import system from '../../../assets/screens/system-desktop.png';
+
+**System** is the about page of your relay. Every role can open it, and it's the first place to look when you report a problem or check that an upgrade went through.
+
+<Image src={system} alt="The System page: an Instance card with name, version, runtime, database, public URL, uptime, relay pubkey and live stream status; a Features card with Blossom media, GeoIP and Web push on and OpenTelemetry off; a Process card with CPU, memory, loop lag and p95 latency; and a list of supported NIPs." />
+
+- **Instance**: the relay's name, beamhop **version**, the **runtime** it runs on (Bun or Node, with version), the **database** (SQLite or PostgreSQL), the **public URL**, uptime, the relay's own pubkey (with a copy button), and whether the app's live stream is connected.
+- **Features**: which optional parts are on: **Blossom media**, **GeoIP** (country stats on the [dashboard](/relay/admin/dashboard/#where-people-connect-from)), **OpenTelemetry** export, and **Web push** ([notifications](/relay/admin/notifications/)).
+- **Process**: CPU, memory, event loop lag and query latency right now.
+- **Supported NIPs**: the NIPs listed in the relay's NIP-11 information document. Click one to read its specification.
+
+If the public URL here isn't the address people actually use, fix `BEAMHOP_PUBLIC_URL`: logins, passkeys, NIP-42 and media links depend on it. See the [configuration reference](/relay/config/reference/#server).

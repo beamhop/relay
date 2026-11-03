@@ -1,0 +1,70 @@
+---
+title: Settings
+description: Change how your relay behaves while it runs, from its public name to who may write, limits, moderation, retention, NIP-05, groups and uploads.
+sidebar:
+  order: 13
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import info from '../../../assets/screens/settings-desktop.png';
+import moderation from '../../../assets/screens/settings-moderation-desktop.png';
+
+**Settings** is where you shape the relay. Everything here is stored in the database and **applies immediately**, with no restart.
+
+<Image src={info} alt="Settings with the Relay info section open: Name 'Driftwood Relay', Contact, Description, Icon URL, Banner URL, Operator pubkey, Terms of service URL and Posting policy URL." />
+
+Pick a section on the left (along the top on a phone). Change what you like; a bar slides up with **Unsaved changes**, **Discard** and **Save**. If you try to leave with unsaved changes, the app asks first.
+
+Owners and admins can edit settings. Moderators and viewers can read them, but the fields are locked.
+
+## The sections
+
+This page gives the gist of each section. Every field, with its default, is listed under [Admin-panel settings](/relay/config/reference/#admin-panel-settings) in the configuration reference.
+
+### Relay info
+
+Your relay's public face, served as its NIP-11 information document and shown by Nostr apps: **Name**, **Description**, **Contact**, **Icon URL**, **Banner URL**, **Operator pubkey**, **Terms of service URL** and **Posting policy URL**.
+
+### Access
+
+Who may write to the relay. **Access mode** is one of:
+
+- **Public**: anyone can write.
+- **Whitelist**: only allow-listed pubkeys (and your admins).
+- **Invite only**: people join with an [invite link](/relay/admin/invites/).
+- **Auth required**: anyone who signs in with NIP-42, publishing as themselves.
+
+Also here: **Require AUTH to read** and **Require AUTH to write** (NIP-42 before subscribing or publishing), and **Accept inbound events for members**, which lets outsiders publish certain events that tag one of your members (inbox behaviour), so your members still get replies and messages in whitelist or invite-only mode.
+
+### Limits
+
+Message, event and content sizes, tags per event, a minimum proof-of-work difficulty, how far in the future or past an event may be dated, and subscription limits. **Rate limits** (events and REQs per minute, connections per IP) apply per pubkey or IP; individual users can get their own on their [user page](/relay/admin/users/#details). **Capacity** caps connections and live subscriptions for the whole relay.
+
+### Moderation
+
+<Image src={moderation} alt="The Moderation section: Kind allow-list and Kind block-list fields, Auto-ban after N reports, and Word filters." />
+
+- **Kind allow-list** and **Kind block-list**: accept only certain event kinds, or refuse some.
+- **Auto-ban after N reports**: ban a pubkey once that many different members have reported it (0 turns it off).
+- **Word filters** match text in event content, case-insensitively, as plain text or a regular expression, optionally for certain kinds only. Each filter has an action: **Reject** refuses the event; **Shadow-ban** tells the client it was accepted but drops it; **Report** accepts it, adds it to [Reports](/relay/admin/reports/) and raises an alert. A **Test filters** box lets you type sample text and see which filters match before you save. Unsafe regular expressions are refused.
+
+### Retention
+
+Rules that delete old events automatically, for example reactions older than 180 days, or keep only the newest N events per pubkey for some kinds, with pubkeys you exempt. Set how often the rules run (**Run every**). **Keep audit log** deletes [audit log](/relay/admin/audit-log/) entries older than that many days (0 keeps them forever). Deleted events can't be recovered.
+
+### NIP-05
+
+**Serve /.well-known/nostr.json** gives people with a NIP-05 name (set on their [user page](/relay/admin/users/#details)) a `name@your-domain` identifier. Optionally restrict it to one **Domain**, and list **Advertised relays** for those names.
+
+### Groups
+
+**Enable NIP-29 groups** and choose **Who can create groups**: anyone, members, or admins only. On a public relay every pubkey counts as a member. See [Groups](/relay/admin/groups/).
+
+### Blossom
+
+Uploads to your media server: **Max upload size**, **Default quota per user** (0 means unlimited), **Who can upload** (anyone, members, admins only), **Allowed MIME types** (wildcards like `image/*` work), **Strip EXIF metadata** (removes location and camera data from images), **Generate thumbnails**, and **Require approval**, which keeps new uploads pending until a moderator approves them in [Media](/relay/admin/media/).
+
+<Aside title="Not everything lives here">
+Settings that the server needs before it starts, such as the port, database, public URL, storage driver and upload abuse limits, are startup config in `beamhop.config.json` or `BEAMHOP_*` variables. See the [configuration overview](/relay/config/overview/).
+</Aside>

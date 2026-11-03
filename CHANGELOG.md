@@ -35,6 +35,11 @@ Pre-production hardening. The full test report, open issues and recommended prod
 
 ### Added
 
+- Install: every push to `main` publishes the Node build to the `dist` branch, so `npx github:beamhop/relay#dist start`
+  runs beamhop with only Node 22+. beamhop is not published to npm.
+- Docs: a product page and documentation site at <https://beamhop.github.io/relay/> (source in `site/`), covering
+  install and deploy, a configuration reference generated from the config schema, an admin app guide with
+  screenshots, and plugins and API.
 - Admin: list your own panel sessions and sign out any or all others (`GET /auth/sessions`,
   `DELETE /auth/sessions/:id`, `POST /auth/sessions/end-others`), with a Sessions card on the account page.
 - `BEAMHOP_LOG_FORMAT=json` for one JSON object per log line.
@@ -51,6 +56,7 @@ Pre-production hardening. The full test report, open issues and recommended prod
 
 ### Changed
 
+- Admin: the event filter's quick-add chips no longer offer zaps (kind 9735).
 - Clients whose send buffer stays congested for 30 s are disconnected.
 - Repeated write/REQ failures (database down, disk full) are logged once per distinct error per 10 s, with a count of
   suppressed repeats, instead of once per request.
@@ -66,6 +72,11 @@ Pre-production hardening. The full test report, open issues and recommended prod
 
 ### Fixed
 
+- Admin: Live → Connections showed nonsense connection durations (such as "-20739833d"); the connection start time is
+  in milliseconds and is now read as such.
+- The landing page footer, CLI help and NIP-11 `software` field now point to the real repository,
+  `github.com/beamhop/relay`.
+- Plugins README: the `registerPage` example no longer passes an `icon` option the SDK doesn't accept.
 - Storage: a PostgreSQL restart, failover or network cut during a transaction crashed the relay. Now `/health` turns
   503, writes are refused, and they resume when the database is back; no acknowledged event is lost.
 - Storage: SQLite reads that stalled the relay on large databases (≈1M events) are bounded, e.g. a 300-author feed

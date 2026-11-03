@@ -1,0 +1,148 @@
+---
+title: Monitoring
+description: Health probes, Prometheus metrics, OTLP export and logs, so you know when your relay needs attention.
+sidebar:
+  order: 9
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+You'll end up with health probes your load balancer and process supervisor can use, metrics in Prometheus or any OpenTelemetry backend, and logs your log shipper can read.
+
+For a quick look you don't need any of this: the [admin app](/relay/admin/) has a live dashboard with connections, traffic, storage and a map. The tools on this page are for alerting and long-term graphs.
+
+## Health probes
+
+beamhop has two health endpoints. Both answer JSON and keep answering even while the server is shutting down.
+
+| Endpoint | Answers 200 when | Answers 503 when | Use it for |
+| --- | --- | --- | --- |
+| `GET /health/live` | the process responds, even while starting or stopping | never | restarts (Docker `HEALTHCHECK`, Kubernetes liveness) |
+| `GET /health` | ready, and the database answered within 2 seconds | starting, draining, stopping, or the database is down or slow | load balancers, readiness |
+
+```sh
+curl http://127.0.0.1:3334/health
+# {"ok":true,"status":"ready","version":"…"}
+```
+
+<Aside type="tip" title="Why two probes?">
+Restarting beamhop won't fix a database outage, and it would cut a graceful shutdown short. So restarts should only follow `/health/live`, while `/health` decides whether to send traffic.
+
+When `/health` fails, the response only says `"error":"unavailable"`. The real cause is in the log as `health check failed`.
+</Aside>
+
+Two things `/health` doesn't cover:
+
+- **Media storage.** An S3 problem doesn't take the relay out of rotation. Watch the log for `blob storage is not usable` at startup.
+- **Disk space.** `/health` stays 200 when the disk is full. Alert on free disk space separately.
+
+## Prometheus metrics
+
+`GET /metrics` serves metrics in Prometheus text format. Metric names start with `beamhop_`, for example `beamhop_connections`, `beamhop_events_stored`, `beamhop_events_in_total`, `beamhop_rejected_total`, `beamhop_event_loop_lag_ms` and `beamhop_req_latency_p95_ms`.
+
+### Who can read it
+
+<Steps>
+
+1. Create a token:
+
+   ```sh
+   openssl rand -hex 32
+   ```
+
+2. Give it to beamhop:
+
+   ```sh
+   BEAMHOP_METRICS_TOKEN=paste-the-token-here
+   ```
+
+3. Scrape with it as a bearer token:
+
+   ```sh
+   curl -H "Authorization: Bearer $BEAMHOP_METRICS_TOKEN" http://127.0.0.1:3334/metrics
+   ```
+
+</Steps>
+
+Without a token, `/metrics` is only served to clients on the same machine connecting directly (loopback, no forwarding headers). With `BEAMHOP_TRUST_PROXY` on and no token, it isn't served at all, because proxied visitors would look local. A placeholder token such as `change-me` or the example file's `REPLACE-WITH-…` disables `/metrics`, with an error in the log. To turn the endpoint off entirely, set `BEAMHOP_PROMETHEUS=false`.
+
+### Prometheus scrape config
+
+```yaml title="prometheus.yml"
+scrape_configs:
+  - job_name: beamhop
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/beamhop-metrics-token
+    static_configs:
+      - targets: ["127.0.0.1:3334"]
+```
+
+`credentials_file` holds just the token. The repository's `deploy/prometheus.yml` is a working example.
+
+## OpenTelemetry (OTLP)
+
+beamhop can also push metrics over OTLP/HTTP to a collector or any backend that accepts it:
+
+```sh
+BEAMHOP_OTEL_ENABLED=true
+BEAMHOP_OTEL_ENDPOINT=http://collector:4318/v1/metrics
+BEAMHOP_OTEL_HEADERS=authorization=Bearer%20abc123   # optional: k=v,k2=v2, values URL-encoded
+BEAMHOP_OTEL_INTERVAL_MS=15000                      # optional, default 15 s
+```
+
+Metrics are reported with `service.name` set to `beamhop`. The repository's `deploy/otel-collector.yaml` receives OTLP and re-exports it for Prometheus.
+
+## The Compose monitoring stack
+
+For a ready-made setup, the Docker Compose file has an `observability` profile with an OpenTelemetry collector, Prometheus and Grafana:
+
+```sh title=".env"
+BEAMHOP_METRICS_TOKEN=paste-the-token-here
+GRAFANA_ADMIN_PASSWORD=a-long-random-password
+```
+
+```sh
+docker compose --profile observability up -d
+```
+
+- Prometheus at `http://127.0.0.1:9090` scrapes beamhop with your token, and the collector.
+- Grafana at `http://127.0.0.1:3000`. Anonymous visitors can only view. Sign in as `admin` to add Prometheus (`http://prometheus:9090`) as a data source and build dashboards. No dashboards are included yet.
+
+To also push OTLP to the bundled collector, set `BEAMHOP_OTEL_ENABLED=true`; the endpoint is already filled in.
+
+## Logs
+
+Logs go to standard output (debug and info) and standard error (warnings and errors). Choose how much with `BEAMHOP_LOG_LEVEL` (`debug`, `info`, `warn`, `error`).
+
+<Tabs>
+<TabItem label="Text (default)">
+
+```
+<time> LEVEL [scope] message {fields}
+```
+
+</TabItem>
+<TabItem label="JSON">
+
+Set `BEAMHOP_LOG_FORMAT=json` for one object per line, ready for a log shipper:
+
+```json
+{"time":"2026-11-03T12:00:00.000Z","level":"warn","scope":"beamhop:server","msg":"health check failed","error":"…"}
+```
+
+</TabItem>
+</Tabs>
+
+Database URLs, S3 keys and the metrics token are never logged.
+
+Log lines worth an alert:
+
+- `health check failed`: the database didn't answer.
+- `blob storage is not usable`: media uploads will fail.
+- Warnings about unknown config keys or `BEAMHOP_*` variables at startup, which usually means a typo.
+
+## Built-in metrics history
+
+beamhop also keeps its own metrics history in the database for the admin dashboard. It's kept for 30 days by default (`BEAMHOP_METRICS_RETENTION_DAYS`). For the world map, point `BEAMHOP_GEOIP_DB` at a GeoLite2 or DB-IP city `.mmdb` file. See the [configuration reference](/relay/config/reference/).

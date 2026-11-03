@@ -1,0 +1,19 @@
+{
+  "name": "beamhop-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "screens": "bun scripts/capture-screens.ts",
+    "gen:config": "bun scripts/gen-config-ref.ts"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.6",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/nunito": "5.3.0",
+    "astro": "7.4.1",
+    "sharp": "0.35.5"
+  }
+}

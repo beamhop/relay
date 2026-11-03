@@ -8,6 +8,7 @@ export interface ConnectionInfo {
   origin?: string;
   /** NIP-42 authenticated pubkeys */
   authedPubkeys: ReadonlySet<string>;
+  /** epoch milliseconds */
   connectedAt: number;
 }
 

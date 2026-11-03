@@ -55,22 +55,26 @@ Open <http://localhost:3334/admin/> and sign in with the owner key (NIP-07 exten
 
 ### npx / Node
 
-The `packages/server` node build is published to npm as **`beamhop`**. Its `bin` is `cli.js`, a single bundled ESM
-file that ships with the admin UI. The native drivers `better-sqlite3`, `postgres` and the optional `sharp` are its only runtime dependencies.
+beamhop is not published to npm. Every push to `main` builds the `packages/server` node build and publishes it to the
+[`dist` branch](https://github.com/beamhop/relay/tree/dist), which `npx` runs straight from GitHub. Its `bin` is
+`cli.js`, a single bundled ESM file that ships with the admin UI. The native drivers `better-sqlite3`, `postgres` and the
+optional `sharp` are its only runtime dependencies.
 
 ```sh
-npx beamhop init                 # writes ./beamhop.config.json
-npx beamhop admin add npub1… --role owner
-npx beamhop start
+npx github:beamhop/relay#dist init                 # writes ./beamhop.config.json
+npx github:beamhop/relay#dist admin add npub1… --role owner
+npx github:beamhop/relay#dist start
+npm install -g github:beamhop/relay#dist           # or install it once; run again to upgrade
 ```
 
-To build and publish it yourself:
+To build it yourself:
 
 ```sh
 bun run build:ui && bun run build:node    # → packages/server/dist/node/{cli.js,admin-ui/,package.json}
 node packages/server/dist/node/cli.js start
-cd packages/server/dist/node && npm publish
 ```
+
+Docs: <https://beamhop.github.io/relay/>
 
 ### Docker
 

@@ -1,0 +1,76 @@
+---
+title: Users
+description: Find people on your relay, open their profile, tag them, set limits, and allow, deny, mute, ban or delete them.
+sidebar:
+  order: 5
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import list from '../../../assets/screens/users-desktop.png';
+import detail from '../../../assets/screens/user-detail-desktop.png';
+import phone from '../../../assets/screens/users-phone.png';
+
+**Users** lists everyone who has interacted with your relay, plus anyone you added by hand. Each row shows the person's name and avatar from their Nostr profile, their status, role and list badges, your tags, how many events they have published here, and when they were last seen.
+
+<Image src={list} alt="The Users page: a search box, filters for status, role, allow-list and sort order, and a table of people with status badges such as active, allowed and moderator, tags such as photographers and regulars, event counts and last-seen times." />
+
+## Find someone
+
+- **Search** matches npub, hex pubkey, name, NIP-05 address and your notes.
+- **Filters** narrow by status (active, banned, muted), role, allow-list, or a tag. Click a tag on any row to filter by it.
+- **Sort** by last seen, first seen or event count.
+
+Filters live in the page address, so you can bookmark or share a filtered list with another admin.
+
+To add someone who hasn't shown up yet, for example to put them on the allow-list in advance, click **Add user** and paste their npub or hex pubkey.
+
+## Act on several people at once
+
+Tick the boxes (or the box in the header to select the whole page) and a bar appears at the bottom with **Ban**, **Unban** and **Mute**, plus **More** for allow, deny, unmute, add or remove a tag, delete their events and delete the users.
+
+## On a phone
+
+Each person is a card. Swipe left to **Ban**, swipe right to **Unban** a banned user or **Allow** someone who isn't on the allow-list yet. Long-press a card to start selecting, and use the filter button next to the search box.
+
+<Image src={phone} alt="The Users page on a phone: a search box with a filter button and a list of cards, each with an avatar, name, status badges, event count and last-seen time." width={390} />
+
+## A user's page
+
+Click anyone to open their page: banner, avatar, name, NIP-05, npub (with copy buttons) and bio, then a row of numbers: events, media (files and size), reports against them, reports they filed, first and last seen. Below that, the kinds of events they publish.
+
+<Image src={detail} alt="A user page for Juniper Okafor: a mountain banner, avatar, active and allowed badges, Ban and Mute buttons, stats for events, media, reports against and filed, first and last seen, and the Manage tab with Details and Admin role cards." />
+
+Three tabs follow:
+
+- **Manage**: the details form, the admin role and profile facts (who invited them, website, first and last seen).
+- **Events**: their latest events, each with a delete button, and a link to browse all of them in [Events](/relay/admin/events/).
+- **Media**: thumbnails of their uploads, with a link to the [media manager](/relay/admin/media/) filtered to them.
+
+The **⋯** menu has **Browse events**, **Open on njump**, any actions plugins add, and **Delete user**.
+
+### Details
+
+| Field | What it does |
+| --- | --- |
+| **Allow-listed** | Lets them write when the relay's access mode is whitelist or invite-only. |
+| **Deny-listed** | Always rejects their events, whatever the access mode. |
+| **Notes** | Private notes, visible to admins only. |
+| **Tags** | Your own labels, such as `vip` or `regulars`, for filtering and bulk actions. |
+| **NIP-05 name** | Gives them `name@your-relay-domain`, served at `/.well-known/nostr.json` (when NIP-05 is on in [Settings](/relay/admin/settings/)). |
+| **Media quota (MB)** | Upload allowance. Empty uses the relay default, `0` means no uploads, `unlimited` means no limit. |
+| **Events / min**, **REQs / min** | Their own rate limits instead of the relay-wide ones. Empty uses the default. |
+
+Click **Save changes** when you're done; **Reset** throws your edits away. If you try to leave with unsaved changes, the app asks first.
+
+### Ban, mute or delete
+
+- **Mute** keeps them connected, but their new events are silently dropped: their app thinks they were published. Good for someone who is noisy rather than harmful. **Unmute** undoes it.
+- **Ban** rejects everything they publish. The ban dialog asks for an optional reason and lets you also **disconnect active sessions** (on by default), **delete all their events** and **delete their uploaded media**. **Unban** undoes the ban, not the deletions.
+- **Delete user** removes the person along with all their events and uploads. It isn't a ban: they can come back and start over. It can't be undone.
+
+The owner can't be banned, muted or deleted, and only someone who manages admins can delete another admin.
+
+<Aside title="Who can do what">
+Viewing users needs `users.view`; editing details needs `users.edit`; mute and ban need `users.ban`; deleting needs `users.delete`. Moderators can do everything here except delete users and change roles. See [Admins and roles](/relay/admin/roles/).
+</Aside>

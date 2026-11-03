@@ -1,0 +1,44 @@
+---
+title: IP rules
+description: Block IP addresses and ranges from connecting, or exempt trusted addresses from the per-IP limits.
+sidebar:
+  order: 8
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps } from '@astrojs/starlight/components';
+import rules from '../../../assets/screens/ip-rules-desktop.png';
+
+**IP rules** work on network addresses rather than people. Use them when a bot or scraper keeps coming back with new keys, or to give your own servers room to breathe.
+
+<Image src={rules} alt="The IP rules page listing three rules: two red 'block' rules (a single address marked 'prize spam bot' and a /27 range marked 'scraper hammering REQs') and a green 'allow' rule for 'our uptime monitor'." />
+
+There are two kinds of rule:
+
+- **Block**: matching addresses can't connect. Adding a block rule also disconnects anyone already connected from those addresses.
+- **Allow**: matching addresses skip the per-IP connection and message limits, and win over every block rule. This is *not* a whitelist: a public relay already accepts everyone. Only allow addresses you control, such as your own servers, a monitoring service or a trusted proxy.
+
+## Add a rule
+
+<Steps>
+
+1. Click **Add rule**.
+2. Enter a single address (`203.0.113.7`) or a range in CIDR form (`203.0.113.0/24`, `2001:db8::/32`).
+3. Choose **Block** or **Allow**, and add a **Reason** so future you knows why.
+4. Click **Add rule**.
+
+</Steps>
+
+An allow rule wider than an IPv4 `/16` or an IPv6 `/48` asks you to confirm first, because everyone in that range could then open as many connections and send as many messages as they like, and you couldn't block them by IP.
+
+## Remove a rule
+
+Click the bin next to a rule (on a phone, swipe it left) and confirm. Once you have more than five rules, a filter box helps you find one by address or reason.
+
+<Aside type="caution" title="Behind a reverse proxy">
+Rules match the client address the relay sees. Behind a proxy, turn on `BEAMHOP_TRUST_PROXY` so that's the real visitor's address and not your proxy's, or a block rule could lock out everyone. See [Reverse proxy](/relay/deploy/reverse-proxy/).
+</Aside>
+
+<Aside>
+Managing IP rules needs the `ip.manage` permission: owners and admins.
+</Aside>

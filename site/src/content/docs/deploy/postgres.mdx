@@ -1,0 +1,99 @@
+---
+title: PostgreSQL
+description: Store events, users and settings in PostgreSQL instead of SQLite, and move an existing relay over.
+sidebar:
+  order: 7
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+You'll end up with beamhop keeping everything (events, users, settings, admin accounts and media records) in a PostgreSQL database instead of a local SQLite file.
+
+## Do I need it?
+
+Probably not to start with. SQLite is the default, needs no setup and is fast: in the project's own load tests it accepted more writes per second than PostgreSQL on the same machine. Keep the SQLite file on a **local disk**, not on NFS or other network storage.
+
+Reach for PostgreSQL when you already run it and want its tooling for backups, replication and failover, or when you want the database on a different machine from the relay.
+
+beamhop supports **PostgreSQL 12 or newer**.
+
+## Set it up
+
+<Steps>
+
+1. Create a role and a database it owns:
+
+   ```sql
+   CREATE ROLE beamhop LOGIN PASSWORD 'a-long-random-password';
+   CREATE DATABASE beamhop OWNER beamhop;
+   ```
+
+   Use a dedicated role that owns its database (or schema). beamhop creates and migrates its own tables.
+
+2. Point beamhop at it:
+
+   ```sh
+   BEAMHOP_DB_DRIVER=postgres
+   BEAMHOP_DATABASE_URL=postgres://beamhop:a-long-random-password@db.internal:5432/beamhop
+   ```
+
+   or in `beamhop.config.json`:
+
+   ```json
+   {
+     "database": {
+       "driver": "postgres",
+       "postgresUrl": "postgres://beamhop:a-long-random-password@db.internal:5432/beamhop"
+     }
+   }
+   ```
+
+3. Start beamhop. On first start it creates its tables. You'll see the usual startup log, and `GET /health` answers `"ok":true` once the database responds.
+
+</Steps>
+
+With Docker Compose, the `postgres` profile does all of this for you. See [Docker: optional add-ons](/relay/deploy/docker/#optional-add-ons).
+
+<Aside type="tip" title="Using a schema instead of a whole database">
+To keep beamhop in its own schema of a shared database, add `?search_path=beamhop` to the URL and make the role own that schema.
+</Aside>
+
+<Aside type="caution" title="Keep the URL secret">
+The database URL contains a password. Pass it through the environment or a config file only you can read (`chmod 600`), never bake it into an image or commit it. beamhop never writes database URLs to its logs.
+</Aside>
+
+## Sizing
+
+Each beamhop instance opens **up to 20 connections**. PostgreSQL's default `max_connections` of 100 fits about four instances. Beyond that, put a pooler such as pgbouncer in front.
+
+## When the database goes away
+
+If PostgreSQL restarts, fails over or the network drops, beamhop keeps running: `/health` turns 503, writes are refused, and everything resumes when the database is back. No event that was already acknowledged is lost. Point your load balancer at `/health` so traffic moves elsewhere in the meantime (see [Monitoring](/relay/deploy/monitoring/)).
+
+## Moving from SQLite to PostgreSQL
+
+`beamhop export` and `beamhop import` move **events** between any two databases. Users, roles, settings, admin accounts and media are not included, so plan to set those up again on the new database.
+
+<Steps>
+
+1. Export from the SQLite relay:
+
+   ```sh
+   beamhop export > events.jsonl
+   ```
+
+2. Import into PostgreSQL by pointing the same command at the new database:
+
+   ```sh
+   BEAMHOP_DB_DRIVER=postgres BEAMHOP_DATABASE_URL=postgres://… beamhop import < events.jsonl
+   ```
+
+   Events are checked as they're imported. `--skip-verify` skips signature checks if you trust the file.
+
+3. Switch beamhop's configuration to PostgreSQL and start it.
+
+</Steps>
+
+From a source checkout, use `bun run beamhop export` and so on. In Docker, see [running commands inside the container](/relay/deploy/docker/#running-commands-inside-the-container).
+
+Backups and restores for PostgreSQL are covered in [Backups & upgrades](/relay/deploy/backups-upgrades/#postgresql).

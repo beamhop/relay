@@ -358,7 +358,7 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
             <Label>Kinds</Label>
             <ListInput numeric value={b.kinds} onChange={(v) => set("kinds", v)} placeholder="1, 7, 30023…" format={(k) => `${kindName(k)} (${k})`} />
             <div className="flex flex-wrap gap-1">
-              {[0, 1, 6, 7, 1984, 9735, 30023].filter((k) => !b.kinds.includes(k)).map((k) => (
+              {[0, 1, 6, 7, 1984, 30023].filter((k) => !b.kinds.includes(k)).map((k) => (
                 <button type="button" key={k} className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted" onClick={() => set("kinds", [...b.kinds, k])}>
                   + {kindName(k)}
                 </button>

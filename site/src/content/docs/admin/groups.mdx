@@ -1,0 +1,28 @@
+---
+title: Groups
+description: See the NIP-29 groups hosted on your relay, who runs them and who is in them, and delete a group when needed.
+sidebar:
+  order: 12
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import groups from '../../../assets/screens/groups-desktop.png';
+
+Your relay can host NIP-29 groups: shared spaces that people create and join from Nostr apps that support them. **Groups** lists them, biggest first.
+
+<Image src={groups} alt="The Groups page with a search box and three group cards: Help desk, Photo walks, and Sourdough club marked 'closed', each with a description, member count and age." />
+
+Each card shows the group's picture and name, its id, its description, whether it is **private** or **closed**, how many members it has and when it was created. Type in the search box to filter by name, id or description.
+
+Click a group to open it. You see its details, the group's **Admins** and its **Members** with their roles in the group.
+
+## Delete a group
+
+On a group's page, **Delete group** removes the group's metadata, its membership and all of its events from your relay, after you confirm. Deleting needs the `groups.manage` permission (owners and admins); every role can look.
+
+Groups are run by their own admins from their Nostr apps; this page is for oversight, not day-to-day group management.
+
+<Aside title="Turn groups on or off">
+Whether groups are enabled, and who may create them (anyone, members only, or admins only), is set in [Settings → Groups](/relay/admin/settings/#groups).
+</Aside>

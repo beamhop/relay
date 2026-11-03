@@ -1,0 +1,54 @@
+---
+title: Account and security
+description: Manage your own admin account, set a password, turn on two-factor authentication, add passkeys and end sessions you don't recognize.
+sidebar:
+  order: 17
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps } from '@astrojs/starlight/components';
+import account from '../../../assets/screens/account-desktop.png';
+
+**Account** is about you, not the relay: how you sign in, where you are signed in, and your preferences on this device. Open it from the sidebar or from the menu under your name (**Account & security**).
+
+<Image src={account} alt="The Account page: a card with the admin's avatar, name, owner badge, npub and '25 permissions', a Sign out button, then cards for Password, Two-factor authentication, Passkeys and Sessions, where one session is marked 'this device'." />
+
+The top card shows your name, role, npub (with a copy button) and how many permissions your role gives you.
+
+## Password
+
+A password lets you sign in without a Nostr signer, for example on a borrowed laptop. Enter a new password (at least 8 characters) twice and click **Set password**. To change it later you also enter the current one, unless you signed in with your Nostr key in the last 10 minutes.
+
+Setting or changing your password signs out all your other sessions.
+
+## Two-factor authentication
+
+With a password set, you can require a code from an authenticator app as well:
+
+<Steps>
+
+1. Under **Two-factor authentication**, click **Set up**.
+2. Add the account to your authenticator app with **Open in authenticator app**, or type the **Secret key** shown.
+3. Enter the 6-digit code the app shows and click **Verify and enable**.
+
+</Steps>
+
+From then on, password sign-ins ask for a code. To turn it off, click **Disable** and enter a current code (not one you just used to sign in; wait for the next).
+
+## Passkeys
+
+Passkeys let you sign in with Face ID, Touch ID, Windows Hello or a security key. Click **Add passkey**, give it a name you'll recognize (like "Work laptop"), and follow your device's prompt. Each passkey is listed with a button to remove it.
+
+<Aside title="Confirm it's you">
+Adding or removing a passkey, and setting up two-factor authentication, need a recent sign-in. If it has been a while, the app asks for your current password; without a password, sign out and back in, then try again within 15 minutes.
+</Aside>
+
+## Sessions
+
+**Sessions** lists every browser signed in as you: the browser and system, IP address, how it signed in (Nostr key, password or passkey) and when it was last active. The one you're using is marked **this device**. End any session you don't recognize with its button, or click **Sign out other sessions** to sign out everywhere else. Their push notifications stop too.
+
+## Further down the page
+
+- **[Notifications](/relay/admin/notifications/)**: push alerts for new reports and system problems on this device.
+- **[Privacy](/relay/admin/privacy/)**: whether this browser loads images and map tiles from other servers.
+- **Appearance**: **System**, **Light** or **Dark** theme for this device. You can also switch it from the menu under your name or the command palette.

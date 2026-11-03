@@ -44,7 +44,7 @@ Options:
   -v, --version                  print version
   -h, --help                     show this help
 
-Docs: https://github.com/beamhop/beamhop#readme`;
+Docs: https://github.com/beamhop/relay#readme`;
 
 const options = {
   config: { type: "string", short: "c" },

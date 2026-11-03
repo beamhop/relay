@@ -1,0 +1,195 @@
+---
+title: Docker & Docker Compose
+description: Run beamhop in a container with Docker Compose or plain docker run, with optional PostgreSQL, MinIO and monitoring add-ons.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem, Steps, Aside, FileTree } from '@astrojs/starlight/components';
+
+You'll end up with beamhop running as a container that restarts on its own, shuts down gracefully, keeps its data in a Docker volume, and reports its health to Docker.
+
+The repository ships a `Dockerfile` and a `docker-compose.yml`. There's no published image yet, so the first start builds it from source.
+
+## With Docker Compose
+
+<Steps>
+
+1. Clone the repository:
+
+   ```sh
+   git clone https://github.com/beamhop/relay.git
+   cd relay
+   ```
+
+2. Create a file called `.env` next to `docker-compose.yml`. Compose reads it automatically.
+
+   ```sh title=".env"
+   BEAMHOP_OWNERS=npub1…
+   BEAMHOP_PUBLIC_URL=https://relay.example.com
+   ```
+
+   For a quick local try you can skip `BEAMHOP_PUBLIC_URL`; it defaults to `http://localhost:3334`.
+
+3. Build and start:
+
+   ```sh
+   docker compose up -d
+   ```
+
+   You'll see the image build, then the `beamhop` service start.
+
+4. Check it:
+
+   ```sh
+   docker compose ps          # STATUS should say "healthy" after a few seconds
+   docker compose logs -f beamhop
+   ```
+
+</Steps>
+
+The relay now answers on port 3334. Put a [reverse proxy](/relay/deploy/reverse-proxy/) in front before you share it.
+
+### Settings you can put in `.env`
+
+The compose file passes these variables through to beamhop. Anything you leave out gets the default shown.
+
+| Variable | Default in compose | What it does |
+| --- | --- | --- |
+| `BEAMHOP_OWNERS` | empty | Owner npubs, comma separated |
+| `BEAMHOP_PUBLIC_URL` | `http://localhost:3334` | The address users reach |
+| `BEAMHOP_PORT` | `3334` | The **host** port Compose publishes |
+| `BEAMHOP_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `BEAMHOP_TRUST_PROXY` | `false` | Set `true` behind a reverse proxy |
+| `BEAMHOP_TRUSTED_PROXIES` | empty (loopback and private networks) | Which peers may set the client IP |
+| `BEAMHOP_DB_DRIVER` | `sqlite` | `postgres` to use the PostgreSQL add-on |
+| `BEAMHOP_BLOSSOM_DRIVER` | `fs` | `s3` to use the MinIO add-on or your own bucket |
+| `BEAMHOP_METRICS_TOKEN` | empty | Bearer token for `/metrics` |
+| `BEAMHOP_OTEL_ENABLED` | `false` | Push metrics over OTLP |
+
+The database URL and the `BEAMHOP_S3_*` variables are wired up too, with defaults pointing at the add-on containers. Other `BEAMHOP_*` options aren't listed in the compose file; add them under `environment:` if you need them. See the [configuration reference](/relay/config/reference/) for everything.
+
+### Optional add-ons
+
+The compose file has profiles for extra services. Turn one on with `--profile`, and tell beamhop to use it:
+
+<Tabs>
+<TabItem label="PostgreSQL">
+
+```sh title=".env"
+BEAMHOP_DB_DRIVER=postgres
+POSTGRES_PASSWORD=a-long-random-password
+```
+
+```sh
+docker compose --profile postgres up -d
+```
+
+beamhop waits for PostgreSQL to report healthy before starting. More in [PostgreSQL](/relay/deploy/postgres/).
+
+</TabItem>
+<TabItem label="S3 (MinIO)">
+
+```sh title=".env"
+BEAMHOP_BLOSSOM_DRIVER=s3
+MINIO_ROOT_PASSWORD=a-long-random-password
+```
+
+```sh
+docker compose --profile s3 up -d
+```
+
+A small init container creates the `beamhop` bucket first. The MinIO console is on `127.0.0.1:9001`. More in [S3-compatible storage](/relay/deploy/s3/).
+
+</TabItem>
+<TabItem label="Monitoring">
+
+```sh title=".env"
+BEAMHOP_METRICS_TOKEN=output-of-openssl-rand-hex-32
+GRAFANA_ADMIN_PASSWORD=a-long-random-password
+```
+
+```sh
+docker compose --profile observability up -d
+```
+
+This adds an OpenTelemetry collector, Prometheus (`127.0.0.1:9090`) and Grafana (`127.0.0.1:3000`). Prometheus needs the token to scrape beamhop. More in [Monitoring](/relay/deploy/monitoring/).
+
+</TabItem>
+</Tabs>
+
+You can combine profiles: `docker compose --profile postgres --profile s3 up -d`. Docker Compose also reads a `COMPOSE_PROFILES=postgres,s3` line from `.env`, so you don't have to type them every time.
+
+<Aside type="caution" title="Change the default passwords">
+The add-ons come with **development-only** passwords (`beamhop`, `beamhop-secret`, `admin`). Their ports are published on `127.0.0.1` only, but set `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` before you rely on them.
+
+PostgreSQL only uses `POSTGRES_PASSWORD` when it first creates its data volume. If you change it later, change it inside PostgreSQL too.
+</Aside>
+
+## With plain `docker run`
+
+If you'd rather not use Compose:
+
+```sh
+docker build -t beamhop .
+docker run -d --name beamhop --init --stop-timeout 30 --restart unless-stopped \
+  -p 3334:3334 \
+  -v beamhop-data:/data \
+  -e BEAMHOP_OWNERS=npub1… \
+  -e BEAMHOP_PUBLIC_URL=https://relay.example.com \
+  beamhop
+```
+
+Keep `--init` and `--stop-timeout 30`. The next section explains why.
+
+## Running commands inside the container
+
+The `beamhop` command-line tool is available inside the container. For example, to add an owner or set a password login:
+
+```sh
+docker compose exec beamhop bun packages/server/src/cli.ts admin add npub1… --role owner
+docker compose exec -it beamhop bun packages/server/src/cli.ts admin password npub1…
+```
+
+With plain Docker, use `docker exec beamhop …` instead.
+
+## Behind a reverse proxy
+
+When nginx or Caddy runs on the same host, don't let clients reach port 3334 directly. In `docker-compose.yml`, change the port mapping to loopback:
+
+```yaml title="docker-compose.yml" ins="127.0.0.1:"
+    ports:
+      - "127.0.0.1:${BEAMHOP_PORT:-3334}:3334"
+```
+
+and turn on proxy trust in `.env`:
+
+```sh title=".env"
+BEAMHOP_TRUST_PROXY=true
+```
+
+With `docker run`, use `-p 127.0.0.1:3334:3334`.
+
+<Aside type="note" title="Why not just use the firewall?">
+Ports published by Docker bypass host firewalls such as `ufw`. Binding to `127.0.0.1` is the reliable way to keep the port private.
+</Aside>
+
+`BEAMHOP_TRUSTED_PROXIES` can usually stay empty here. Its default trusts loopback and private networks, which covers a proxy on the host (it reaches the container through Docker's private bridge network) and a proxy in another container. See [Reverse proxy](/relay/deploy/reverse-proxy/) for the full setup.
+
+## How it works
+
+<FileTree>
+- /app/ the code, read-only for the runtime user
+  - packages/
+  - plugins/ local plugins folder
+- /data/ the only writable place (volume)
+  - beamhop.db SQLite database
+  - blobs/ Blossom media files
+</FileTree>
+
+- **Non-root.** The image runs as the `bun` user (uid 1000) and only `/data` is writable. If you use a bind mount like `-v ./data:/data` instead of a named volume, make it writable first: `chown -R 1000:1000 ./data`. Otherwise the database can't be created and blob storage is reported unusable at startup.
+- **Locked down.** The compose file drops all Linux capabilities and sets `no-new-privileges`. Nothing needs root because the port is above 1024.
+- **Health check.** Docker calls `GET /health/live` every 30 seconds. Point load balancers at `GET /health` instead (see [Monitoring](/relay/deploy/monitoring/)).
+- **Graceful shutdown.** On `SIGTERM` beamhop finishes in-flight requests and queued events within 10 seconds (`BEAMHOP_SHUTDOWN_TIMEOUT_MS`). Docker's default grace period is also 10 seconds, after which it kills the process mid-drain. That's why the compose file sets `stop_grace_period: 30s` and the `docker run` example uses `--stop-timeout 30`.
+- **Init process.** `init: true` (or `--init`) puts a tiny init in front of Bun, which forwards signals and cleans up child processes.
+- **Image contents.** The image is built in stages: the admin app and plugin UIs are compiled, then only production dependencies and the built files go into a slim Bun image. Local databases, `.env` files, keys and backups in your checkout are excluded by `.dockerignore`.

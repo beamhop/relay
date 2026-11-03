@@ -1,0 +1,31 @@
+---
+title: Audit log
+description: See every administrative action on your relay, who did it, when and from where, and filter the history.
+sidebar:
+  order: 15
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import audit from '../../../assets/screens/audit-desktop.png';
+
+The **Audit log** records every administrative action, newest first: sign-ins, bans, deletions, role changes, settings changes, IP rules, invites and more. When several people run a relay together, it's how you find out who changed what.
+
+<Image src={audit} alt="The Audit log page: filter boxes for actor, action and target, and a list of entries such as auth.login, user.ban, user.create, settings.update, ip.add and invite.create, each with the admin who did it, a target, a 'details' link, the time and an IP address." />
+
+Each entry shows:
+
+- **who** did it: an admin's npub (click it to open their user page), `system`, or a plugin as `plugin:<name>`;
+- **the action**, such as `user.ban`, `settings.update` or `ip.add`, colour-coded: red for removals and bans, violet for settings, plugins and roles, blue for sign-ins;
+- **the target**, such as a pubkey, an IP range or an event id;
+- **when**, and the IP address it came from.
+
+Click **details** to see the extra data recorded with the action, for example the ban reason or the settings that changed.
+
+## Find something
+
+Type in **Actor** (npub, hex, `system` or `plugin:…`), **Action** (for example `user.ban`) or **Target** and click **Filter**. Clicking an action badge or a target in the list filters by it too. The **×** button clears the filters.
+
+<Aside title="How long entries are kept">
+The audit log is kept forever unless you set **Keep audit log** in [Settings → Retention](/relay/admin/settings/#retention). Viewing it needs `audit.view`: owners and admins.
+</Aside>

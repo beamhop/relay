@@ -1,0 +1,163 @@
+---
+title: Admin UI extensions
+description: Add pages, dashboard widgets and user or event actions to the beamhop admin panel from a plugin, using the panel's own React.
+sidebar:
+  order: 11
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A plugin can extend the admin panel with:
+
+- **pages**, listed under Plugins in the sidebar, at `/admin/p/<plugin>/<path>`;
+- **dashboard widgets**;
+- **user actions**, offered on users in the panel;
+- **event actions**, offered on events in the panel.
+
+You ship a prebuilt ESM bundle, point the plugin's `ui` field at it, and the panel imports it while the plugin is
+running.
+
+## The contract
+
+The bundle's default export is a function that receives an `AdminUiPluginApi`:
+
+```ts
+interface AdminUiPluginApi {
+  pluginName: string;
+  registerPage(page: { path: string; title: string; component: unknown }): void;
+  registerWidget(widget: { id: string; title: string; size?: "sm" | "md" | "lg"; component: unknown }): void;
+  registerUserAction(action: { id: string; label: string; destructive?: boolean; run(pubkey: string): Promise<void> | void }): void;
+  registerEventAction(action: { id: string; label: string; destructive?: boolean; run(eventId: string): Promise<void> | void }): void;
+  fetch(path: string, init?: RequestInit): Promise<Response>;
+}
+```
+
+`component` is a React component. `api.fetch(path)` calls your plugin's [admin routes](/relay/build/plugin-routes/#admin-routes)
+(`/admin/api/plugins/x/<name>/<path>`) with the admin's session and the CSRF header already set. `"/stats"` and
+`"stats"` are the same; absolute URLs and `..` segments are rejected, so it can't reach the rest of the admin API.
+A `401` sends the admin to the sign-in page, like the panel's own requests.
+
+## Using the panel's React
+
+Don't bundle your own React. The panel exposes its React instance and its shadcn/ui components on
+`window.__BEAMHOP_UI__` before loading plugin bundles:
+
+```ts
+interface AdminUiHost {
+  React: unknown;
+  ReactDOM: unknown;
+  jsxRuntime: unknown;
+  ui: Record<string, unknown>;   // Button, Card, Input, Badge, Table, Dialog, Switch, ...
+  toast: unknown;
+}
+```
+
+The simplest approach, and the one `hello` uses, is a tiny host module that reads from that global. JSX is compiled
+to its `h` function, so the bundle contains no `import "react"` at all, and no bundler externals or import maps are
+needed.
+
+<Steps>
+
+1. Add a host shim:
+
+   ```ts title="ui/host.ts"
+   const host = (globalThis as any).__BEAMHOP_UI__;
+   export const h = host.React.createElement;
+   export const Fragment = host.React.Fragment;
+   export const { useState, useEffect, useCallback } = host.React;
+   /** shadcn component if the host provides it, otherwise a plain element */
+   export const ui = (name: string, fallback: string): any => host.ui?.[name] ?? fallback;
+   ```
+
+2. Compile JSX to `h`:
+
+   ```json title="ui/tsconfig.json"
+   {
+     "compilerOptions": {
+       "jsx": "react",
+       "jsxFactory": "h",
+       "jsxFragmentFactory": "Fragment"
+     }
+   }
+   ```
+
+3. Write the entry and register your extensions:
+
+   ```tsx title="ui/index.tsx"
+   import type { AdminUiPluginApi } from "@beamhop/sdk";
+   import { h, useState, useEffect, ui } from "./host";
+
+   const Card = ui("Card", "section");
+   const Badge = ui("Badge", "span");
+
+   export default function register(api: AdminUiPluginApi) {
+     function StatsPage() {
+       const [stats, setStats] = useState(null);
+       useEffect(() => {
+         api.fetch("/stats").then((r) => (r.ok ? r.json() : null)).then(setStats);
+       }, []);
+       return (
+         <Card style={{ padding: "1rem" }}>
+           <Badge>rejected: {stats?.rejected ?? "…"}</Badge>
+         </Card>
+       );
+     }
+
+     api.registerPage({ path: "/stats", title: "My plugin", component: StatsPage });
+   }
+   ```
+
+4. Build it as a browser ESM bundle:
+
+   ```sh
+   bun build ./ui/index.tsx --outfile ./dist/ui.js --format esm --target browser --minify
+   ```
+
+   In the beamhop repo, `bun run build:plugins` builds every first-party plugin's UI.
+
+5. Point the plugin at the bundle. The path is relative to the plugin package root:
+
+   ```ts
+   const plugin: BeamhopPlugin = {
+     name: "my-plugin",
+     version: "1.0.0",
+     ui: "./dist/ui.js",
+     setup(ctx) { /* … */ },
+   };
+   ```
+
+</Steps>
+
+<Aside type="tip" title="Prefer real imports?">
+The panel also provides an import map for `react`, `react-dom`, `react/jsx-runtime` and `@beamhop/ui`. If you'd
+rather write normal imports, mark those modules as `--external` when you build. The shim approach works either way.
+</Aside>
+
+## What `hello` registers
+
+```tsx
+api.registerPage({ path: "/hello", title: "Hello", component: HelloPage });
+api.registerWidget({ id: "hello-rejected", title: "Hello plugin", size: "sm", component: HelloWidget });
+api.registerUserAction({
+  id: "hello-greet",
+  label: "Say hello (example)",
+  run: (pubkey) => toast(`Hello ${pubkey.slice(0, 8)}…!`),
+});
+```
+
+The page polls `api.fetch("/stats")` every 5 seconds and has a button that `POST`s to `/reset`. Mark actions that
+change or remove data with `destructive: true`.
+
+## How bundles are served
+
+- The server serves the bundle at `/admin/plugins-ui/<name>.js` (with `?v=<version>` in the URL the panel uses),
+  only while the plugin is running.
+- The panel imports bundles for running plugins and unloads them when a plugin is disabled.
+- Widgets and actions are hidden from admins without the `plugins.use` permission (viewers), since the admin routes
+  behind them would refuse those admins anyway.
+- An error while loading one plugin's UI is isolated to that plugin.
+
+<Aside type="caution">
+A plugin's UI bundle runs in the admin panel's origin with the signed-in admin's session. It is as trusted as the
+plugin's server code.
+</Aside>

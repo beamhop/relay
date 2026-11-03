@@ -1,0 +1,53 @@
+---
+title: Events
+description: Browse and search the events stored on your relay, delete what doesn't belong, and import or export events as JSONL.
+sidebar:
+  order: 9
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import events from '../../../assets/screens/events-desktop.png';
+
+**Events** is a window into everything your relay stores: notes, reactions, profiles, articles, reports and every other kind. Find what you need with a filter, then delete it or take it with you.
+
+<Image src={events} alt="The Events page: a filter builder on the left with full-text search, kinds (Note selected), authors, event IDs, tags and a date range; on the right, notes newest first, two of them with a red flag showing how many reports they have, and a 'Delete matching' button." />
+
+## Filter
+
+The panel on the left (behind **Filters** on a phone) builds a standard Nostr filter:
+
+- **Full-text search** looks inside event content (NIP-50).
+- **Kinds**: type numbers, or click a shortcut such as **+ Note** or **+ Reaction**.
+- **Authors**: npubs or hex pubkeys.
+- **Event IDs**: `note1…` ids or hex.
+- **Tags**: add a tag letter and its values, for example `t` and `nostr`.
+- **Since** and **Until** limit the time range.
+
+Click **Apply filter**. The active filter shows as chips above the results; **Clear** removes it. Prefer typing JSON? The **Raw JSON** tab takes a filter object or an array of filters.
+
+The filter is part of the page address, so you can bookmark it or send it to another admin. Other pages link here too: **Browse events** on a user's page, or pasting an event id into the [command palette](/relay/admin/#search-and-jump-anywhere).
+
+## Read the results
+
+Results are newest first and load as you scroll. Each card shows the author, when it was published, its kind and the content. A red flag with a number means the event has been reported that many times; see [Reports](/relay/admin/reports/).
+
+The **⋯** menu on a card can **Inspect JSON**, **Copy id**, **Copy nevent** and **View author**.
+
+## Delete events
+
+- **One event**: choose **Delete event** in the card's **⋯** menu. On a phone, swipe it left.
+- **A selection**: tick several cards, or **Select all**, then click **Delete** in the bar at the bottom.
+- **Everything that matches**: with a filter applied, **Delete matching** removes every stored event that matches it, not just the ones on screen. You have to type `DELETE` to confirm, and an empty filter is refused.
+
+Deleting single or selected events asks for an optional reason. Every delete is recorded in the [audit log](/relay/admin/audit-log/). Deleted events are removed from the database for good.
+
+## Import and export
+
+**Export** downloads the events matching the current filter as a `.jsonl` file, one event per line.
+
+**Import** uploads such a file. Every event's signature is checked. By default each event goes through your relay's normal policies, as if a client had published it; switch on **Bypass write policies** to skip the access and moderation checks, for example when moving an archive from another relay. When it's done you see how many events were imported, how many were duplicates and how many were rejected, with the reasons.
+
+<Aside title="Permissions">
+Browsing needs `content.view` (every role); deleting needs `content.delete` (moderators and up); import and export need `content.import` and `content.export` (owners and admins). For large migrations the command line has `beamhop import` and `beamhop export`.
+</Aside>

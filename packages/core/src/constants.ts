@@ -1,4 +1,4 @@
-export const SOFTWARE = "https://github.com/beamhop/beamhop";
+export const SOFTWARE = "https://github.com/beamhop/relay";
 export const VERSION = "0.1.0";
 
 /**

@@ -1,0 +1,67 @@
+---
+title: Dashboard
+description: Read the dashboard's live numbers, traffic and system charts, world map, event kinds, top publishers and rejection reasons.
+sidebar:
+  order: 3
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import dashboard from '../../../assets/screens/dashboard-desktop.png';
+import breakdowns from '../../../assets/screens/dashboard-breakdowns-desktop.png';
+import phone from '../../../assets/screens/dashboard-phone.png';
+
+The dashboard is the first page you see after signing in. It answers two questions at a glance: *is the relay healthy?* and *what are people doing on it?*
+
+<Image src={dashboard} alt="The dashboard with twelve live number cards (connections, events in and out per second, REQs per second, rejected per second, REQ latency, total events, database size, media, CPU, memory, event loop lag) above the Traffic and System charts." />
+
+## Live numbers
+
+The cards at the top update every couple of seconds while the live dot in the top bar is green. The small line under a number shows its last couple of minutes.
+
+| Card | What it tells you |
+| --- | --- |
+| **Connections** | Open websocket connections, how many of them signed in with NIP-42 (authed), and how many subscriptions they hold. |
+| **Events in /s**, **Events out /s** | Events clients publish, and events the relay sends back to subscribers. |
+| **REQ /s** | Subscription requests per second. |
+| **Rejected /s** | Events refused by your policies. The card turns amber above 5 per second. |
+| **REQ latency p95** | How long the slowest 5% of queries take, with p50 and p99 underneath. |
+| **Total events**, **Database** | Events stored, and the database size. |
+| **Media** | Space used by uploaded files, and how many there are. |
+| **CPU**, **Memory (RSS)** | The relay process's CPU use (amber above 60%, red above 85%) and memory. |
+| **Event loop lag** | How long work waits before it runs (amber above 50 ms, red above 200 ms), plus the uptime. |
+
+## Charts over time
+
+Pick a range at the top right: **1h**, **24h**, **7d** or **30d**. The charts and lists below follow it.
+
+- **Traffic** shows events in, events out, REQs and rejected events per interval.
+- **System** switches between connections (**Conns**), **CPU**, memory (**Mem**) and **Latency** (REQ p95 and event loop lag).
+
+The newest interval is still filling up, so the right edge often dips. That's expected.
+
+<Image src={breakdowns} alt="Lower half of the dashboard: the World card listing countries with bars, a button to load the map, Events by kind as a bar chart, Top publishers with event and rejection counts, and Rejection reasons." />
+
+## Where people connect from
+
+The **World** card lists countries by connections or by events (switch with **Conns** / **Events**). It needs a GeoIP database; without one it says *No geo data. Configure a GeoIP database to enable.* Point `BEAMHOP_GEOIP_DB` at a city `.mmdb` file to turn it on (see `metrics.geoipDbPath` in the [configuration reference](/relay/config/reference/#metrics)).
+
+With GeoIP on, a map can sit beside the list. It is drawn with map tiles from `demotiles.maplibre.org`, a third-party server that sees your IP address when it sends them, so the map stays off until you click **Load map from demotiles.maplibre.org**. That choice is remembered in this browser, and you can change it any time under [Privacy](/relay/admin/privacy/).
+
+## What's being published, and by whom
+
+- **Events by kind** shows the most common event kinds (notes, reactions, reposts and so on) as bars or a pie chart.
+- **Top publishers** lists the ten most active pubkeys, with their event count and how many of their events were rejected. A user with many rejections is often worth a closer look; click them to open their [user page](/relay/admin/users/).
+- **Rejection reasons** groups refused events by reason, such as *slow down, too many events* or *pubkey is banned*. Numbers and links in reasons are replaced with placeholders like `<n>` so similar reasons add up. The **Live** link opens the [live stream](/relay/admin/live/) to watch it happen.
+
+Plugins can add their own cards at the bottom, under **Plugins**.
+
+## On your phone
+
+The same dashboard works on a phone, with the cards in two columns.
+
+<Image src={phone} alt="The dashboard on a phone: range buttons and number cards in two columns, with the bottom tab bar showing Dashboard, Users, Events, Reports (with a badge of 5) and More." width={390} />
+
+<Aside title="How long history is kept">
+The dashboard keeps 30 days of history by default (`BEAMHOP_METRICS_RETENTION_DAYS`). For alerting and longer graphs, scrape `/metrics` with Prometheus or send metrics over OpenTelemetry; see [Monitoring](/relay/deploy/monitoring/).
+</Aside>

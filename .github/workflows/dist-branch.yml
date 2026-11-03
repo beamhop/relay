@@ -1,0 +1,39 @@
+name: dist-branch
+
+# Publishes the Node build (cli.js + admin UI) to the `dist` branch, so
+# `npx github:beamhop/relay#dist` runs the latest main without an npm release.
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/**", "bun.lock", "package.json", ".github/workflows/dist-branch.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dist-branch
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run build:ui && bun run build:node
+      - name: smoke test
+        run: node packages/server/dist/node/cli.js --version
+      - name: push to dist
+        working-directory: packages/server/dist/node
+        run: |
+          git init -q -b dist
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "dist: build of ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" dist

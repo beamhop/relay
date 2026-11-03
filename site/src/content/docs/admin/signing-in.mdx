@@ -1,0 +1,76 @@
+---
+title: Signing in
+description: Sign in to the admin app with a browser extension, a remote signer, your private key, a password with an authenticator code, or a passkey.
+sidebar:
+  order: 2
+---
+
+import { Image } from 'astro:assets';
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import login from '../../../assets/screens/login-desktop.png';
+import loginPhone from '../../../assets/screens/login-phone.png';
+
+Open `/admin/` on your relay. If you aren't signed in yet, you land on the sign-in screen. Pick whichever way suits you; they all end in the same place.
+
+<Image src={login} alt="The sign-in screen: a 'Sign in with extension' button, then tabs for Signer, Key, Password and Passkey." />
+
+Only people with an admin role (owner, admin, moderator or viewer) can get in. Anyone else is turned away with "not an admin", even with a valid key. To give someone access, see [Admins and roles](/relay/admin/roles/).
+
+## The ways to sign in
+
+<Tabs>
+<TabItem label="Extension">
+
+The big **Sign in with extension** button uses a NIP-07 browser extension that holds your Nostr key. Click it and approve the request in the extension. Your key never leaves the extension.
+
+If the page says *No NIP-07 extension detected*, the browser doesn't have one; use one of the tabs below instead.
+
+</TabItem>
+<TabItem label="Signer">
+
+The **Signer** tab works with a remote signer (NIP-46), such as a signer app on your phone. You have two options:
+
+- **Paste a `bunker://…` URL** (or a `name@domain` address that points to one) from your signer and click **Connect**.
+- **Use `nostrconnect://` instead**: the app shows a connection link. Paste it into your signer, or tap **Open signer app** on the same device, then approve the request there. The screen waits for your signer until you do, or until you click **Cancel**.
+
+If your signer wants you to confirm on a web page first, a link to that authorization page appears.
+
+</TabItem>
+<TabItem label="Key">
+
+The **Key** tab takes your private key (`nsec1…` or 64-character hex). The browser signs the login itself; the key is not sent to the relay, not saved, and cleared from memory after signing in. The field is masked and tells password managers not to store it.
+
+Use this when nothing else is at hand. An extension or remote signer is safer, because the key never has to be typed into a web page.
+
+</TabItem>
+<TabItem label="Password">
+
+The **Password** tab is for signing in without any Nostr signer. Enter your npub, hex pubkey or your relay [NIP-05 name](/relay/admin/users/#details), and your password.
+
+If you turned on two-factor authentication, an **Authenticator code** field appears after the first try: enter the 6-digit code from your authenticator app and sign in again.
+
+There is no password until you set one. Set it on your [Account](/relay/admin/account/#password) page after signing in another way, or ask the server operator to run `beamhop admin password npub1…`.
+
+</TabItem>
+<TabItem label="Passkey">
+
+The **Passkey** tab signs you in with Face ID, Touch ID, Windows Hello or a security key, once you have [added a passkey](/relay/admin/account/#passkeys). Leave **Account** empty to let the browser offer your saved passkeys, or type your npub or name to narrow it down. Then click **Sign in with passkey**.
+
+If the browser can't do passkeys, the tab says so.
+
+</TabItem>
+</Tabs>
+
+<Image src={loginPhone} alt="The sign-in screen on a phone." width={390} />
+
+## After you sign in
+
+You land on the page you were trying to open, or the dashboard. Your session lasts a week from the last time you used it, and at most 30 days; after that, sign in again. You can see and end sessions on the [Account](/relay/admin/account/#sessions) page, and **Sign out** is in the menu under your name.
+
+<Aside title="Locked out?">
+After too many wrong attempts the sign-in screen answers *too many login attempts, try again later*; wait a little and try again. If you lost your authenticator or a passkey, the server operator can run `beamhop admin password npub1… --reset-2fa` to set a new password and remove TOTP and passkeys for that admin.
+</Aside>
+
+<Aside type="caution" title="Passkeys and the public URL">
+Passkeys are tied to the host name in your relay's public URL (`BEAMHOP_PUBLIC_URL`) and need a secure page (`https://`, or `localhost` while testing). Signing in through a different address, such as a LAN IP, won't offer them. Set the public URL to the address people really use; see the [configuration reference](/relay/config/reference/#server).
+</Aside>

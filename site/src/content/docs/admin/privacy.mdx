@@ -1,0 +1,30 @@
+---
+title: Privacy
+description: What the admin app loads from other servers, why it waits for your go-ahead, and how to change that per browser.
+sidebar:
+  order: 19
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Nostr profiles and posts often point at pictures and videos hosted elsewhere. Every time your browser fetches one, that server learns your IP address, your browser and when you looked, and the person who posted it chose the server. As an admin you look at a lot of other people's content, sometimes hostile content, so beamhop is careful about this by default.
+
+## What loads on its own
+
+- **Media on your own relay** (its Blossom server) always loads: avatars, banners and files people uploaded to you.
+- **Media hosted elsewhere** doesn't. Profiles show a generated avatar instead, and images or videos in posts show a placeholder you can click to load that one item.
+- **Reported media never loads on its own**, even from your relay, and shows blurred until you choose to look; see [Reports](/relay/admin/reports/).
+- **Map tiles** for the dashboard's world map come from `demotiles.maplibre.org`, so the map waits for a click; see [Dashboard](/relay/admin/dashboard/#where-people-connect-from).
+
+## Change it
+
+On the [Account](/relay/admin/account/) page, the **Privacy** card has two switches:
+
+- **Load remote images and video**: load profile pictures, banners and post media from other servers automatically.
+- **Load world map tiles from demotiles.maplibre.org**: draw the dashboard map (it needs a GeoIP database on the server).
+
+Both start off and are stored in this browser only. Turning them on here doesn't change anything for other admins or your other devices.
+
+<Aside>
+The admin app itself loads no analytics or third-party scripts; its admin data (user lists, reports, settings) goes between your browser and your relay. Two things reach further on purpose: signing in with a [remote signer](/relay/admin/signing-in/) talks to your signer through Nostr relays, and plugin pages run code from the plugins you installed.
+</Aside>

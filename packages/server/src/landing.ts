@@ -101,7 +101,7 @@ ${policy ? `<dt>Posting policy</dt><dd><a href="${esc(policy)}" rel="noopener no
 ${nips.length ? `<h2>Supported NIPs</h2><div class="nips">${nipLinks}</div>` : ""}
 </div>
 </div>
-<footer>Powered by <a href="https://github.com/beamhop/beamhop">beamhop</a> v${esc(opts.version)}</footer>
+<footer>Powered by <a href="https://github.com/beamhop/relay">beamhop</a> v${esc(opts.version)}</footer>
 </main>
 <script>${COPY_SCRIPT}</script>
 </body>

@@ -121,7 +121,7 @@ The bundle's default export receives the `AdminUiPluginApi`:
 
 ```ts
 export default function register(api) {
-  api.registerPage({ path: "hello", title: "Hello", icon: "hand", component: HelloPage });
+  api.registerPage({ path: "hello", title: "Hello", component: HelloPage });
   api.registerWidget({ id: "hello-stats", title: "Hello", size: "sm", component: HelloWidget });
   api.registerUserAction({ id: "greet", label: "Say hello", run: (pubkey) => api.fetch("/greet", { method: "POST", body: pubkey }) });
 }

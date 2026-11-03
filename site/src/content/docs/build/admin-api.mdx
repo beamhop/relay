@@ -1,0 +1,214 @@
+---
+title: Admin REST API
+description: Script everything the beamhop admin panel can do — authentication with NIP-98 or cookie sessions, the X-Requested-With requirement, roles and permissions, and the endpoint list.
+sidebar:
+  order: 13
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+The admin panel is a client of a plain JSON API at `/admin/api`. Anything you can do in the panel, you can do from a
+script: moderate users, query and delete events, manage media, change settings, toggle plugins.
+
+- Base path: `/admin/api`
+- JSON in, JSON out. Errors are `{ "error": "…", "code": "…" }` with a 4xx or 5xx status.
+- Lists answer `{ items }`; paginated ones also carry `total`.
+- Request bodies are capped at 1 MiB (the event import route streams up to 256 MiB).
+- Every response is `Cache-Control: no-store`.
+
+The full contract, with every request and response type, lives in
+[`packages/sdk/src/admin-contract.ts`](https://github.com/beamhop/relay/blob/main/packages/sdk/src/admin-contract.ts).
+
+The admin API is on by default (`admin.enabled`). Turning it off also removes the panel and NIP-86.
+
+## Authentication
+
+There are two ways in. Both resolve to an admin with a role; the role decides what you may call.
+
+<Tabs>
+<TabItem label="NIP-98 (scripts)">
+
+Sign a kind **27235** event per request and send it base64-encoded:
+
+```
+Authorization: Nostr <base64 of the signed event>
+```
+
+The event must have:
+
+- a `u` tag with the **absolute URL** of the request, built from the relay's public URL:
+  `https://relay.example.com/admin/api/users?status=banned` (query string included);
+- a `method` tag matching the HTTP method;
+- a `created_at` within 60 seconds of the server's clock.
+
+Optionally add a `payload` tag with the hex SHA-256 of the body; if present, it must match.
+
+Each authorization event is accepted **once**. Sign a fresh one for every request.
+
+NIP-98 requests need nothing else: no cookie, no CSRF header.
+
+</TabItem>
+<TabItem label="Cookie session">
+
+Log in once and keep the cookie:
+
+```sh
+curl -c cookies.txt -X POST \
+  -H 'X-Requested-With: beamhop' -H 'Content-Type: application/json' \
+  -d '{"login":"npub1…","password":"…"}' \
+  https://relay.example.com/admin/api/auth/password
+```
+
+The server sets `bh_session` (HttpOnly, `SameSite=Strict`, path `/admin`). Sessions last 7 days, renewed while you
+use them, up to 30 days in total.
+
+Login routes:
+
+| Route | Body |
+| --- | --- |
+| `POST /auth/password` | `{ login, password, totp? }` — `login` is an npub, hex pubkey or NIP-05 name |
+| `GET /auth/challenge` → `POST /auth/nostr` | `{ event }`: a kind 27235 event with the `u` from the challenge response, `method: POST` and a `challenge` tag |
+| `POST /auth/passkey/login/options` → `/verify` | WebAuthn |
+
+Password login has to be enabled per admin first (`beamhop admin password <npub>` or the panel's account page).
+
+</TabItem>
+</Tabs>
+
+### The `X-Requested-With: beamhop` rule
+
+Every `POST`, `PUT`, `PATCH` or `DELETE` that is **not** NIP-98 authenticated — logins included — must:
+
+1. send `X-Requested-With: beamhop` (or an `Origin` equal to the relay's public origin), and
+2. send its body as JSON (`Content-Type: application/json`), or no body at all.
+
+Otherwise you get `403` (`code: "csrf"`) or `415`. This stops other websites from submitting forms to the API with an
+admin's cookie. The event import route takes NDJSON instead, and [plugin admin routes](/relay/build/plugin-routes/#admin-routes)
+accept any body type, but both still need the header.
+
+<Aside>
+Common answers: `401` with no valid session or NIP-98 header, `403` with `code: "not_admin"` for a valid signer
+without a role, and `403` with `code: "missing_permission"` when the role lacks the permission.
+</Aside>
+
+### Your sessions
+
+| Route | |
+| --- | --- |
+| `GET /auth/me` | Your pubkey, role, permissions and login factors. |
+| `GET /auth/sessions` | Your panel sessions, newest first. |
+| `DELETE /auth/sessions/:id` | End one. |
+| `POST /auth/sessions/end-others` | End all but the current one (all of them when called with NIP-98). |
+| `POST /auth/logout` | End the current session. |
+
+## Roles and permissions
+
+| Permission | owner | admin | moderator | viewer |
+| --- | :-: | :-: | :-: | :-: |
+| `dashboard.view`, `users.view`, `content.view`, `reports.view`, `media.view`, `groups.view`, `settings.view`, `plugins.view` | ✓ | ✓ | ✓ | ✓ |
+| `users.edit`, `users.ban`, `invites.manage`, `content.delete`, `reports.resolve`, `media.moderate`, `plugins.use` | ✓ | ✓ | ✓ | |
+| `connections.manage`, `users.delete`, `ip.manage`, `content.import`, `content.export`, `groups.manage`, `settings.edit`, `plugins.manage`, `audit.view` | ✓ | ✓ | | |
+| `admins.manage` | ✓ | | | |
+
+Moderation is ranked: below owner, nobody can ban, mute, delete or hide the content of a peer or superior. Config
+owners (`admin.owners` / `BEAMHOP_OWNERS`) always resolve to `owner`; a banned or deny-listed admin has no access.
+
+## Endpoints
+
+Paths are relative to `/admin/api`.
+
+### System and metrics
+
+| Method & path | Permission | |
+| --- | --- | --- |
+| `GET /system` | `dashboard.view` | Version, runtime, database dialect, advertised NIPs, relay pubkey, public URL, feature flags. |
+| `GET /dashboard/snapshot` | `dashboard.view` | Live numbers: connections, events/s, latency, memory, … |
+| `GET /metrics/series?name&from&to&step` | `dashboard.view` | A time series. |
+| `GET /metrics/kinds`, `/metrics/top-pubkeys`, `/metrics/rejections`, `/metrics/geo` | `dashboard.view` | Breakdowns over `from`/`to` (unix seconds; default the last 24 h). |
+| `GET /stream?events=1&kinds=1,7` | `dashboard.view` | Server-Sent Events: `snapshot` every 2 s, `alert`, `report`, and with `events=1` live `event`s. |
+
+### Users
+
+| Method & path | Permission | |
+| --- | --- | --- |
+| `GET /users?search&status&role&tag&allowed&sort&limit&offset` | `users.view` | Paginated users. |
+| `POST /users` | `users.edit` | Add a user manually, e.g. to the allow list. |
+| `GET /users/:pubkey` | `users.view` | Details and stats (hex or npub). |
+| `PATCH /users/:pubkey` | `users.edit` | Notes, tags, rate-limit override, Blossom quota, NIP-05 name, allow/deny flags. |
+| `POST /users/:pubkey/ban` · `/unban` · `/mute` · `/unmute` | `users.ban` | `ban` takes `{ reason?, deleteEvents?, deleteMedia?, disconnect? }`. |
+| `DELETE /users/:pubkey` | `users.delete` | Removes the record, events and media (not a ban). |
+| `PUT /users/:pubkey/role` | `admins.manage` | `{ role }`, or `null` to revoke. |
+| `GET /users/:pubkey/events` | `users.view` + `content.view` | A user's events. |
+| `POST /users/bulk` | per action | `{ pubkeys, action, reason?, tag? }`. Stops after a 20 s budget and returns `remaining`. |
+| `GET /admins` | `users.view` | Users with a role. |
+
+### Content
+
+| Method & path | Permission | |
+| --- | --- | --- |
+| `POST /events/query` | `content.view` | `{ filters, limit? }` with NIP-01 filters. |
+| `GET /events/:id` · `DELETE /events/:id` | `content.view` · `content.delete` | |
+| `POST /events/delete` | `content.delete` | `{ ids?, filters?, reason? }`. |
+| `GET /events/export?filters=<json>` | `content.export` | NDJSON stream. |
+| `POST /events/import?bypassPolicies=true` | `content.import` | NDJSON body, one event per line. |
+| `GET /events/bans` · `DELETE /events/bans/:id` | `content.view` · `content.delete` | Event ids refused on write. |
+
+### Reports, media, groups
+
+| Method & path | Permission | |
+| --- | --- | --- |
+| `GET /reports?status&type&target&limit&offset` · `GET /reports/:id` | `reports.view` | NIP-56 reports queue. |
+| `POST /reports/:id/resolve` · `POST /reports/bulk-resolve` | `reports.resolve` | `action`: `dismiss`, `delete-event`, `ban-user`, `delete-and-ban`, `delete-media`. |
+| `GET /media?pubkey&status&type&limit&offset` · `/media/stats` · `/media/:sha256` · `/media/:sha256/raw` | `media.view` | |
+| `POST /media/:sha256/status` · `DELETE /media/:sha256?block=true` · `POST /media/bulk` | `media.moderate` | |
+| `GET /media/blocklist` · `DELETE /media/blocklist/:sha256` | `media.view` · `media.moderate` | |
+| `GET /groups` · `GET /groups/:id` · `DELETE /groups/:id` | `groups.view` · `groups.manage` | NIP-29 groups. |
+
+### Access control, settings, plugins, audit
+
+| Method & path | Permission | |
+| --- | --- | --- |
+| `GET /connections` · `DELETE /connections/:id` · `POST /connections/disconnect` | `connections.manage` | |
+| `GET` / `POST /invites` · `DELETE /invites/:code` | `invites.manage` | |
+| `GET` / `POST /ip-rules` · `DELETE /ip-rules/:cidr` | `ip.manage` | Allow rules wider than IPv4 /16 or IPv6 /48 need `confirmBroad: true`. |
+| `GET /settings` · `PATCH /settings` | `settings.view` · `settings.edit` | Runtime settings; `PATCH` takes a deep partial. |
+| `GET /plugins` | `plugins.view` | |
+| `POST /plugins/:name/enable` · `/disable` | `plugins.manage` | See [Enabling and disabling](/relay/build/plugin-lifecycle/). |
+| `GET /plugins/:name/settings` · `PATCH` | `plugins.view` · `plugins.manage` | See [Settings](/relay/build/plugin-settings/). |
+| `ANY /plugins/x/:name/*` | `plugins.use` | [Plugin admin routes](/relay/build/plugin-routes/#admin-routes). |
+| `GET /audit?actor&action&target&before&limit` | `audit.view` | Audit log; `before` is an entry id cursor. |
+
+## Example: ban a pubkey with NIP-98
+
+Using [nostr-tools](https://github.com/nbd-wtf/nostr-tools):
+
+```ts
+import { finalizeEvent } from "nostr-tools/pure";
+import { createHash } from "node:crypto";
+
+const base = "https://relay.example.com";
+const url = `${base}/admin/api/users/${pubkey}/ban`;
+const body = JSON.stringify({ reason: "spam", disconnect: true });
+
+const auth = finalizeEvent({
+  kind: 27235,
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [
+    ["u", url],
+    ["method", "POST"],
+    ["payload", createHash("sha256").update(body).digest("hex")],
+  ],
+  content: "",
+}, secretKey);
+
+const res = await fetch(url, {
+  method: "POST",
+  headers: {
+    Authorization: `Nostr ${Buffer.from(JSON.stringify(auth)).toString("base64")}`,
+    "Content-Type": "application/json",
+  },
+  body,
+});
+```
+
+For a smaller, standardised set of moderation calls that existing tools already speak, see [NIP-86](/relay/build/nip86/).

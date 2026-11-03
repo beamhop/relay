@@ -1,0 +1,64 @@
+---
+title: Choosing a method
+description: The ways to run beamhop, what each one is good for, and what every deployment has in common.
+sidebar:
+  order: 1
+---
+
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+beamhop is one process that serves everything on one port (3334 by default): the Nostr relay, the Blossom media server, the admin app and plugin routes. So whichever method you pick, you end up with the same thing: one program, one port, and a place to keep its data.
+
+## The options
+
+<CardGrid>
+  <Card title="Docker & Compose" icon="seti:docker">
+    The easiest path to a long-running server. Compose also has optional add-ons for PostgreSQL, S3-compatible storage (MinIO) and a monitoring stack.
+    [Docker guide →](/relay/deploy/docker/)
+  </Card>
+  <Card title="From source with Bun" icon="bun">
+    Clone the repo and run it with Bun. Good for development, for hacking on plugins, or for running under systemd without containers.
+    [Bun guide →](/relay/deploy/bun/)
+  </Card>
+  <Card title="npx & Node.js" icon="node">
+    Run the latest build straight from GitHub with `npx github:beamhop/relay#dist start`. Needs only Node 22 or newer.
+    [Node guide →](/relay/deploy/node/)
+  </Card>
+  <Card title="Single binary" icon="rocket">
+    Compile one self-contained executable with the admin app inside. Copy it to a server and run it, no runtime needed.
+    [Binary guide →](/relay/deploy/binary/)
+  </Card>
+</CardGrid>
+
+<Aside type="note" title="What's prebuilt">
+The Node bundle is prebuilt on every push to `main` and runs with `npx` from GitHub. beamhop is not published to npm, and there are no published Docker images or release binaries yet: those methods start from a `git clone` of [the repository](https://github.com/beamhop/relay) and build locally, which only takes a few minutes.
+</Aside>
+
+## Which one should I pick?
+
+- **Just want to try it?** Run it with [npx](/relay/deploy/node/#run-it-with-npx). One command, nothing to build.
+- **Not sure?** Use [Docker Compose](/relay/deploy/docker/). It handles restarts, health checks and graceful shutdown for you.
+- **You want the smallest footprint** on a plain VPS: build the [single binary](/relay/deploy/binary/) and run it under systemd.
+- **You're developing** a plugin or the admin app: run [from source with Bun](/relay/deploy/bun/).
+
+All methods run the same code and read the same configuration, so you can switch later. Your data moves with you: copy the database and blob folder, or use [export and import](/relay/deploy/backups-upgrades/#move-events-between-relays).
+
+## What every deployment needs
+
+However you run it, a public relay needs the same few things. Each has its own page:
+
+1. **A public address.** Set `BEAMHOP_PUBLIC_URL` to the `https://` address people will use. Logins and media links depend on it.
+2. **An owner**, so someone can sign in to the admin app (`BEAMHOP_OWNERS=npub1…`).
+3. **A [reverse proxy](/relay/deploy/reverse-proxy/)** in front for TLS and WebSockets.
+4. **Persistent storage**: SQLite on a local disk (the default) or [PostgreSQL](/relay/deploy/postgres/), plus a folder or [S3-compatible bucket](/relay/deploy/s3/) for media.
+5. **[Backups](/relay/deploy/backups-upgrades/)** and **[monitoring](/relay/deploy/monitoring/)**.
+
+The [production checklist](/relay/deploy/production-checklist/) puts all of this on one page.
+
+## How configuration works
+
+You can configure beamhop with a `beamhop.config.json` file, `BEAMHOP_*` environment variables or command-line flags. Later sources win: defaults, then the file, then environment variables, then flags. These pages mostly use environment variables because they work the same everywhere.
+
+Only boot-time things (ports, database, storage, proxy trust) are set this way. Most relay behaviour, like limits, relay info, access rules and upload sizes, is changed live in the admin app and stored in the database.
+
+<LinkCard title="Configuration reference" href="/relay/config/reference/" description="Every option, its environment variable and its default." />
