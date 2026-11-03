@@ -190,7 +190,16 @@ const OTHER_ENV = new Set([
   "BEAMHOP_UI_DIST", // build scripts
   "BEAMHOP_BINARY_OUT",
   "BEAMHOP_BINARY_TARGET",
-  "BEAMHOP_TEST_PG", // test suites
+  "BEAMHOP_TEST_PG", // test suites (e2e/harness/backend.ts)
+  "BEAMHOP_E2E_DB",
+  "BEAMHOP_E2E_BLOBS",
+  "BEAMHOP_E2E_PG_URL",
+  "BEAMHOP_E2E_PG",
+  "BEAMHOP_E2E_S3_ENDPOINT",
+  "BEAMHOP_E2E_S3_REGION",
+  "BEAMHOP_E2E_S3_BUCKET",
+  "BEAMHOP_E2E_S3_ACCESS_KEY_ID",
+  "BEAMHOP_E2E_S3_SECRET_ACCESS_KEY",
 ]);
 const KNOWN_ENV = new Set([...ENV.map(([name]) => name), ...OTHER_ENV]);
 

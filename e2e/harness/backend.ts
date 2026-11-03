@@ -1,7 +1,8 @@
 /**
  * Storage backend of the relays the e2e suites boot. SQLite + filesystem blobs unless the environment says otherwise:
  *
- *   BEAMHOP_E2E_DB=postgres     BEAMHOP_E2E_PG_URL=postgres://user:pass@127.0.0.1:5432/db   (falls back to BEAMHOP_TEST_PG)
+ *   BEAMHOP_E2E_DB=postgres     BEAMHOP_E2E_PG_URL=postgres://user:pass@127.0.0.1:5432/db
+ *                               (BEAMHOP_E2E_PG or BEAMHOP_TEST_PG also work; BEAMHOP_E2E_PG alone selects postgres)
  *   BEAMHOP_E2E_BLOBS=s3        BEAMHOP_E2E_S3_ENDPOINT=http://127.0.0.1:9000
  *                               BEAMHOP_E2E_S3_ACCESS_KEY_ID=…  BEAMHOP_E2E_S3_SECRET_ACCESS_KEY=…
  *                               [BEAMHOP_E2E_S3_BUCKET=prefix (default beamhop-e2e)]  [BEAMHOP_E2E_S3_REGION=us-east-1]
@@ -23,7 +24,8 @@ function pick<T extends string>(name: string, allowed: readonly T[], fallback: T
   return v;
 }
 
-export const E2E_DB: E2eDb = pick("BEAMHOP_E2E_DB", ["sqlite", "postgres"], "sqlite");
+export const E2E_DB: E2eDb = pick("BEAMHOP_E2E_DB", ["sqlite", "postgres"], process.env.BEAMHOP_E2E_PG ? "postgres" : "sqlite");
+const pgUrl = () => required("BEAMHOP_E2E_PG_URL", process.env.BEAMHOP_E2E_PG || process.env.BEAMHOP_TEST_PG);
 export const E2E_BLOBS: E2eBlobs = pick("BEAMHOP_E2E_BLOBS", ["fs", "s3"], "fs");
 
 function required(name: string, fallback?: string): string {
@@ -43,7 +45,7 @@ let pgAdmin: Pg | undefined;
 async function pg(): Promise<Pg> {
   if (!pgAdmin) {
     const { default: postgres } = await import("../../packages/storage/node_modules/postgres");
-    pgAdmin = postgres(required("BEAMHOP_E2E_PG_URL", process.env.BEAMHOP_TEST_PG), { max: 1, idle_timeout: 2, onnotice: () => {} }) as unknown as Pg;
+    pgAdmin = postgres(pgUrl(), { max: 1, idle_timeout: 2, onnotice: () => {} }) as unknown as Pg;
   }
   return pgAdmin;
 }
@@ -72,7 +74,7 @@ async function provision(): Promise<Provisioned> {
     const admin = await pg();
     const schema = `e2e_${id}`;
     await admin.unsafe(`CREATE SCHEMA ${schema}`);
-    const url = new URL(required("BEAMHOP_E2E_PG_URL", process.env.BEAMHOP_TEST_PG));
+    const url = new URL(pgUrl());
     url.searchParams.set("search_path", schema);
     overrides.database = { driver: "postgres", postgresUrl: url.toString() };
     releases.push(async () => void (await (await pg()).unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)));
