@@ -69,6 +69,8 @@ export interface RelayEngine {
   readonly pubkey: string;
   /** Call on each WS upgrade. Rejects (closes) if IP blocked / too many connections. */
   handleConnection(socket: RelaySocket, meta: ConnectionMeta): ConnectionHandle;
+  /** The IP rules' verdict for a client address (the server refuses HTTP from blocked ones too). Optional for test doubles. */
+  checkIp?(ip: string): { blocked: boolean; reason?: string };
   /**
    * Relay HTTP routes, mounted at "/" by the server BEFORE the admin UI/blossom catch-alls:
    * - GET / with Accept: application/nostr+json → NIP-11

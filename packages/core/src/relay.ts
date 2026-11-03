@@ -366,6 +366,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   const engine: RelayEngine = {
     pubkey: key.pubkey,
     handleConnection,
+    checkIp: (ip) => ctx.ipRules.check(ip),
     http: createHttp(ctx),
     async publish(event, source) {
       const v = validateEventShape(event);

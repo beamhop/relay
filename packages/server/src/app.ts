@@ -396,6 +396,21 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
     await next();
   });
 
+  // IP block rules cover the public HTTP surfaces (Blossom, invite redemption, plugin routes, NIP-11/05) like they
+  // cover websockets. The admin panel/API and NIP-86 stay reachable (they need an admin's signature or session), so a
+  // too-broad block can still be lifted; so do the health probes.
+  if (d.relay.checkIp) {
+    const checkIp = d.relay.checkIp.bind(d.relay);
+    app.use("*", async (c, next) => {
+      const ip = c.env?.ip;
+      const p = c.req.path;
+      if (!ip || p === "/admin" || p.startsWith("/admin/") || p === "/health" || p.startsWith("/health/") || p === "/metrics") return next();
+      if (p === "/" && c.req.method === "POST" && isNip86(c.req.raw)) return next();
+      if (!checkIp(ip).blocked) return next();
+      return c.json({ error: "blocked: your address is not allowed to use this relay" }, 403, { "cache-control": "no-store" });
+    });
+  }
+
   // 2. NIP-86 relay management API
   app.post("/", async (c, next) => {
     if (!isNip86(c.req.raw)) return next();
