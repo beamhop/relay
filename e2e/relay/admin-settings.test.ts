@@ -55,6 +55,27 @@ describe("settings", () => {
     expect((await api(relay.http, owner(), "GET", "/settings")).body.settings.limits.maxSubscriptions).toBe(30);
   });
 
+  test("regression: out-of-range numbers, kinds and relay URLs are refused", async () => {
+    const bad: [unknown, string][] = [
+      [{ blossom: { maxUploadBytes: -1 } }, "blossom.maxUploadBytes"],
+      [{ blossom: { maxUploadBytes: 0 } }, "blossom.maxUploadBytes"],
+      [{ blossom: { defaultQuotaBytes: -5 } }, "blossom.defaultQuotaBytes"],
+      [{ moderation: { autoBanReportThreshold: -1 } }, "moderation.autoBanReportThreshold"],
+      [{ moderation: { autoBanReportThreshold: 2.5 } }, "moderation.autoBanReportThreshold"],
+      [{ moderation: { kindBlocklist: [70000] } }, "moderation.kindBlocklist"],
+      [{ retention: { intervalMinutes: 0 } }, "retention.intervalMinutes"],
+      [{ retention: { rules: [{ id: "n", maxPerPubkey: -3 }] } }, "retention.rules"],
+      [{ nip05: { relays: ["relay.example.com"] } }, "nip05.relays"],
+    ];
+    const before = (await api(relay.http, owner(), "GET", "/settings")).body.settings;
+    for (const [body, field] of bad) {
+      const r = await patch(body);
+      expect(`${r.status} ${r.body.error}`).toContain("400");
+      expect(r.body.error).toContain(field);
+    }
+    expect((await api(relay.http, owner(), "GET", "/settings")).body.settings).toEqual(before);
+  });
+
   test("regression: pubkey settings are stored as hex (npub accepted), anything else refused", async () => {
     const { pubkey, npub } = relay.owner;
     const r = await patch({ info: { pubkey: npub }, retention: { rules: [{ id: "x", enabled: false, maxAgeDays: 30, exemptPubkeys: [npub, pubkey.toUpperCase()] }] } });
