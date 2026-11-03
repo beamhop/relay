@@ -158,6 +158,10 @@ export function createAdminOps(core: BlossomCore): Pick<BlossomServiceImpl, "set
         const row = await core.repo.tx(async (r) => {
           const row = await r.get(sha256);
           if (opts?.block) await r.block(sha256, "deleted by admin", now(), actor);
+          // a plain delete must not launder a moderation decision: like an owner's delete, a blocked blob stays
+          // blocklisted and a hidden one stays held, so re-uploading the bytes doesn't bring them back approved
+          else if (row?.status === "blocked") await r.block(sha256, "blocked by a moderator, then deleted", now(), row.moderatedBy ?? actor);
+          else if (row && isHidden(row)) await r.setHeld(sha256, row.status, row.moderatedBy, now());
           if (row) {
             // the owners' existing upload tokens mustn't put it back (a token signed within the clock-skew allowance
             // before now still works, so an owner re-signing right away isn't refused over a second of drift)
