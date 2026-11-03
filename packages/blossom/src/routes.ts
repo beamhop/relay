@@ -410,14 +410,21 @@ export function createRoutes(core: BlossomCore): Hono {
       // a bad token still gets the public listing
       const a = optionalAuth(c, "list");
       const includeUnapproved = !!a && (a.pubkey === pubkey || (await core.admission.isStaff(a.pubkey)));
-      // clamped: digit strings past 2^53 overflow postgres bigint
-      const int = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Math.min(Number(v), Number.MAX_SAFE_INTEGER) : undefined);
-      const cursor = c.req.query("cursor")?.toLowerCase();
-      const limit = int(c.req.query("limit"));
+      // Malformed parameters are a 400 (BUD-12), not ignored: a bad cursor quietly answered with the first page
+      // would send a paginating client round in circles. Clamped: digit strings past 2^53 overflow postgres bigint.
+      const int = (name: string) => {
+        const v = c.req.query(name);
+        if (v === undefined || v === "") return undefined;
+        if (!/^\d+$/.test(v)) throw new BlossomError(400, `invalid ${name}`);
+        return Math.min(Number(v), Number.MAX_SAFE_INTEGER);
+      };
+      const cursor = c.req.query("cursor")?.toLowerCase() || undefined;
+      if (cursor !== undefined && !SHA256_RE.test(cursor)) throw new BlossomError(400, "invalid cursor");
+      const limit = int("limit");
       const rows = await core.repo.listByOwner(pubkey, {
-        since: int(c.req.query("since")),
-        until: int(c.req.query("until")),
-        cursor: cursor && SHA256_RE.test(cursor) ? cursor : undefined,
+        since: int("since"),
+        until: int("until"),
+        cursor,
         limit: limit !== undefined ? Math.min(Math.max(limit, 1), 10_000) : 10_000,
         includeUnapproved,
       });
