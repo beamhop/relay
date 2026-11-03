@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import type { BusEvents, NostrEvent } from "@beamhop/sdk";
 import { Negentropy, NegentropyStorage } from "../src";
 import { keypair, now, setup, sign, tick } from "./fakes";
+import { SLOW_CONSUMER_MS, SOFT_BUFFER_LIMIT } from "../src/protocol/connection";
 
 describe("REQ", () => {
   test("stored results, EOSE, live delivery, CLOSE", async () => {
@@ -126,6 +127,37 @@ describe("REQ", () => {
     await w.publish(sign(keypair()));
     await tick();
     expect(r.socket.closed).not.toBeNull();
+  });
+
+  test("backpressure: a client that stays congested (live events dropped) is dropped after SLOW_CONSUMER_MS", async () => {
+    const { connect } = await setup();
+    const w = connect();
+    const r = connect();
+    await r.req("s", {});
+    const t0 = Date.now();
+    try {
+      // stopped reading: the buffer sits above the soft limit, far below the hard one
+      r.socket.buffered = SOFT_BUFFER_LIMIT + 1;
+      await w.publish(sign(keypair()));
+      setSystemTime(new Date(t0 + SLOW_CONSUMER_MS - 1000));
+      await w.publish(sign(keypair()));
+      await tick();
+      expect(r.socket.closed).toBeNull();
+      // drained for a moment: the clock restarts
+      r.socket.buffered = 0;
+      await w.publish(sign(keypair()));
+      r.socket.buffered = SOFT_BUFFER_LIMIT + 1;
+      setSystemTime(new Date(t0 + 2 * SLOW_CONSUMER_MS - 2000));
+      await w.publish(sign(keypair()));
+      await tick();
+      expect(r.socket.closed).toBeNull();
+      setSystemTime(new Date(t0 + 3 * SLOW_CONSUMER_MS));
+      await w.publish(sign(keypair()));
+      await tick();
+      expect(r.socket.closed?.code).toBe(1008);
+    } finally {
+      setSystemTime();
+    }
   });
 });
 
