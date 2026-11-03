@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { generateSecretKey, getEventHash, getPublicKey } from "nostr-tools";
 import { RelayClient, now, sha256, sign } from "../harness/client";
+import { backendEnv, releaseBackend } from "../harness/backend";
 import { freePort } from "../harness/relay";
 import { api, bauth, upload, user } from "./admin-helpers";
 import { nip86 } from "./policy-helpers";
@@ -278,6 +279,7 @@ describe.skipIf(!HAS_NODE)("CLI under real Node", () => {
   let cli: string;
   let proc: ReturnType<typeof Bun.spawn> | undefined;
   let target: Target;
+  let dir: string | undefined;
   let output = "";
 
   async function startNode(): Promise<{ proc: ReturnType<typeof Bun.spawn>; target: Target; dir: string }> {
@@ -299,6 +301,7 @@ describe.skipIf(!HAS_NODE)("CLI under real Node", () => {
         BEAMHOP_PLUGINS_DIR: join(dir, "plugins"),
         BEAMHOP_OWNERS: pubkey,
         BEAMHOP_LOG_LEVEL: "warn",
+        ...(await backendEnv(dir)),
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -326,13 +329,14 @@ describe.skipIf(!HAS_NODE)("CLI under real Node", () => {
   beforeAll(async () => {
     root = mkdtempSync(join(tmpdir(), "beamhop-e2e-node-"));
     cli = await buildNodeCli(root);
-    ({ proc, target } = await startNode());
+    ({ proc, target, dir } = await startNode());
   }, 60_000);
   afterAll(async () => {
     if (proc && proc.exitCode === null) {
       proc.kill("SIGKILL");
       await proc.exited;
     }
+    if (dir) await releaseBackend(dir);
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
@@ -375,6 +379,7 @@ describe.skipIf(!HAS_NODE)("CLI under real Node", () => {
     started.proc.kill("SIGTERM");
     const code = await Promise.race([started.proc.exited, Bun.sleep(8000).then(() => "timeout")]);
     await waitClosed(c);
+    await releaseBackend(started.dir);
     return { code, c };
   }
 

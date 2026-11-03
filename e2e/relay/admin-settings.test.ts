@@ -139,7 +139,7 @@ describe("persistence across a restart (same data dir)", () => {
     } finally {
       await first.stop();
       await second?.stop();
-      removeDir(dir);
+      await removeDir(dir);
     }
   }, 30000);
 });

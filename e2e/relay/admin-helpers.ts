@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from "nostr-tools";
 import { bytesToHex } from "nostr-tools/utils";
 import { createBeamhop, loadConfig, serve } from "@beamhop/server";
+import { backendOverrides, releaseBackend } from "../harness/backend";
 import { freePort } from "../harness/relay";
 import { now, sha256, type ApiResult } from "../harness/client";
 
@@ -161,7 +162,7 @@ export async function bootRelay(opts: { dir?: string; ownerSk?: Uint8Array; over
     admin: { owners: [pubkey] },
     plugins: { dir: join(dir, "plugins") },
   };
-  const { config } = loadConfig({ cwd: dir, env: {}, overrides: merge(base, opts.overrides ?? {}) as never });
+  const { config } = loadConfig({ cwd: dir, env: {}, overrides: merge(merge(base, await backendOverrides(dir)), opts.overrides ?? {}) as never });
   const beamhop = await createBeamhop(config, { autoDiscoverNpm: false });
   await beamhop.start();
   const server = await serve(beamhop, { runtime: "bun", port, host: "127.0.0.1" });
@@ -181,7 +182,10 @@ export async function bootRelay(opts: { dir?: string; ownerSk?: Uint8Array; over
   };
 }
 
-export const removeDir = (dir: string) => rmSync(dir, { recursive: true, force: true });
+export const removeDir = async (dir: string) => {
+  rmSync(dir, { recursive: true, force: true });
+  await releaseBackend(dir);
+};
 export { bytesToHex };
 
 /** Minimal SSE reader over fetch: collects `{event, data}` frames. */

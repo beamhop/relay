@@ -54,18 +54,19 @@ describe("event rate limits", () => {
 
   test("per-address bucket: many authors from one address hit 4x eventsPerMinute; another address is unaffected", async () => {
     const ip = uniqueIp();
-    const c = await connectAs(relay, ip);
     // 5 authors x 50 events (each under its own per-author limit) = 250 > 4 x EPM; the address bucket refills at
-    // 4/s, so a few extra may pass while the burst is processed, but not all of them
+    // 4/s, so a few extra may pass while the burst is processed, but not all of them. One connection each: a
+    // single connection may only have 100 EVENTs awaiting OK, which a slower store (postgres) reaches first
     const users = Array.from({ length: 5 }, newUser);
-    const results = (await Promise.all(users.map((u) => burst(c, u.sk, 50)))).flat();
+    const conns = await Promise.all(users.map(() => connectAs(relay, ip)));
+    const results = (await Promise.all(users.map((u, i) => burst(conns[i]!, u.sk, 50)))).flat();
     const accepted = results.filter((r) => r.ok).length;
     expect(accepted).toBeGreaterThanOrEqual(4 * EPM);
     expect(accepted).toBeLessThan(250);
     expect(results.filter((r) => !r.ok).every((r) => r.message === "rate-limited: slow down, too many events")).toBe(true);
     const other = await connectAs(relay, uniqueIp());
     expect((await other.publish(note(newUser().sk))).ok).toBe(true);
-    c.close();
+    for (const c of conns) c.close();
     other.close();
   });
 
@@ -111,7 +112,9 @@ describe("event rate limits", () => {
   test("a per-user rateLimit override raises that user's limit", async () => {
     const u = newUser();
     await ownerApi(relay, "PATCH", `/users/${u.pubkey}`, { rateLimit: { eventsPerMinute: EPM * 2 } });
-    const c = await connectAs(relay, uniqueIp());
+    // authenticated, as a bridge with an override would be: an anonymous connection may only have 100 EVENTs
+    // awaiting OK, which a slower store (postgres) reaches during this burst
+    const c = await connectAuthed(relay, u.sk, uniqueIp());
     const res = await burst(c, u.sk, EPM * 2 + 5);
     expect(res.slice(0, EPM * 2).every((r) => r.ok)).toBe(true);
     expect(res.at(-1)!.message).toStartWith("rate-limited:");
