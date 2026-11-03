@@ -80,7 +80,7 @@ Enabling and disabling takes effect immediately, without a restart.
 | `ctx.hooks.onQuery(fn)` | Rewrites or rejects REQ/COUNT filters by returning `Filter[]` or `{reject}`. |
 | `ctx.hooks.onVisibility(fn)` | Hides individual events from readers by returning `false`. |
 | `ctx.hooks.onBlobUpload(fn)` | Accepts or rejects Blossom uploads. |
-| `ctx.http` | A Hono app with public routes, mounted at `/plugins/<name>/`. |
+| `ctx.http` | A Hono app with public routes, mounted at `/plugins/<name>/`. They share the admin panel's origin, so responses without their own `Content-Security-Policy` get `default-src 'none'; frame-ancestors 'none'; sandbox` (no script). A page that needs script must set a policy of its own, and must never render untrusted HTML. |
 | `ctx.adminHttp` | A Hono app mounted at `/admin/api/plugins/x/<name>/`. Requests need an admin session with the `plugins.use` permission. |
 | `ctx.jobs.every(name, ms, fn)` | A periodic job. Errors are logged and the job keeps running. |
 | `ctx.on(event, fn)` | Subscribes to bus events such as `event.accepted`, `event.rejected`, `connection.open`, `blob.uploaded` and `user.updated`. |

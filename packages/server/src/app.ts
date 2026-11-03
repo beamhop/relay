@@ -434,7 +434,7 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
   // 5. plugin public routes
   const pluginRoute = async (c: Context<{ Bindings: ServerEnv }>) => {
     const res = await d.plugins.handlePublic(c.req.param("name")!, c.req.raw, c.env);
-    return res ?? c.json({ error: "plugin not found" }, 404);
+    return res ? withPluginDefaults(res) : c.json({ error: "plugin not found" }, 404);
   };
   app.all("/plugins/:name", pluginRoute);
   app.all("/plugins/:name/*", pluginRoute);
@@ -512,4 +512,18 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
 
   app.notFound((c) => c.text("not found", 404));
   return app;
+}
+
+/**
+ * Plugin public routes share the admin panel's origin, so script running in one of their pages could call the admin
+ * API with the panel's cookie. Unless a plugin sets its own policy, its responses can't run script or be framed.
+ */
+export const PLUGIN_PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";
+
+function withPluginDefaults(res: Response): Response {
+  if (res.status < 200 || (res.headers.has("content-security-policy") && res.headers.has("x-content-type-options"))) return res;
+  const out = new Response(res.body, res);
+  if (!out.headers.has("content-security-policy")) out.headers.set("content-security-policy", PLUGIN_PUBLIC_CSP);
+  if (!out.headers.has("x-content-type-options")) out.headers.set("x-content-type-options", "nosniff");
+  return out;
 }
