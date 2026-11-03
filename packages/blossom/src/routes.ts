@@ -253,6 +253,8 @@ export function createRoutes(core: BlossomCore): Hono {
       if (lenHeader === undefined) throw new BlossomError(411, "missing X-Content-Length header");
       if (!/^\d+$/.test(lenHeader)) throw new BlossomError(400, "invalid X-Content-Length header");
       const size = Number(lenHeader);
+      // PUT /upload refuses an empty body
+      if (size === 0) throw new BlossomError(400, "empty blob");
       const a = requireAuth(c, "upload", shaHeader, true);
       const user = await core.admission.assertCanUpload(a.pubkey);
       if (size > settings.maxUploadBytes) throw new BlossomError(413, `blob too large (max ${settings.maxUploadBytes} bytes)`);

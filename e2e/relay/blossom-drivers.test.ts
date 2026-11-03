@@ -660,3 +660,77 @@ describe("without sharp", () => {
     expect([...served.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
   });
 });
+
+describe("mirror sources that misbehave", () => {
+  let relay: Booted;
+  let origin: ReturnType<typeof Bun.serve>;
+  const u = user();
+  beforeAll(async () => {
+    relay = await boot("fs", { blossom: { limits: { mirrorTimeoutMs: 1500, uploadStallMs: 1000 } } });
+    await api(relay.http, relay.owner, "PATCH", "/settings", { blossom: { maxUploadBytes: 256 * 1024 } });
+    origin = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req) {
+        const p = new URL(req.url).pathname;
+        // headers, then nothing
+        if (p === "/stall") return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "image/png" } });
+        // a trickle that never ends
+        if (p === "/trickle") {
+          let n = 0;
+          return new Response(
+            new ReadableStream({
+              async pull(c) {
+                await Bun.sleep(200);
+                c.enqueue(new Uint8Array([n++ & 255]));
+              },
+            }),
+            { headers: { "content-type": "image/png" } },
+          );
+        }
+        // chunked, bigger than the limit, no Content-Length
+        if (p === "/endless") {
+          return new Response(
+            new ReadableStream({
+              pull(c) {
+                c.enqueue(new Uint8Array(64 * 1024));
+              },
+            }),
+            { headers: { "content-type": "image/png" } },
+          );
+        }
+        // lies about its length
+        if (p === "/short") return new Response(new Uint8Array(10), { headers: { "content-type": "image/png", "content-length": "10" } });
+        if (p === "/loop") return Response.redirect("/loop", 302);
+        if (p === "/headers-never") return new Promise<Response>(() => {});
+        return new Response("no", { status: 404 });
+      },
+    });
+  });
+  afterAll(async () => {
+    origin?.stop(true);
+    await relay?.stop();
+  });
+  const mirror = (path: string, hash = "ab".repeat(32)) =>
+    fetch(`${relay.http}/mirror`, {
+      method: "PUT",
+      headers: { Authorization: bauth(u.sk, "upload", { hashes: [hash] }), "Content-Type": "application/json" },
+      body: JSON.stringify({ url: `http://127.0.0.1:${origin.port}${path}` }),
+    });
+
+  test("stalled, trickling and header-less origins time out (504) within the mirror timeout", async () => {
+    for (const p of ["/stall", "/trickle", "/headers-never"]) {
+      const t = Date.now();
+      const res = await mirror(p);
+      expect([p, res.status]).toEqual([p, 504]);
+      expect(Date.now() - t).toBeLessThan(5000);
+    }
+  });
+
+  test("an endless chunked body is cut off at the size limit (413); redirect loops are a 502", async () => {
+    expect((await mirror("/endless")).status).toBe(413);
+    expect((await mirror("/loop")).status).toBe(502);
+    expect((await mirror("/short")).status).toBe(409);
+    expect(fsFiles(relay.dir)).toEqual([]);
+  });
+});
