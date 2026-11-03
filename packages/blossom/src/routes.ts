@@ -122,8 +122,18 @@ export function createRoutes(core: BlossomCore): Hono {
     if (dest && SCRIPT_DESTINATIONS.has(dest)) throw new BlossomError(403, "blobs can't be loaded as scripts");
   };
 
+  /** If-None-Match (weak comparison; `*` matches any blob that exists) */
   const notModified = (c: Context, etag: string) =>
-    !!c.req.header("if-none-match")?.split(",").some((t) => t.trim().replace(/^W\//, "") === etag);
+    !!c.req.header("if-none-match")?.split(",").some((t) => t.trim() === "*" || t.trim().replace(/^W\//, "") === etag);
+
+  /**
+   * If-Range (RFC 9110 §13.1.5): the Range header only applies when this is our strong ETag. A weak tag or a date
+   * (we send no Last-Modified) never matches, so the client gets the whole blob instead of a range of something else.
+   */
+  const rangeHeader = (c: Context, etag: string) => {
+    const ifRange = c.req.header("if-range");
+    return ifRange === undefined || ifRange.trim() === etag ? c.req.header("range") : undefined;
+  };
 
   // ---------------------------------------------------------------- GET|HEAD /thumb/<sha256>.webp
   app.get(
@@ -173,7 +183,7 @@ export function createRoutes(core: BlossomCore): Hono {
         return new Response(null, { status: 307, headers });
       }
 
-      const range = parseRange(c.req.header("range"), row.size);
+      const range = parseRange(rangeHeader(c, etag), row.size);
       if (range === "unsatisfiable") {
         const res = errorResponse(416, "range not satisfiable");
         res.headers.set("Content-Range", `bytes */${row.size}`);
