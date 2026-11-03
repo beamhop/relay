@@ -173,7 +173,16 @@ export function SelectField({ options, ...p }: Base & { options: { value: string
   );
 }
 
-export function ListField({ numeric, placeholder, format, validate, ...p }: Base & { numeric?: boolean; placeholder?: string; format?: (v: any) => React.ReactNode; validate?: (raw: string) => string | undefined }) {
+export function ListField({
+  numeric, placeholder, format, validate, normalize, ...p
+}: Base & {
+  numeric?: boolean;
+  placeholder?: string;
+  format?: (v: any) => React.ReactNode;
+  validate?: (raw: string) => string | undefined;
+  /** the stored form of an entered value (e.g. npub → hex) */
+  normalize?: (v: string) => string;
+}) {
   return (
     <FormField
       control={p.control}
@@ -182,7 +191,14 @@ export function ListField({ numeric, placeholder, format, validate, ...p }: Base
         <FormItem className={p.className}>
           <FormLabel>{p.label}</FormLabel>
           <FormControl>
-            <ListInput numeric={numeric} value={field.value ?? []} onChange={field.onChange} placeholder={placeholder} format={format} validate={validate} />
+            <ListInput
+              numeric={numeric}
+              value={field.value ?? []}
+              onChange={(v) => field.onChange(normalize ? [...new Set((v as string[]).map(normalize))] : v)}
+              placeholder={placeholder}
+              format={format}
+              validate={validate}
+            />
           </FormControl>
           {p.description && <FormDescription>{p.description}</FormDescription>}
           <FormMessage />

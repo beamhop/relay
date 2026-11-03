@@ -2,6 +2,7 @@ import type { ChallengeResponse, LoginResponse, NostrEvent } from "@beamhop/sdk/
 import { api } from "./api";
 import { queryClient } from "@/queries/client";
 import { resetPluginUis } from "@/plugins/loader";
+import { authUrlHandler } from "./auth-url";
 
 export interface EventSigner {
   signEvent(template: { kind: number; created_at: number; tags: string[][]; content: string }): Promise<NostrEvent>;
@@ -65,7 +66,7 @@ export async function loginWithBunker(input: string, onAuthUrl?: (url: string) =
   const { generateSecretKey } = await import("nostr-tools/pure");
   const bp = await parseBunkerInput(input.trim());
   if (!bp) throw new Error("Invalid bunker URL or NIP-05 address");
-  const signer = BunkerSigner.fromBunker(generateSecretKey(), bp, { onauth: (u) => (onAuthUrl ? onAuthUrl(u) : window.open(u, "_blank")) });
+  const signer = BunkerSigner.fromBunker(generateSecretKey(), bp, { onauth: authUrlHandler(onAuthUrl) });
   try {
     await withTimeout(signer.connect(), 60_000, "Bunker did not respond");
     return await withTimeout(loginWithSigner(signer), 120_000, "Signing timed out");
@@ -90,7 +91,7 @@ export async function startNostrConnect(onAuthUrl?: (url: string) => void, relay
   });
   const abort = new AbortController();
   const done = (async () => {
-    const signer = await BunkerSigner.fromURI(sk, uri, { onauth: (u) => (onAuthUrl ? onAuthUrl(u) : window.open(u, "_blank")) }, abort.signal);
+    const signer = await BunkerSigner.fromURI(sk, uri, { onauth: authUrlHandler(onAuthUrl) }, abort.signal);
     try {
       // the signal also covers this step, so Cancel works after the signer has connected
       return await withTimeout(loginWithSigner(signer), 120_000, "Signing timed out", abort.signal);

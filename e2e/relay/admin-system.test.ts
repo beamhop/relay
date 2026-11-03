@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { nip19 } from "nostr-tools";
+import { E2E_DB } from "../harness/backend";
 import { startRelay, type Relay } from "../harness/relay";
 import { RelayClient } from "../harness/client";
 import { api, signEvent, user, waitUntil } from "./admin-helpers";
@@ -34,7 +35,7 @@ describe("system and metrics", () => {
   test("GET /system describes this instance", async () => {
     const r = await api(relay.http, owner(), "GET", "/system");
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ runtime: "bun", dbDialect: "sqlite", publicUrl: relay.http, blossomEnabled: true, geoipEnabled: false });
+    expect(r.body).toMatchObject({ runtime: "bun", dbDialect: E2E_DB, publicUrl: relay.http, blossomEnabled: true, geoipEnabled: false });
     expect(r.body.relayPubkey).toMatch(/^[0-9a-f]{64}$/);
     expect(r.body.nips).toEqual(expect.arrayContaining([1, 11, 42]));
     const nip11 = await (await fetch(relay.http, { headers: { Accept: "application/nostr+json" } })).json();

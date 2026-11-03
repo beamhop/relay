@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
 import { createBeamhop, loadConfig, serve } from "@beamhop/server";
+import { backendOverrides, releaseBackend } from "../harness/backend";
 import { freePort } from "../harness/relay";
 
 export interface GapRelay {
@@ -57,7 +58,7 @@ export async function bootGap(opts: GapBootOptions = {}): Promise<GapRelay> {
     admin: { owners: [pubkey] },
     plugins: { dir: join(dir, "plugins") },
   };
-  const { config, extras } = loadConfig({ cwd: dir, env: opts.env ?? {}, overrides: merge(base, opts.overrides ?? {}) as never });
+  const { config, extras } = loadConfig({ cwd: dir, env: opts.env ?? {}, overrides: merge(merge(base, await backendOverrides(dir)), opts.overrides ?? {}) as never });
   const beamhop = await createBeamhop(config, { autoDiscoverNpm: false, extras: { ...extras, ...(opts.extras ?? {}) } as never });
   await beamhop.start();
   const server = await serve(beamhop, { runtime, port, host: "127.0.0.1" });
@@ -74,7 +75,10 @@ export async function bootGap(opts: GapBootOptions = {}): Promise<GapRelay> {
         stopped = true;
         await beamhop.stop({ server });
       }
-      if (rm) rmSync(dir, { recursive: true, force: true });
+      if (rm) {
+        rmSync(dir, { recursive: true, force: true });
+        await releaseBackend(dir);
+      }
     },
   };
 }

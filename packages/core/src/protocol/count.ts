@@ -2,7 +2,7 @@ import type { Filter, ReadContext } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 import { withPrefix } from "../util/reasons";
 import type { Connection } from "./connection";
-import { admitQuery, admitSearch, authReadDenied, meteredStore, READ_RATE_ERROR, readRate, refundSearch, runSearch, type SearchCharge, withQuerySlot } from "./read-guard";
+import { admitQuery, admitSearch, authReadDenied, meteredStore, READ_RATE_ERROR, ReadRefused, readRate, refundSearch, runSearch, type SearchCharge, withQuerySlot } from "./read-guard";
 import { isSearchFilter } from "./read-limits";
 import { countVisible, hiddenIds } from "./visibility-scan";
 
@@ -91,6 +91,7 @@ export async function handleCount(ctx: RelayContext, conn: Connection, subId: st
     conn.send(["COUNT", subId, { count }]);
     ctx.bus.emit("req.executed", { connId: conn.id, subId, filters: hq.filters, results: count, durationMs: performance.now() - started, ip: conn.ip });
   } catch (err) {
+    if (err instanceof ReadRefused) return conn.closedSub(subId, err.message);
     ctx.logger.error("COUNT failed", { err: String(err) });
     conn.closedSub(subId, "error: count failed");
   } finally {

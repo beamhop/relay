@@ -178,8 +178,15 @@ export class BlossomCore {
     return releaseOwnership(this, sha256, pubkey, actor, deletedAt, token);
   }
 
-  /** Background upkeep: sweep stale temp files once, retry queued byte deletions periodically. */
+  /** Background upkeep: check the storage and sweep stale temp files once, retry queued byte deletions periodically. */
   startMaintenance(): void {
+    if (this.driver.check) {
+      const check = this.driver
+        .check()
+        .then(() => this.log.debug("blob storage check passed", { driver: this.driver.name }))
+        .catch((err) => this.log.error("blob storage is not usable: uploads will fail until this is fixed", { driver: this.driver.name, error: String(err) }));
+      this.tasks.track("blossom storage check", check);
+    }
     if (this.driver.sweepTempFiles) {
       const sweep = this.driver
         .sweepTempFiles(TEMP_FILE_MAX_AGE_MS)

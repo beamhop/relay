@@ -55,6 +55,44 @@ describe("settings", () => {
     expect((await api(relay.http, owner(), "GET", "/settings")).body.settings.limits.maxSubscriptions).toBe(30);
   });
 
+  test("regression: out-of-range numbers, kinds and relay URLs are refused", async () => {
+    const bad: [unknown, string][] = [
+      [{ blossom: { maxUploadBytes: -1 } }, "blossom.maxUploadBytes"],
+      [{ blossom: { maxUploadBytes: 0 } }, "blossom.maxUploadBytes"],
+      [{ blossom: { defaultQuotaBytes: -5 } }, "blossom.defaultQuotaBytes"],
+      [{ moderation: { autoBanReportThreshold: -1 } }, "moderation.autoBanReportThreshold"],
+      [{ moderation: { autoBanReportThreshold: 2.5 } }, "moderation.autoBanReportThreshold"],
+      [{ moderation: { kindBlocklist: [70000] } }, "moderation.kindBlocklist"],
+      [{ retention: { intervalMinutes: 0 } }, "retention.intervalMinutes"],
+      [{ retention: { rules: [{ id: "n", maxPerPubkey: -3 }] } }, "retention.rules"],
+      [{ nip05: { relays: ["relay.example.com"] } }, "nip05.relays"],
+    ];
+    const before = (await api(relay.http, owner(), "GET", "/settings")).body.settings;
+    for (const [body, field] of bad) {
+      const r = await patch(body);
+      expect(`${r.status} ${r.body.error}`).toContain("400");
+      expect(r.body.error).toContain(field);
+    }
+    expect((await api(relay.http, owner(), "GET", "/settings")).body.settings).toEqual(before);
+  });
+
+  test("regression: pubkey settings are stored as hex (npub accepted), anything else refused", async () => {
+    const { pubkey, npub } = relay.owner;
+    const r = await patch({ info: { pubkey: npub }, retention: { rules: [{ id: "x", enabled: false, maxAgeDays: 30, exemptPubkeys: [npub, pubkey.toUpperCase()] }] } });
+    expect(r.status).toBe(200);
+    expect(r.body.settings.info.pubkey).toBe(pubkey);
+    expect(r.body.settings.retention.rules[0].exemptPubkeys).toEqual([pubkey]);
+    const nip11 = await (await fetch(relay.http, { headers: { Accept: "application/nostr+json" } })).json();
+    expect(nip11.pubkey).toBe(pubkey);
+    const bad = await patch({ info: { pubkey: "npub1typo" } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toContain("info.pubkey");
+    const badExempt = await patch({ retention: { rules: [{ id: "y", exemptPubkeys: ["alice"] }] } });
+    expect(badExempt.status).toBe(400);
+    expect(badExempt.body.error).toContain("retention.rules.0.exemptPubkeys.0");
+    expect((await patch({ info: { pubkey: "" }, retention: { rules: [] } })).body.settings.info.pubkey).toBe("");
+  });
+
   test("a patch is deep-merged, audited and takes effect on NIP-11 and the ws pipeline", async () => {
     const name = `relay ${Math.floor(Math.random() * 1e6)}`;
     const r = await patch({ info: { name }, moderation: { kindBlocklist: [30023] } });
@@ -139,7 +177,7 @@ describe("persistence across a restart (same data dir)", () => {
     } finally {
       await first.stop();
       await second?.stop();
-      removeDir(dir);
+      await removeDir(dir);
     }
   }, 30000);
 });

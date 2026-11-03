@@ -144,6 +144,13 @@ export class SessionService {
     return true;
   }
 
+  /** Live sessions of a pubkey, newest first (`token` is empty: only the cookie holds it). */
+  async listFor(pubkey: string): Promise<SessionRecord[]> {
+    const now = this.nowSec();
+    const rows = await this.db.all<Row>("SELECT * FROM admin_sessions WHERE pubkey = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 200", [pubkey, now]);
+    return rows.map((r) => fromRow(r, "")).filter((s) => now - s.createdAt < SESSION_MAX_AGE_SEC);
+  }
+
   /** `id`: the hashed id (SessionRecord.id). */
   async destroy(id: string): Promise<void> {
     this.cache.delete(id);

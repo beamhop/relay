@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": { "types": ["bun", "node"] },
-  "include": ["harness/**/*", "relay/**/*", "admin/**/*", "playwright.config.ts"]
+  "include": ["harness/**/*", "relay/**/*", "load/**/*", "admin/**/*", "playwright.config.ts"]
 }

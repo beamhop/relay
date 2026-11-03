@@ -86,12 +86,12 @@ Or use plain Docker:
 
 ```sh
 docker build -t beamhop .
-docker run -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1… beamhop
+docker run --init --stop-timeout 30 -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1… beamhop
 ```
 
-- The image runs as a non-root user.
+- The image runs as a non-root user (`bun`, uid 1000). A bind mount instead of the named volume must be writable by it (`chown -R 1000:1000 ./data`); otherwise the database can't be created and blob storage is reported unusable at startup.
 - Data lives in `/data`: `BEAMHOP_SQLITE_PATH=/data/beamhop.db` and `BEAMHOP_BLOSSOM_FS_PATH=/data/blobs`.
-- The health check calls `GET /health/live` (liveness). Point load balancers at `GET /health` (readiness): it checks the database and returns 503 while starting, draining or stopping. Give the container a stop grace period of at least `server.shutdownTimeoutMs` (10 s by default, Docker's default too) so shutdown can drain in-flight requests and queued events.
+- The health check calls `GET /health/live` (liveness). Point load balancers at `GET /health` (readiness): it checks the database and returns 503 while starting, draining or stopping. Give the container a stop grace period above `server.shutdownTimeoutMs` (10 s by default — exactly Docker's default, so use `--stop-timeout 30`; the compose file sets `stop_grace_period: 30s`) so shutdown can drain in-flight requests and queued events.
 
 To run CLI commands inside the container, use `docker compose exec beamhop bun packages/server/src/cli.ts admin add npub1…`.
 
@@ -177,6 +177,7 @@ Most relay behaviour is not set here. Limits, NIP-11 info, policies, auth, Bloss
 | `BEAMHOP_PLUGINS_AUTO_DISCOVER` | `plugins.autoDiscoverNpm` | `false`. Also load every `beamhop-plugin-*` / `@scope/beamhop-plugin-*` package in `node_modules` |
 | `BEAMHOP_PLUGINS_ENABLED` (comma separated) | `plugins.enabled` | none. Plugins enabled by default; the panel can override |
 | `BEAMHOP_LOG_LEVEL` | `logLevel` | `info` |
+| `BEAMHOP_LOG_FORMAT` | `logFormat` | `text`. `json` writes one object per line (`time`, `level`, `scope`, `msg`, then the fields) for log shippers |
 
 ## Admin bootstrap
 
@@ -214,6 +215,20 @@ bun test                    # all tests
 bun run test:server         # server/composition tests (incl. e2e over websocket)
 bun run typecheck
 ```
+
+The relay e2e suite (`bun test ./e2e/relay`) and the admin Playwright suite run on SQLite + filesystem blobs by
+default. To run them on PostgreSQL and/or S3 instead (each test relay gets its own schema / bucket, dropped afterwards):
+
+```sh
+BEAMHOP_E2E_DB=postgres BEAMHOP_E2E_PG_URL=postgres://user:pass@127.0.0.1:5432/beamhop_test \
+BEAMHOP_E2E_BLOBS=s3 BEAMHOP_E2E_S3_ENDPOINT=http://127.0.0.1:9000 \
+BEAMHOP_E2E_S3_ACCESS_KEY_ID=… BEAMHOP_E2E_S3_SECRET_ACCESS_KEY=… [BEAMHOP_E2E_S3_BUCKET=bucket-prefix] \
+  bun test ./e2e/relay
+BEAMHOP_TEST_PG=postgres://… bun test packages/storage   # also runs the storage postgres tests (drops their tables!)
+```
+
+The Postgres role needs `CREATE` on the database; the S3 key needs to create and delete buckets.
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for health checks, logs, backups, upgrades and a production checklist.
 
 The codebase is a Bun workspace monorepo. Contracts live in `packages/sdk`.
 

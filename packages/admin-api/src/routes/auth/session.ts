@@ -1,7 +1,7 @@
-import type { AdminRole, LoginResponse, Me } from "@beamhop/sdk";
+import type { AdminRole, LoginResponse, Me, SessionView } from "@beamhop/sdk";
 import type { AdminApp, AdminContext, ApiContext } from "../../context";
 import { principalOf } from "../../context";
-import { forbidden } from "../../errors";
+import { forbidden, notFound } from "../../errors";
 import { clearSessionCookie, requireAdmin, setSessionCookie } from "../../middleware/auth";
 import type { LoginGuard } from "../../services/login-guard";
 import { permissionsFor } from "../../services/roles";
@@ -54,5 +54,42 @@ export function registerSessionRoutes(app: AdminApp, ctx: ApiContext) {
   app.get("/auth/me", requireAdmin(), async (c) => {
     const p = principalOf(c);
     return c.json(await buildMe(ctx, p.pubkey, p.role!));
+  });
+
+  // your own sessions only: ending another admin's is what revoking their role (or a password reset) is for
+  app.get("/auth/sessions", requireAdmin(), async (c) => {
+    const p = principalOf(c);
+    const items: SessionView[] = (await ctx.sessions.listFor(p.pubkey)).map((s) => ({
+      id: s.id,
+      method: s.method,
+      createdAt: s.createdAt,
+      lastSeenAt: s.lastSeenAt,
+      expiresAt: s.expiresAt,
+      ip: s.ip,
+      userAgent: s.userAgent,
+      current: s.id === p.session?.id,
+    }));
+    return c.json({ items });
+  });
+
+  app.delete("/auth/sessions/:id", requireAdmin(), async (c) => {
+    const p = principalOf(c);
+    const id = c.req.param("id");
+    if (!(await ctx.sessions.listFor(p.pubkey)).some((s) => s.id === id)) throw notFound("session not found");
+    // with its push devices, like a logout
+    await ctx.sessions.end(id);
+    if (id === p.session?.id) clearSessionCookie(c, ctx);
+    await ctx.audit(c, "auth.session.end", p.pubkey, { session: id.slice(0, 12) });
+    return c.json({ ok: true });
+  });
+
+  // "sign out everywhere else": a lost device or a leaked cookie, without having to change the password
+  app.post("/auth/sessions/end-others", requireAdmin(), async (c) => {
+    const p = principalOf(c);
+    const keep = p.session?.id;
+    const ended = (await ctx.sessions.listFor(p.pubkey)).filter((s) => s.id !== keep).length;
+    await ctx.sessions.endAllFor(p.pubkey, keep);
+    await ctx.audit(c, "auth.session.end-others", p.pubkey, { ended });
+    return c.json({ ended });
   });
 }

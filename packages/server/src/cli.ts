@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -175,7 +175,9 @@ function cmdInit(v: Values) {
     plugins: { dir: v["plugins-dir"] ?? "./plugins", packages: [], enabled: [] as string[] },
     logLevel: v["log-level"] ?? "info",
   };
-  writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+  // owner-only: the config may carry a database URL with a password (and later the relay key, metrics token, S3 keys)
+  writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(path, 0o600);
   console.log(`wrote ${path}`);
   if (!owners.length) {
     console.log(`

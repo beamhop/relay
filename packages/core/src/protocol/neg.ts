@@ -21,7 +21,7 @@ import {
   NEG_OPEN_WAIT_MS,
   NEG_SESSION_TTL_MS,
 } from "./limits";
-import { admitQuery, authReadDenied, meteredStore, READ_RATE_ERROR, type ReadStore, readRate } from "./read-guard";
+import { admitQuery, authReadDenied, meteredStore, READ_RATE_ERROR, ReadRefused, type ReadStore, readRate } from "./read-guard";
 import { filterVisible, hiddenIds } from "./visibility-scan";
 
 // ------------------------------------------------------------------ NIP-77 negentropy
@@ -37,6 +37,7 @@ function dropNegSession(ctx: RelayContext, conn: Connection, subId: string): voi
 /** Sends NEG-ERR, which ends the subscription (NIP-77): its session, if any, is dropped too. */
 export function negError(ctx: RelayContext, conn: Connection, subId: string, reason: string): void {
   dropNegSession(ctx, conn, subId);
+  conn.negOpens.delete(subId);
   conn.send(["NEG-ERR", subId, reason]);
 }
 
@@ -60,8 +61,14 @@ export function sweepNegSessions(ctx: RelayContext, now = Date.now()): void {
 }
 
 export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: string, filter: Filter, message: string): Promise<void> {
-  const negErr = (reason: string) => negError(ctx, conn, subId, reason);
-  // NIP-77: opening an existing id closes the old session first, even if the new one is refused
+  // NIP-77: opening an existing id closes the old session first, even if the new one is refused. That includes an
+  // earlier NEG-OPEN of the id still being prepared: it ends silently (its reply would be taken for this one's).
+  const open = {};
+  conn.negOpens.set(subId, open);
+  const current = () => conn.negOpens.get(subId) === open;
+  const negErr = (reason: string) => {
+    if (current()) negError(ctx, conn, subId, reason);
+  };
   dropNegSession(ctx, conn, subId);
   expireNegSessions(ctx, conn);
   const denied = authReadDenied(ctx, conn);
@@ -81,7 +88,7 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   const busy = () => ctx.neg.opening >= NEG_OPEN_CONCURRENCY || (ctx.neg.openingByIp.get(conn.ipKey) ?? 0) >= NEG_OPEN_PER_IP;
   const deadline = Date.now() + NEG_OPEN_WAIT_MS;
   while (busy()) {
-    if (conn.closed || Date.now() >= deadline) {
+    if (conn.closed || !current() || Date.now() >= deadline) {
       conn.negOpening--;
       return conn.closed ? undefined : negErr("rate-limited: too many syncs starting at once, try again shortly");
     }
@@ -90,8 +97,9 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   ctx.neg.opening++;
   ctx.neg.openingByIp.set(conn.ipKey, (ctx.neg.openingByIp.get(conn.ipKey) ?? 0) + 1);
   try {
-    await openNegSession(ctx, meteredStore(ctx, conn, rate === "staff"), conn, subId, filter, message);
+    await openNegSession(ctx, meteredStore(ctx, conn, rate === "staff"), conn, subId, filter, message, current, negErr);
   } finally {
+    if (current()) conn.negOpens.delete(subId);
     conn.negOpening--;
     ctx.neg.opening--;
     const left = (ctx.neg.openingByIp.get(conn.ipKey) ?? 1) - 1;
@@ -100,8 +108,17 @@ export async function handleNegOpen(ctx: RelayContext, conn: Connection, subId: 
   }
 }
 
-async function openNegSession(ctx: RelayContext, store: ReadStore, conn: Connection, subId: string, filter: Filter, message: string): Promise<void> {
-  const negErr = (reason: string) => negError(ctx, conn, subId, reason);
+async function openNegSession(
+  ctx: RelayContext,
+  store: ReadStore,
+  conn: Connection,
+  subId: string,
+  filter: Filter,
+  message: string,
+  /** false once the client closed the id or reopened it */
+  current: () => boolean,
+  negErr: (reason: string) => void,
+): Promise<void> {
   const rctx: ReadContext = { conn, subId, source: "sync" };
   const hq = await ctx.hooks.runQuery([filter], rctx).catch(() => ({ reject: "error: query policy failed" }));
   if ("reject" in hq) return negErr(withPrefix(hq.reject, "blocked"));
@@ -137,6 +154,7 @@ async function openNegSession(ctx: RelayContext, store: ReadStore, conn: Connect
         exclude = items.filter((it) => !ok.has(it.id));
       }
     } catch (err) {
+      if (err instanceof ReadRefused) return negErr(err.message);
       ctx.logger.error("NEG-OPEN query failed", { err: String(err) });
       return negErr("error: query failed");
     }
@@ -151,7 +169,7 @@ async function openNegSession(ctx: RelayContext, store: ReadStore, conn: Connect
       return negErr(`invalid: ${(err as Error).message}`);
     }
     // re-check after the awaits above (no awaits from here on, so the accounting can't race)
-    if (conn.closed) return;
+    if (conn.closed || !current()) return;
     dropNegSession(ctx, conn, subId);
     if (conn.negSessions.size >= MAX_NEG_SESSIONS_PER_CONN) return negErr(`blocked: too many negentropy sessions (max ${MAX_NEG_SESSIONS_PER_CONN})`);
     const now = Date.now();
@@ -218,4 +236,5 @@ export function handleNegMsg(ctx: RelayContext, conn: Connection, subId: string,
 
 export function handleNegClose(ctx: RelayContext, conn: Connection, subId: string): void {
   dropNegSession(ctx, conn, subId);
+  conn.negOpens.delete(subId); // a NEG-OPEN still being prepared is abandoned
 }

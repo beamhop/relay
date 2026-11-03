@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { NostrEvent, RetentionRule } from "@beamhop/sdk";
+import * as nip19 from "nostr-tools/nip19";
 import { createTestStores, type StorageStores } from "@beamhop/storage";
 import type { RelayContext } from "../src/context";
 import { runRetention } from "../src/jobs/retention";
@@ -123,5 +124,15 @@ describe("retention: maximum age", () => {
     expect((await idsOf(A)).length).toBe(1);
     expect((await idsOf(C)).length).toBe(5);
     expect((await idsOf(RELAY)).length).toBe(1);
+  });
+
+  test("regression: an exempt pubkey stored as an npub (or uppercase hex) still exempts its author", async () => {
+    const old = Math.floor(Date.now() / 1000) - 40 * 86400;
+    for (const pk of [A, B, C]) for (let i = 0; i < 3; i++) await publish(ev(pk, old + i));
+    rules = [rule({ maxAgeDays: 30, exemptPubkeys: [nip19.npubEncode(B), C.toUpperCase()] })];
+    expect(await runRetention(ctx())).toBe(3);
+    expect((await idsOf(A)).length).toBe(0);
+    expect((await idsOf(B)).length).toBe(3);
+    expect((await idsOf(C)).length).toBe(3);
   });
 });

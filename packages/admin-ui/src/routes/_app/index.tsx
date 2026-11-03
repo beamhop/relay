@@ -17,7 +17,7 @@ import { EmptyState, ErrorState } from "@/components/empty-state";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { useLiveHistory } from "@/lib/live";
 import { useBoolPref, WORLD_MAP_TILE_HOST, worldMapPref } from "@/lib/prefs";
-import { useSystem } from "@/queries/auth";
+import { useCan, useSystem } from "@/queries/auth";
 import { RANGES, useGeo, useKindStats, useRejections, useSeries, useSnapshot, useTopPubkeys, type RangeKey } from "@/queries/dashboard";
 import { countryFlag, formatBytes, formatCompact, formatDate, formatDuration, formatMs, formatNumber, formatPercent, formatRate } from "@/lib/format";
 import { kindName } from "@/lib/nostr";
@@ -420,7 +420,9 @@ function RejectionsCard({ range }: { range: RangeKey }) {
 
 function PluginWidgets() {
   const { widgets } = usePluginRegistry();
-  if (!widgets.length) return null;
+  const can = useCan();
+  // widgets read the plugin's admin routes, which need plugins.use (as plugin pages do)
+  if (!widgets.length || !can("plugins.use")) return null;
   const span = { sm: "", md: "lg:col-span-2", lg: "lg:col-span-3" };
   return (
     <section className="space-y-3">

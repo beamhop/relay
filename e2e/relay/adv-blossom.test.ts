@@ -74,7 +74,12 @@ describe("path traversal", () => {
       const r = await fetch(`${relay.http}${p}`, { method: "DELETE", headers: { Authorization: bauth(u.sk, "delete", { hashes: ["a".repeat(64)] }) } });
       expect([400, 404]).toContain(r.status);
     }
-    const list = await fetch(`${relay.http}/list/${u.pubkey}?cursor=..%2f..&since=-1&until=1e999&limit=99999999999999999999`);
+    // malformed parameters are refused (BUD-12), never quietly read as "first page"
+    for (const q of ["cursor=..%2f..", "since=-1", "until=1e999", "limit=abc"]) {
+      expect((await fetch(`${relay.http}/list/${u.pubkey}?${q}`)).status).toBe(400);
+    }
+    // overlong digit strings are clamped, not passed through to the database
+    const list = await fetch(`${relay.http}/list/${u.pubkey}?since=0&until=99999999999999999999&limit=99999999999999999999`);
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual([]);
   });

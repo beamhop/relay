@@ -113,8 +113,34 @@ describe("s3 driver", () => {
     expect(d.publicUrl).toBeUndefined();
   });
 
+  test("check(): writes and removes a probe object; a refused write is reported with its status", async () => {
+    const s3 = mockS3();
+    const d = createS3Driver({ endpoint: "https://s3.test/", bucket: "bucket", accessKeyId: "AK", secretAccessKey: "SK", fetch: s3.fetchFn });
+    await d.check!();
+    expect(s3.calls.map((c) => c.method)).toEqual(["PUT", "DELETE"]);
+    expect(s3.calls[0].url).toMatch(/^https:\/\/s3\.test\/bucket\/beamhop-startup-check-[0-9a-f]{12}$/);
+    expect(s3.objects.size).toBe(0);
+    const denied = (async () => new Response("<Error><Code>AccessDenied</Code></Error>", { status: 403 })) as unknown as typeof fetch;
+    const bad = createS3Driver({ endpoint: "https://s3.test/", bucket: "bucket", accessKeyId: "AK", secretAccessKey: "SK", fetch: denied });
+    await expect(bad.check!()).rejects.toThrow(/403.*AccessDenied/);
+  });
+
   test("publicUrl", () => {
     const d = createS3Driver({ endpoint: "https://s3.test", bucket: "b", accessKeyId: "a", secretAccessKey: "s", publicUrl: "https://media.test/" });
     expect(d.publicUrl!(sha)).toBe(`https://media.test/${sha}`);
   });
+});
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fs check(): creates the blob dir, leaves nothing behind, fails on an unwritable one", async () => {
+  const { chmodSync } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "beamhop-fscheck-"));
+  try {
+    await createFsDriver(join(root, "blobs")).check!();
+    expect(readdirSync(join(root, "blobs"))).toEqual([]);
+    chmodSync(root, 0o500);
+    await expect(createFsDriver(join(root, "other")).check!()).rejects.toThrow(/EACCES/);
+  } finally {
+    chmodSync(root, 0o700);
+    rmSync(root, { recursive: true, force: true });
+  }
 });

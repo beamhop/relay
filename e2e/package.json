@@ -7,10 +7,12 @@
     "test:admin": "playwright test -c playwright.config.ts"
   },
   "dependencies": {
+    "@beamhop/blossom": "workspace:*",
     "@beamhop/server": "workspace:*",
     "nostr-tools": "^2.25.2"
   },
   "devDependencies": {
+    "@noble/curves": "^2.0.1",
     "@playwright/test": "^1.64.1"
   }
 }

@@ -1,6 +1,7 @@
 # beamhop — Nostr relay + Blossom media server + admin panel
 # Build:  docker build -t beamhop .
-# Run:    docker run -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1... beamhop
+# Run:    docker run --init --stop-timeout 30 -p 3334:3334 -v beamhop-data:/data -e BEAMHOP_OWNERS=npub1... beamhop
+#         (a bind mount instead of a named volume must be writable by uid 1000: `chown -R 1000:1000 ./data`)
 ARG BUN_VERSION=1.4.3
 
 # ---------------------------------------------------------------- manifests: package.json files + bun.lock only, so

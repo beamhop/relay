@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { bytesToHex } from "nostr-tools/utils";
 import { createBeamhop, loadConfig, serve, type Beamhop, type RunningServer } from "@beamhop/server";
+import { backendOverrides, releaseBackend } from "./backend";
 
 export interface Relay {
   /** http://127.0.0.1:PORT */
@@ -29,6 +30,8 @@ export interface StartRelayOptions {
   overrides?: Record<string, unknown>;
   /** reuse a fixed owner key (hex) instead of generating one */
   ownerSkHex?: string;
+  /** host of the public URL (default 127.0.0.1); "localhost" gives the panel a secure context where WebAuthn works */
+  publicHost?: string;
   /** createBeamhop extras (e.g. `pluginsEnabled` to enable plugins on first boot) */
   extras?: Record<string, unknown>;
 }
@@ -62,7 +65,7 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
   const port = opts.port ?? (await freePort());
   const sk = opts.ownerSkHex ? Uint8Array.from(Buffer.from(opts.ownerSkHex, "hex")) : generateSecretKey();
   const pubkey = getPublicKey(sk);
-  const http = `http://127.0.0.1:${port}`;
+  const http = `http://${opts.publicHost ?? "127.0.0.1"}:${port}`;
   const base = {
     logLevel: "error",
     server: { host: "127.0.0.1", port, publicUrl: http },
@@ -71,14 +74,14 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
     admin: { owners: [pubkey] }, // hex: programmatic overrides skip the npub normalisation the CLI does
     plugins: { dir: join(dir, "plugins") },
   };
-  const { config, extras } = loadConfig({ cwd: dir, env: {}, overrides: merge(base, opts.overrides ?? {}) as never });
+  const { config, extras } = loadConfig({ cwd: dir, env: {}, overrides: merge(merge(base, await backendOverrides(dir)), opts.overrides ?? {}) as never });
   const beamhop = await createBeamhop(config, { autoDiscoverNpm: false, extras: { ...extras, ...(opts.extras ?? {}) } as never });
   await beamhop.start();
   const server: RunningServer = await serve(beamhop, { runtime: "bun", port, host: "127.0.0.1" });
   let stopped = false;
   return {
     http,
-    ws: `ws://127.0.0.1:${port}`,
+    ws: http.replace(/^http/, "ws"),
     port,
     dir,
     owner: { sk, skHex: bytesToHex(sk), pubkey, npub: nip19.npubEncode(pubkey), nsec: nip19.nsecEncode(sk) },
@@ -90,6 +93,7 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
       await beamhop.stop();
       await server.stop();
       rmSync(dir, { recursive: true, force: true });
+      await releaseBackend(dir);
     },
   };
 }

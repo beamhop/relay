@@ -51,6 +51,8 @@ interface BuildOptions {
 }
 
 type SplitColumn = "e.kind" | "e.pubkey";
+/** what querySql() splits into one branch per value (see SPLIT_MAX_VALUES) */
+type Split = { column: SplitColumn; values: (string | number)[] } | { column: "tag"; key: `#${string}`; values: string[] };
 
 export interface EventStoreOptions {
   /** sqlite: FTS5 table available (otherwise search falls back to LIKE) */
@@ -60,6 +62,10 @@ export interface EventStoreOptions {
    * false keeps the single generic statement per filter (tests compare both).
    */
   queryShapes?: boolean;
+  /** sqlite: rows of the newest-events window for long authors lists (default MANY_AUTHORS_WINDOW; tests shrink it) */
+  manyAuthorsWindow?: number;
+  /** sqlite: matches a search ranks (default SEARCH_RANK_WINDOW; tests shrink it) */
+  searchRankWindow?: number;
 }
 
 /**
@@ -70,6 +76,22 @@ export interface EventStoreOptions {
  * Measured on 1M events: kinds [1,7] 335 → 0.2 ms, 50 heavy authors 199 → 9 ms, 50 light authors 0.6 → 1.2 ms.
  */
 const SPLIT_MAX_VALUES = 50;
+/**
+ * sqlite query(): a longer `authors` list (a follow list: home feeds) first reads the newest MANY_AUTHORS_WINDOW events
+ * in created_at order, keeping the listed authors' ones; enough of them there (any active follow list) answers the
+ * query. Otherwise the list runs SPLIT_MAX_VALUES authors per statement, one LIMITed branch per author. As one
+ * `pubkey IN (…)` statement sqlite read and sorted every event of every listed author: measured on 1M events, 300
+ * authors (heavy ones among them) 232 ms, one synchronous stall of the whole relay; now 0.5 ms (active) / ~40 ms (all
+ * barely active, bounded by authors × limit).
+ */
+const MANY_AUTHORS_WINDOW = 5_000;
+/**
+ * sqlite NIP-50 search ranks (bm25) the newest this-many matches of the filter, not every match: ranking all 365k
+ * matches of a common word in 1M notes took 605 ms, a synchronous stall of the whole relay; the newest 5000 take
+ * 30 ms. A filter with fewer matches is ranked exactly as before; for broader ones the most relevant recent notes
+ * win over older, possibly better scoring ones.
+ */
+export const SEARCH_RANK_WINDOW = 5_000;
 /** Bulk deletes (sqlite) start at this many events per statement, yielding to the event loop in between. */
 export const DELETE_BATCH = 500;
 const DELETE_BATCH_MIN = 50;
@@ -114,6 +136,8 @@ export { parseSearch };
 
 export const compareEvents = (a: NostrEvent, b: NostrEvent) =>
   b.created_at - a.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const compareRows = (a: EventRow, b: EventRow) =>
+  Number(b.created_at) - Number(a.created_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /**
  * Shorter last terms are matched as whole tokens: a 1-2 letter prefix expands to most of the index (and
@@ -233,8 +257,10 @@ export class SqlEventStore implements EventStore {
     if (await tx.get("SELECT 1 AS x FROM events WHERE id = ?", [event.id])) {
       return { status: "duplicate", message: "duplicate: already have this event" };
     }
+    // NIP-09 / NIP-62: a deletion request naming a deletion request or a request to vanish has no effect
     if (
       event.kind !== 5 &&
+      event.kind !== 62 &&
       (await tx.get("SELECT 1 AS x FROM deleted_events WHERE pubkey = ? AND ref = ?", [event.pubkey, event.id]))
     ) {
       return { status: "deleted", message: "blocked: this event has been deleted" };
@@ -301,9 +327,7 @@ export class SqlEventStore implements EventStore {
       let limit = filter.limit;
       if (opts.maxLimit !== undefined) limit = Math.min(limit ?? opts.maxLimit, opts.maxLimit);
       if (limit !== undefined && limit <= 0) continue;
-      const q = this.querySql(filter, now, limit);
-      if (!q) continue;
-      for (const r of await this.db.all<EventRow>(q.sql, q.params)) {
+      for (const r of await this.queryRows(filter, now, limit)) {
         if (seen.has(r.id)) continue;
         seen.add(r.id);
         out.push(rowToEvent(r));
@@ -314,6 +338,47 @@ export class SqlEventStore implements EventStore {
     return out.sort(compareEvents);
   }
 
+  private async queryRows(filter: Filter, now: number, limit: number | undefined): Promise<EventRow[]> {
+    if (limit !== undefined && this.shaped(filter) && filter.authors && strings(filter.authors).length > SPLIT_MAX_VALUES && !singleTagKey(filter)) {
+      return this.queryManyAuthors(filter, now, safeInt(limit));
+    }
+    const q = this.querySql(filter, now, limit);
+    return q ? this.db.all<EventRow>(q.sql, q.params) : [];
+  }
+
+  /** sqlite plan shapes apply (not to search, ids or with queryShapes off) */
+  private shaped(filter: Filter): boolean {
+    return this.db.dialect === "sqlite" && this.opts.queryShapes !== false && filter.search === undefined && !filter.ids;
+  }
+
+  /**
+   * sqlite, an authors list longer than SPLIT_MAX_VALUES (see MANY_AUTHORS_WINDOW): the newest events in created_at
+   * order first, then (when too few of them match) SPLIT_MAX_VALUES authors per statement, with a loop turn between
+   * statements.
+   */
+  private async queryManyAuthors(filter: Filter, now: number, limit: number): Promise<EventRow[]> {
+    const b = this.build(filter, { now });
+    if (!b) return [];
+    const until = typeof filter.until === "number" ? safeInt(filter.until) : undefined;
+    // created_at of the newest MANY_AUTHORS_WINDOW-th event (no later than `until`): a covering index read
+    const edge = await this.db.get<{ t: number }>(
+      `SELECT created_at AS t FROM events INDEXED BY events_created_idx${until === undefined ? "" : " WHERE created_at <= ?"} ORDER BY created_at DESC LIMIT 1 OFFSET ?`,
+      until === undefined ? [this.opts.manyAuthorsWindow ?? MANY_AUTHORS_WINDOW] : [until, this.opts.manyAuthorsWindow ?? MANY_AUTHORS_WINDOW],
+    );
+    const lower = edge === undefined ? undefined : toNum(edge.t);
+    const window = `SELECT ${EVENT_COLUMNS} FROM events e INDEXED BY events_created_idx${where(lower === undefined ? b.conds : [...b.conds, "e.created_at >= ?"])} ORDER BY e.created_at DESC, e.id ASC LIMIT ?`;
+    const rows = await this.db.all<EventRow>(window, lower === undefined ? [...b.params, limit] : [...b.params, lower, limit]);
+    // complete: enough matches, or the window held every event the filter's time range allows
+    if (rows.length >= limit || lower === undefined || (typeof filter.since === "number" && filter.since >= lower)) return rows;
+    const out: EventRow[] = [];
+    for (const [i, part] of chunk(strings(filter.authors!), SPLIT_MAX_VALUES).entries()) {
+      if (i > 0) await yieldToEventLoop();
+      const q = this.querySql({ ...filter, authors: part }, now, limit);
+      if (q) out.push(...(await this.db.all<EventRow>(q.sql, q.params)));
+    }
+    return out.sort(compareRows).slice(0, limit);
+  }
+
   /**
    * The SELECT query() runs for one filter (exposed for plan tests). On sqlite it picks a shape the planner
    * handles well: event_tags-driven for a single-value tag, per-value UNION ALL for short kinds/authors lists;
@@ -321,12 +386,13 @@ export class SqlEventStore implements EventStore {
    * @internal
    */
   querySql(filter: Filter, now: number, limit?: number): { sql: string; params: unknown[] } | null {
-    const shaped = this.db.dialect === "sqlite" && this.opts.queryShapes !== false && filter.search === undefined && !filter.ids;
+    const shaped = this.shaped(filter);
     const split = shaped && limit !== undefined ? splitOf(filter) : undefined;
-    const b = this.build(filter, { now, split: split?.column, driveByTag: shaped && !split });
+    if (split?.column === "tag" && limit !== undefined) return this.tagSplitSql(filter, split.key, split.values, now, limit);
+    const b = this.build(filter, { now, split: split?.column as SplitColumn | undefined, driveByTag: shaped && !split });
     if (!b) return null;
     const order = `ORDER BY ${b.rank ? `${b.rank.sql}, ` : ""}${b.timeCol} DESC, e.id ASC`;
-    if (split && limit !== undefined) {
+    if (split && split.column !== "tag" && limit !== undefined) {
       // branches carry only the sort key; the full rows are read for the final `limit` seqs only
       const lim = safeInt(limit);
       const params: unknown[] = [];
@@ -338,8 +404,15 @@ export class SqlEventStore implements EventStore {
       const seqs = `SELECT seq FROM (${branches.join(" UNION ALL ")}) ORDER BY created_at DESC, id ASC LIMIT ?`;
       return { sql: `SELECT ${EVENT_COLUMNS} FROM events e WHERE e.seq IN (${seqs}) ORDER BY e.created_at DESC, e.id ASC`, params };
     }
-    const params = [...b.params, ...(b.rank?.params ?? [])];
-    let sql = `SELECT ${EVENT_COLUMNS} FROM ${b.from}${where(b.conds)} ${order}`;
+    const params = [...b.params];
+    let conds = b.conds;
+    if (b.from.startsWith("events_fts")) {
+      // sqlite search ranks the newest SEARCH_RANK_WINDOW matches only (see there)
+      conds = [...conds, `events_fts.rowid >= COALESCE((SELECT MIN(seq) FROM (SELECT e.seq AS seq FROM ${b.from}${where(b.conds)} ORDER BY events_fts.rowid DESC LIMIT ?)), 0)`];
+      params.push(...b.params, this.opts.searchRankWindow ?? SEARCH_RANK_WINDOW);
+    }
+    params.push(...(b.rank?.params ?? []));
+    let sql = `SELECT ${EVENT_COLUMNS} FROM ${b.from}${where(conds)} ${order}`;
     if (limit !== undefined) {
       sql += " LIMIT ?";
       params.push(safeInt(limit));
@@ -347,22 +420,56 @@ export class SqlEventStore implements EventStore {
     return { sql, params };
   }
 
+  /**
+   * sqlite, a tag condition with 2..SPLIT_MAX_VALUES values: one branch per value, each read from
+   * event_tags_lookup_idx in created_at order (as for a single value) and LIMITed. UNION, not UNION ALL: an event
+   * carrying several of the values comes from several branches and must count once against the limit. Measured on
+   * 1M events, five hashtags: 36 → 0.6 ms.
+   */
+  private tagSplitSql(filter: Filter, key: `#${string}`, values: string[], now: number, limit: number): { sql: string; params: unknown[] } | null {
+    const lim = safeInt(limit);
+    const params: unknown[] = [];
+    const branches: string[] = [];
+    for (const v of values) {
+      const b = this.build({ ...filter, [key]: [v] }, { now, driveByTag: true });
+      if (!b) continue;
+      params.push(...b.params, lim);
+      branches.push(`SELECT * FROM (SELECT e.seq, ${b.timeCol} AS created_at, e.id FROM ${b.from}${where(b.conds)} ORDER BY ${b.timeCol} DESC, e.id ASC LIMIT ?)`);
+    }
+    if (!branches.length) return null;
+    params.push(lim);
+    const seqs = `SELECT seq FROM (${branches.join(" UNION ")}) ORDER BY created_at DESC, id ASC LIMIT ?`;
+    return { sql: `SELECT ${EVENT_COLUMNS} FROM events e WHERE e.seq IN (${seqs}) ORDER BY e.created_at DESC, e.id ASC`, params };
+  }
+
+  /**
+   * Matches, minus the expired ones counted separately. `expiration IS NULL OR expiration > now` in the counting
+   * statement made sqlite read the table row of every match (the column is in no index but the partial expiration
+   * one): on 1M events COUNT kinds:[1] took 908 ms, one stall of the relay; counted from the (kind, created_at) index
+   * alone 10 ms. The expired matches are few (purged every minute) and found through events_expiration_idx.
+   */
   async count(filters: Filter[]): Promise<number> {
     const now = nowSec();
-    const parts: string[] = [];
-    const params: unknown[] = [];
+    const all = { parts: [] as string[], params: [] as unknown[] };
+    const expired = { parts: [] as string[], params: [] as unknown[] };
     for (const filter of filters) {
-      const b = this.build(filter, { now });
+      const b = this.build(filter, { now, includeExpired: true });
       if (!b) continue;
-      parts.push(`SELECT e.seq FROM ${b.from}${where(b.conds)}`);
-      params.push(...b.params);
+      const fts = b.from.startsWith("events_fts");
+      // a search alone is counted in the FTS index, without reading the events
+      all.parts.push(fts && b.conds.length === 1 ? "SELECT rowid AS seq FROM events_fts WHERE events_fts MATCH ?" : `SELECT e.seq FROM ${b.from}${where(b.conds)}`);
+      all.params.push(...b.params);
+      if (this.db.dialect === "sqlite") {
+        // expired matches from the (partial) expiration index; a search becomes a rowid list to check against
+        const conds = b.conds.map((c) => (c === "events_fts MATCH ?" ? "e.seq IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)" : c));
+        expired.parts.push(`SELECT e.seq FROM events e INDEXED BY events_expiration_idx${where([...conds, "e.expiration IS NOT NULL", "e.expiration <= ?"])}`);
+      } else expired.parts.push(`SELECT e.seq FROM ${b.from}${where([...b.conds, "e.expiration IS NOT NULL", "e.expiration <= ?"])}`);
+      expired.params.push(...b.params, now);
     }
-    if (!parts.length) return 0;
-    const sql =
-      parts.length === 1
-        ? `SELECT COUNT(*) AS n FROM (${parts[0]}) c`
-        : `SELECT COUNT(*) AS n FROM (${parts.join(" UNION ")}) c`;
-    return toNum((await this.db.get<{ n: number }>(sql, params))?.n);
+    if (!all.parts.length) return 0;
+    const countOf = async (q: { parts: string[]; params: unknown[] }) =>
+      toNum((await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM (${q.parts.join(" UNION ")}) c`, q.params))?.n);
+    return Math.max(0, (await countOf(all)) - (await countOf(expired)));
   }
 
   async getById(id: string): Promise<NostrEvent | undefined> {
@@ -374,7 +481,11 @@ export class SqlEventStore implements EventStore {
     const b = this.build({ ...filter, search: undefined }, { now: nowSec() });
     if (!b) return [];
     const params = [...b.params];
-    let sql = `SELECT e.id, e.created_at FROM ${b.from}${where(b.conds)} ORDER BY e.created_at ASC, e.id ASC`;
+    // sqlite: with several authors or kinds, `+` keeps the planner from walking an index in created_at order and
+    // checking every row: { authors: [heavy], kinds: [4, 1059, 21059] } (COUNT's private-event check) read all
+    // 122k of the author's events, 219 ms; from the (pubkey, kind, created_at) ranges it reads the few matches
+    const multi = this.db.dialect === "sqlite" && ((filter.kinds?.length ?? 0) > 1 || (filter.authors?.length ?? 0) > 1);
+    let sql = `SELECT e.id, e.created_at FROM ${b.from}${where(b.conds)} ORDER BY ${multi ? "+" : ""}e.created_at ASC, e.id ASC`;
     if (filter.limit !== undefined) {
       sql += " LIMIT ?";
       params.push(safeInt(filter.limit));
@@ -761,16 +872,26 @@ function singleTagValue(raw: unknown): string | undefined {
   return values.length === 1 ? values[0] : undefined;
 }
 
+/** The first tag condition with exactly one (usable) value: query() drives the plan from event_tags with it. */
+const singleTagKey = (filter: Filter) => Object.keys(filter).find((k) => isTagKey(k) && singleTagValue(filter[k as `#${string}`]) !== undefined);
+
 /** Which IN list query() splits into per-value branches (see SPLIT_MAX_VALUES), if any. */
-function splitOf(filter: Filter): { column: SplitColumn; values: (string | number)[] } | undefined {
+function splitOf(filter: Filter): Split | undefined {
   // a single-value tag is driven from event_tags instead
-  if (Object.keys(filter).some((k) => isTagKey(k) && singleTagValue(filter[k as `#${string}`]) !== undefined)) return undefined;
+  if (singleTagKey(filter)) return undefined;
   const fits = (n: number) => n >= 2 && n <= SPLIT_MAX_VALUES;
   // authors first: each branch is then `pubkey = ? [AND kind IN (…)]` on (pubkey, kind, created_at) / (pubkey, created_at)
   const authors = filter.authors ? strings(filter.authors) : [];
   if (fits(authors.length)) return { column: "e.pubkey", values: authors };
   // per-kind branches that still carry a long authors list are no faster than one statement
   if (authors.length > 1) return undefined;
+  // then a multi-value tag (more selective than kinds): one event_tags-driven branch per value
+  for (const k of Object.keys(filter)) {
+    const raw = filter[k as `#${string}`];
+    if (!isTagKey(k) || !Array.isArray(raw)) continue;
+    const values = strings(raw);
+    if (fits(values.length)) return { column: "tag", key: k as `#${string}`, values };
+  }
   const kinds = filter.kinds ? [...new Set(filter.kinds.filter((k) => Number.isInteger(k)))] : [];
   if (fits(kinds.length)) return { column: "e.kind", values: kinds };
   return undefined;

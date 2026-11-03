@@ -6,7 +6,7 @@ import { principalOf } from "../context";
 import { badRequest, notFound } from "../errors";
 import { requirePermission } from "../middleware/auth";
 import type { SameFields } from "../util/contract";
-import { ipv6Groups } from "../util/ip";
+import { canonicalCidr, ipv6Groups } from "../util/ip";
 import { readBody } from "../util/request";
 
 /**
@@ -41,7 +41,7 @@ export function ruleScope(cidr: string): { v: 4 | 6; bits: number } | null {
 export const isValidCidr = (s: string): boolean => ruleScope(s) !== null;
 
 const IpRuleSchema = z.object({
-  cidr: z.string().trim().max(64).refine(isValidCidr, "invalid IP or CIDR"),
+  cidr: z.string().trim().max(64).refine(isValidCidr, "invalid IP or CIDR").transform(canonicalCidr),
   action: z.enum(["block", "allow"]),
   reason: z.string().max(1000).default(""),
   /** acknowledges an allow rule wider than an IPv4 /16 or an IPv6 /48 */

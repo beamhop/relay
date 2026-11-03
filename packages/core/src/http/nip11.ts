@@ -1,6 +1,7 @@
 import type { RelayContext } from "../context";
 import { SOFTWARE, SUPPORTED_NIPS, VERSION } from "../constants";
 import { MAX_SUB_ID_LENGTH } from "../protocol/messages";
+import { hexPubkey } from "../util/pubkey";
 
 /** NIP-11 relay information document built from runtime settings. */
 export function buildNip11(ctx: RelayContext): Record<string, unknown> {
@@ -33,7 +34,9 @@ export function buildNip11(ctx: RelayContext): Record<string, unknown> {
   };
   // 0 disables the lower bound; advertising 0 would tell clients nothing in the past is accepted
   if (limits.createdAtLowerSec > 0) (doc.limitation as Record<string, unknown>).created_at_lower_limit = limits.createdAtLowerSec;
-  if (info.pubkey) doc.pubkey = info.pubkey;
+  // NIP-11 wants hex: a stored npub is converted, anything else is not advertised
+  const pubkey = hexPubkey(info.pubkey);
+  if (pubkey) doc.pubkey = pubkey;
   if (info.contact) doc.contact = info.contact;
   if (info.icon) doc.icon = info.icon;
   if (info.banner) doc.banner = info.banner;

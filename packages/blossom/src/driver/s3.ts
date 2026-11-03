@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { isInlineSafe } from "../mime";
 import { assertSha256, thumbnailKey, type BlobDriver, type BlobObject, type ByteRange, type LocateOptions } from "./types";
@@ -239,6 +239,12 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
 
   return {
     name: "s3",
+    async check() {
+      // not content-addressed, so it can't collide with a blob (or be mistaken for one: keys are a sha256)
+      const key = `beamhop-startup-check-${randomBytes(6).toString("hex")}`;
+      await putKey(key, new TextEncoder().encode("ok"), "text/plain");
+      await deleteKey(key);
+    },
     async put(sha256, data, type, opts) {
       assertSha256(sha256);
       await putKey(keysOf(sha256)[opts?.hidden ? 1 : 0], data, type);
@@ -246,7 +252,10 @@ export function createS3Driver(cfg: S3DriverConfig): BlobDriver {
     },
     async get(sha256, range, opts) {
       assertSha256(sha256);
-      return getFirst(ordered(keysOf(sha256), opts), range);
+      const obj = await getFirst(ordered(keysOf(sha256), opts), range);
+      // gone from the bucket (lifecycle rule, removed by hand): stop vouching for it, so a re-upload stores it again
+      if (!obj) present.delete(sha256);
+      return obj;
     },
     async has(sha256, opts) {
       assertSha256(sha256);

@@ -4,6 +4,7 @@ import { useConfirm } from "@/components/confirm";
 import { tryMutate } from "@/queries/client";
 import { useUserActions } from "@/queries/users";
 import { usePluginRegistry } from "@/plugins/registry";
+import { useCan } from "@/queries/auth";
 import { displayName } from "@/lib/nostr";
 import type { Profile } from "@beamhop/sdk/admin-contract";
 
@@ -50,7 +51,9 @@ export function useBanFlow() {
 /** Plugin-provided user actions, rendered inside a DropdownMenuContent. */
 export function PluginUserActionItems({ pubkey }: { pubkey: string }) {
   const { userActions } = usePluginRegistry();
-  if (!userActions.length) return null;
+  const can = useCan();
+  // plugin actions call the plugin's admin routes, which need plugins.use
+  if (!userActions.length || !can("plugins.use")) return null;
   return (
     <>
       <DropdownMenuSeparator />

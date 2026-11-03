@@ -82,6 +82,22 @@ export interface Me {
   profile?: Profile;
 }
 export interface LoginResponse { me: Me }
+/**
+ * GET /auth/sessions → { items: SessionView[] }: your own panel sessions, newest first. DELETE /auth/sessions/:id ends one;
+ * POST /auth/sessions/end-others ends all but the current one (all of them when called with NIP-98) → { ended }.
+ */
+export interface SessionView {
+  /** the session's server-side id (a hash of its cookie, which it can't be turned back into) */
+  id: string;
+  method: "nostr" | "password" | "passkey" | "unknown";
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  ip: string | null;
+  userAgent: string | null;
+  /** the session this request was made with */
+  current: boolean;
+}
 
 // ------------------------------------------------------------- shared views
 export interface Profile { name?: string; display_name?: string; picture?: string; about?: string; nip05?: string; banner?: string; website?: string }
