@@ -13,6 +13,14 @@ services:
     build: .
     image: beamhop:latest
     restart: unless-stopped
+    # a minimal init as PID 1 forwards SIGTERM and reaps orphaned processes (bun alone as PID 1 does not reap)
+    init: true
+    # beamhop's own shutdown budget is 10 s (BEAMHOP_SHUTDOWN_TIMEOUT_MS); Docker's default grace period is also
+    # 10 s, after which it SIGKILLs mid-drain. Keep this above the budget.
+    stop_grace_period: 30s
+    # runs as the unprivileged `bun` user on a port above 1024: no capabilities needed
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # wait for optional backing services when their profile is active (`required: false` needs Compose ≥ 2.20)
     depends_on:
       postgres:

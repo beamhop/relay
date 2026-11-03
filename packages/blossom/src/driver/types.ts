@@ -64,6 +64,12 @@ export interface BlobDriver {
    * the background at startup by drivers that write through temp files.
    */
   sweepTempFiles?(maxAgeMs: number): Promise<number>;
+  /**
+   * Proves the storage is usable (reachable, credentials and permissions right) by writing and removing a small
+   * object; throws with the cause. Run once in the background at startup so a misconfiguration is logged right away
+   * instead of surfacing as failed uploads.
+   */
+  check?(): Promise<void>;
 }
 
 export const thumbnailKey = (sha256: string) => `${sha256}.thumb.webp`;

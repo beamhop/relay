@@ -84,12 +84,16 @@ describe("negentropy round trips", () => {
   });
 
   test("a larger set (300 ids, bucketed fingerprints) reconciles exactly", async () => {
-    // staff are exempt from event rate limits, so all 300 are stored; a dedicated kind keeps the set to this test
+    // staff are exempt from event rate limits, so all 300 are stored; a dedicated kind keeps the set to this test.
+    // Published on a connection authenticated as the owner: an anonymous one may only have 100 EVENTs awaiting OK,
+    // which a slower store (postgres) reaches when all 300 are sent at once
     const author = { sk: relay.owner.sk, pubkey: relay.owner.pubkey };
     const events: Event[] = [];
     for (let i = 0; i < 300; i++) events.push(sign(author.sk, { kind: 1, content: `bulk ${i}`, created_at: now() - 1000 + i }));
-    for (const e of events) c.send(["EVENT", e]);
-    for (const e of events) expect((await c.waitFor((m) => m[0] === "OK" && m[1] === e.id))[2]).toBe(true);
+    const pub = await connectAuthed(relay, author.sk);
+    for (const e of events) pub.send(["EVENT", e]);
+    for (const e of events) expect((await pub.waitFor((m) => m[0] === "OK" && m[1] === e.id))[2]).toBe(true);
+    pub.close();
     const local = events.filter((_, i) => i % 3 === 0);
     const r = await sync(c, { authors: [author.pubkey], kinds: [1] }, local);
     expect(r.need).toEqual(ids(events.filter((_, i) => i % 3 !== 0)));

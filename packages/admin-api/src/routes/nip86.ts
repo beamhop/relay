@@ -6,6 +6,7 @@ import { permissionsFor } from "../services/roles";
 import { AUTH_REPLAY_TTL_MS } from "../middleware/auth";
 import { parseNostrAuthorization, readBodyCapped, verifyNip98 } from "../util/nip98";
 import { tryParsePubkey } from "../util/pubkey";
+import { hasNul, NUL_MESSAGE } from "../util/request";
 
 const CONTENT_TYPE = "application/nostr+json+rpc";
 const MAX_BODY = 64 * 1024;
@@ -360,6 +361,7 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
     if (!rpc || typeof rpc !== "object" || typeof rpc.method !== "string") return reply({ result: null, error: "invalid request" }, 400);
     const params = rpc.params === undefined ? [] : rpc.params;
     if (!Array.isArray(params)) return reply({ result: null, error: "params must be an array" }, 400);
+    if (hasNul(params)) return reply({ result: null, error: `invalid params: ${NUL_MESSAGE}` });
 
     const method = Object.prototype.hasOwnProperty.call(methods, rpc.method) ? methods[rpc.method] : undefined;
     if (!method) return reply({ result: null, error: `unsupported method: ${rpc.method}` });

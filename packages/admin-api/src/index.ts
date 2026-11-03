@@ -19,7 +19,7 @@ import { RoleService } from "./services/roles";
 import { SessionService } from "./services/sessions";
 import { UserService } from "./services/users";
 import { PasswordHasher } from "./util/password";
-import { clientIp } from "./util/request";
+import { clientIp, NUL_MESSAGE } from "./util/request";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerUserRoutes } from "./routes/users";
 import { registerInviteRoutes } from "./routes/invites";
@@ -219,6 +219,8 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
     c.set("ip", clientIp(c));
     c.header("Cache-Control", "no-store");
     c.header("X-Content-Type-Options", "nosniff");
+    // U+0000 in a path parameter or query value would reach the database (see hasNul)
+    if (/%00/.test(c.req.url)) throw new HttpError(400, NUL_MESSAGE, "validation");
     await next();
   });
   const limiter = bodyLimit({

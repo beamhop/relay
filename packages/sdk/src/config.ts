@@ -132,6 +132,8 @@ export const ConfigSchema = z.object({
     })
     .prefault({}),
   logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  /** "text" (human-readable) or "json" (one object per line, for log shippers) */
+  logFormat: z.enum(["text", "json"]).default("text"),
 });
 export type BeamhopConfig = z.infer<typeof ConfigSchema>;
 

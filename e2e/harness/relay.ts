@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { bytesToHex } from "nostr-tools/utils";
 import { createBeamhop, loadConfig, serve, type Beamhop, type RunningServer } from "@beamhop/server";
+import { backendOverrides, releaseBackend } from "./backend";
 
 export interface Relay {
   /** http://127.0.0.1:PORT */
@@ -71,7 +72,7 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
     admin: { owners: [pubkey] }, // hex: programmatic overrides skip the npub normalisation the CLI does
     plugins: { dir: join(dir, "plugins") },
   };
-  const { config, extras } = loadConfig({ cwd: dir, env: {}, overrides: merge(base, opts.overrides ?? {}) as never });
+  const { config, extras } = loadConfig({ cwd: dir, env: {}, overrides: merge(merge(base, await backendOverrides(dir)), opts.overrides ?? {}) as never });
   const beamhop = await createBeamhop(config, { autoDiscoverNpm: false, extras: { ...extras, ...(opts.extras ?? {}) } as never });
   await beamhop.start();
   const server: RunningServer = await serve(beamhop, { runtime: "bun", port, host: "127.0.0.1" });
@@ -90,6 +91,7 @@ export async function startRelay(opts: StartRelayOptions = {}): Promise<Relay> {
       await beamhop.stop();
       await server.stop();
       rmSync(dir, { recursive: true, force: true });
+      await releaseBackend(dir);
     },
   };
 }

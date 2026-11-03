@@ -27,10 +27,11 @@ describe("loadConfig", () => {
     expect(fileOnly.config.server.host).toBe("127.0.0.1");
     expect(fileOnly.config.database.sqlitePath).toBe(join(dir, "db/x.db"));
 
-    const withEnv = loadConfig({ cwd: dir, env: { BEAMHOP_PORT: "5000", BEAMHOP_LOG_LEVEL: "DEBUG" } });
+    const withEnv = loadConfig({ cwd: dir, env: { BEAMHOP_PORT: "5000", BEAMHOP_LOG_LEVEL: "DEBUG", BEAMHOP_LOG_FORMAT: "JSON" } });
     expect(withEnv.config.server.port).toBe(5000);
     expect(withEnv.config.server.host).toBe("127.0.0.1");
     expect(withEnv.config.logLevel).toBe("debug");
+    expect(withEnv.config.logFormat).toBe("json");
 
     const withCli = loadConfig({ cwd: dir, env: { BEAMHOP_PORT: "5000" }, overrides: { server: { port: 6000 } } });
     expect(withCli.config.server.port).toBe(6000);
