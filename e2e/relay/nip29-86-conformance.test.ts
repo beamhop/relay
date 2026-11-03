@@ -228,7 +228,7 @@ describe("NIP-86 transport and auth", () => {
   test("an auth event of another kind is 401", async () => {
     const body = JSON.stringify({ method: "supportedmethods", params: [] });
     const ev = finalizeEvent({ kind: 27236, created_at: now(), content: "", tags: [["u", relay.http], ["method", "POST"], ["payload", sha256(body)]] }, relay.owner.sk);
-    expect((await post(`${relay.http}/`, body, rawAuth(ev))).status).toBe(401);
+    expect((await post(`${relay.http}/`, body, rawAuth({ ...ev }))).status).toBe(401);
   });
 
   test("Content-Type with parameters is still routed to NIP-86", async () => {
