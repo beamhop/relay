@@ -551,6 +551,17 @@ for (const driver of ["fs", "s3"] as const) {
       for (const res of responses) {
         expect([res.url, res.headers.get("access-control-allow-origin")]).toEqual([res.url, "*"]);
       }
+      // endpoints this server doesn't implement (BUD-05 /media, BUD-09 /report): a preflight that passes, then a
+      // 404 the browser can read, so clients see "not supported" instead of a network error
+      for (const p of ["/media", "/report"]) {
+        const pre = await fetch(`${relay.http}${p}`, { method: "OPTIONS", headers: { Origin: "https://x.example", "Access-Control-Request-Method": "PUT" } });
+        expect(pre.status).toBe(204);
+        expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+        for (const method of ["HEAD", "PUT", "GET"]) {
+          const res = await fetch(`${relay.http}${p}`, { method, headers: { Authorization: bauth(u.sk, "media", { hashes: [r.sha] }) }, body: method === "PUT" ? "x" : undefined });
+          expect([p, method, res.status, res.headers.get("access-control-allow-origin")]).toEqual([p, method, 404, "*"]);
+        }
+      }
     });
   });
 }

@@ -14,6 +14,8 @@ import type { BlossomCore } from "./service";
 const BLOB_PATH = "/:name{[0-9a-f]{64}(?:\\.[A-Za-z0-9]{1,16}){0,2}}";
 const THUMB_PATH = "/thumb/:name{[0-9a-f]{64}\\.webp}";
 const LIST_PATH = "/list/:pubkey{[0-9a-f]{64}}";
+/** BUD-05 media optimisation and BUD-09 reports */
+const UNSUPPORTED = ["/media", "/report"];
 /** PUT /mirror JSON body (`{"url": …}`) */
 const MAX_MIRROR_BODY = 16 * 1024;
 
@@ -73,7 +75,18 @@ export function createRoutes(core: BlossomCore): Hono {
   };
 
   const preflight = () => new Response(null, { status: 204, headers: CORS_HEADERS });
-  for (const p of ["/upload", "/mirror", LIST_PATH, THUMB_PATH, BLOB_PATH]) app.options(p, preflight);
+  for (const p of ["/upload", "/mirror", LIST_PATH, THUMB_PATH, BLOB_PATH, ...UNSUPPORTED]) app.options(p, preflight);
+
+  // Blossom endpoints this server doesn't implement: a 404 that carries CORS headers (BUD-01: on all responses), so a
+  // browser client probing for them (e.g. `HEAD /media`) sees "not supported" rather than a CORS/network failure
+  for (const p of UNSUPPORTED) {
+    app.all(
+      p,
+      wrap(async () => {
+        throw new BlossomError(404, "not supported by this server");
+      }),
+    );
+  }
 
   /** Loads a blob row the requester may see: approved for everyone, pending for owners/staff, blocked for staff. */
   const loadVisible = async (c: Context, sha256: string) => {
