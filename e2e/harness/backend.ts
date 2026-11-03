@@ -66,6 +66,16 @@ async function s3() {
   return { endpoint, accessKeyId, secretAccessKey, region, call };
 }
 
+/** Creates `bucket` unless it already exists (for suites that pick their own bucket rather than BEAMHOP_E2E_BLOBS). */
+export async function ensureS3Bucket(o: { endpoint: string; bucket: string; accessKeyId: string; secretAccessKey: string; region: string }): Promise<void> {
+  const { AwsClient } = await import("../../packages/blossom/node_modules/aws4fetch");
+  const client = new AwsClient({ accessKeyId: o.accessKeyId, secretAccessKey: o.secretAccessKey, region: o.region, service: "s3" });
+  const res = await client.fetch(`${o.endpoint.replace(/\/+$/, "")}/${o.bucket}`, { method: "PUT" });
+  const text = await res.text();
+  // 409 BucketAlreadyOwnedByYou: it's there already
+  if (!res.ok && res.status !== 409) throw new Error(`s3 PUT /${o.bucket}: ${res.status} ${text.slice(0, 200)}`);
+}
+
 async function provision(): Promise<Provisioned> {
   const overrides: Record<string, unknown> = {};
   const releases: (() => Promise<void>)[] = [];

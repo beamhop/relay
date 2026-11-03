@@ -44,13 +44,20 @@ async function count(c: RelayClient, filters: Record<string, unknown>[]): Promis
 const idsOf = async (c: RelayClient, filters: Record<string, unknown>[]) => (await c.query(nextSub("q"), filters)).events.map((e) => e.id);
 const sorted = (xs: string[]) => [...xs].sort();
 
-/** Publishes many events (staff key: no event rate limit), at most 1000 per connection/address. */
+/**
+ * Publishes many events (staff key: no event rate limit), at most 1000 per connection/address, 100 awaiting OK at a
+ * time: the relay refuses EVENTs beyond MAX_INFLIGHT_EVENTS, which slower backends (Postgres) reach.
+ */
 async function bulkPublish(events: Event[]) {
-  for (let i = 0; i < events.length; i += 1000) {
-    const c = await conn();
-    const part = events.slice(i, i + 1000);
-    for (const e of part) c.send(["EVENT", e]);
-    for (const e of part) expect((await c.waitFor((m) => m[0] === "OK" && m[1] === e.id, 30_000))[2]).toBe(true);
+  for (let i = 0; i < events.length; i += 1000) await publishAll(await conn(), events.slice(i, i + 1000));
+}
+
+/** Pipelines `events` on `c`, never more than 100 awaiting OK. */
+async function publishAll(c: RelayClient, events: Event[]) {
+  for (let j = 0; j < events.length; j += 100) {
+    const window = events.slice(j, j + 100);
+    for (const e of window) c.send(["EVENT", e]);
+    for (const e of window) expect((await c.waitFor((m) => m[0] === "OK" && m[1] === e.id, 30_000))[2]).toBe(true);
   }
 }
 
@@ -546,8 +553,7 @@ describe("NIP-77 negentropy (independent client)", () => {
     const u = newUser();
     const ts = now() - 7777;
     const server = Array.from({ length: 120 }, (_, i) => sign(u.sk, { kind: 1, content: `same-ts ${i}`, created_at: ts }));
-    for (const e of server) c.send(["EVENT", e]);
-    for (const e of server) expect((await c.waitFor((m) => m[0] === "OK" && m[1] === e.id))[2]).toBe(true);
+    await publishAll(c, server);
     const shared = server.filter((_, i) => i % 2 === 0);
     const localOnly = Array.from({ length: 15 }, () => localRec(ts));
     const r = await negSync(c, { authors: [u.pubkey] }, [...shared, ...localOnly]);

@@ -1,6 +1,7 @@
 /**
  * Blossom on both blob drivers: the same black-box checks against the filesystem driver and against S3 (a local MinIO
- * at BEAMHOP_E2E_S3_ENDPOINT, default http://127.0.0.1:9000, bucket `blossom-tests`; skipped when it isn't reachable).
+ * at BEAMHOP_E2E_S3_ENDPOINT, default http://127.0.0.1:9000, bucket BEAMHOP_E2E_S3_DRIVER_BUCKET or `blossom-tests`;
+ * skipped when it isn't reachable).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -10,21 +11,25 @@ import { join } from "node:path";
 import { createBeamhop, loadConfig, serve } from "@beamhop/server";
 import { createBlossomService, loadSharp, optionsFromConfig } from "@beamhop/blossom";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
+import { ensureS3Bucket } from "../harness/backend";
 import { freePort } from "../harness/relay";
 import { sha256 } from "../harness/client";
 import { api, bauth, upload, user } from "./admin-helpers";
 
+// credentials as in harness/backend.ts; the bucket is this suite's own (BEAMHOP_E2E_S3_BUCKET is the harness's per-relay
+// bucket prefix there), created here when missing
 const S3 = {
   endpoint: process.env.BEAMHOP_E2E_S3_ENDPOINT ?? "http://127.0.0.1:9000",
-  bucket: process.env.BEAMHOP_E2E_S3_BUCKET ?? "blossom-tests",
-  accessKeyId: process.env.BEAMHOP_E2E_S3_KEY ?? "beamhop",
-  secretAccessKey: process.env.BEAMHOP_E2E_S3_SECRET ?? "beamhop-secret",
-  region: "us-east-1",
+  bucket: process.env.BEAMHOP_E2E_S3_DRIVER_BUCKET ?? "blossom-tests",
+  accessKeyId: process.env.BEAMHOP_E2E_S3_ACCESS_KEY_ID ?? process.env.BEAMHOP_E2E_S3_KEY ?? "beamhop",
+  secretAccessKey: process.env.BEAMHOP_E2E_S3_SECRET_ACCESS_KEY ?? process.env.BEAMHOP_E2E_S3_SECRET ?? "beamhop-secret",
+  region: process.env.BEAMHOP_E2E_S3_REGION ?? "us-east-1",
 };
 const s3 = new Bun.S3Client({ endpoint: S3.endpoint, bucket: S3.bucket, accessKeyId: S3.accessKeyId, secretAccessKey: S3.secretAccessKey, region: S3.region });
 const s3Up = await fetch(`${S3.endpoint}/minio/health/live`, { signal: AbortSignal.timeout(1000) })
   .then((r) => r.ok)
   .catch(() => false);
+if (s3Up) await ensureS3Bucket(S3);
 
 /** status of the raw object in the bucket (200 / 404) */
 const s3Head = async (key: string) => ((await s3.exists(key)) ? 200 : 404);

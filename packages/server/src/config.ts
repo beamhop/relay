@@ -200,6 +200,7 @@ const OTHER_ENV = new Set([
   "BEAMHOP_E2E_S3_BUCKET",
   "BEAMHOP_E2E_S3_ACCESS_KEY_ID",
   "BEAMHOP_E2E_S3_SECRET_ACCESS_KEY",
+  "BEAMHOP_E2E_S3_DRIVER_BUCKET", // e2e/relay/blossom-drivers.test.ts
 ]);
 const KNOWN_ENV = new Set([...ENV.map(([name]) => name), ...OTHER_ENV]);
 
