@@ -3,7 +3,7 @@
  * and writes a publishable package.json (published to npm as `beamhop`, so `npx beamhop` works).
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
 const out = join(root, "dist/node");
@@ -29,7 +29,10 @@ try {
 const buildDir = join(root, ".build");
 mkdirSync(buildDir, { recursive: true });
 const entry = join(buildDir, "node-entry.ts");
-writeFileSync(entry, [...preload, join(root, "src/cli.ts")].map((f) => `import ${JSON.stringify(f)};`).join("\n") + "\n");
+// relative specifiers: the entry's source ends up in the published cli.js.map, which shouldn't carry the build
+// machine's paths
+const spec = (f: string) => JSON.stringify(relative(buildDir, f).split(sep).join("/").replace(/^(?!\.)/, "./"));
+writeFileSync(entry, [...preload, join(root, "src/cli.ts")].map((f) => `import ${spec(f)};`).join("\n") + "\n");
 
 const result = await Bun.build({
   entrypoints: [entry],
