@@ -176,6 +176,7 @@ const ENV: EnvSpec[] = [
   ["BEAMHOP_PLUGINS", "plugins.packages", list],
   ["BEAMHOP_PLUGINS_AUTO_DISCOVER", "plugins.autoDiscoverNpm", bool],
   ["BEAMHOP_LOG_LEVEL", "logLevel", (v) => v.toLowerCase()],
+  ["BEAMHOP_LOG_FORMAT", "logFormat", (v) => v.toLowerCase()],
 ];
 
 /** BEAMHOP_* variables read outside the ENV table (or deliberately ignored), so they don't trip the unknown-variable warning. */

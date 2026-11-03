@@ -41,15 +41,27 @@ export function safeStringify(value: unknown): string {
   }
 }
 
-export function createLogger(level: LogLevel = "info", scope = "beamhop"): Logger {
+/** "text": `<time> LEVEL [scope] message {data}`; "json": one object per line (`time`, `level`, `scope`, `msg`, data fields). */
+export type LogFormat = "text" | "json";
+
+export function createLogger(level: LogLevel = "info", scope = "beamhop", format: LogFormat = "text"): Logger {
   const log = (l: LogLevel) => (msg: string, data?: Record<string, unknown>) => {
     if (order[l] < order[level]) return;
     try {
-      const line = `${new Date().toISOString()} ${l.toUpperCase().padEnd(5)} [${scope}] ${msg}`;
-      (l === "error" ? console.error : l === "warn" ? console.warn : console.log)(data ? `${line} ${safeStringify(data)}` : line);
+      const time = new Date().toISOString();
+      let line: string;
+      if (format === "json") {
+        // fixed fields first, and data fields can't shadow them
+        const head = { time, level: l, scope, msg: String(msg) };
+        line = safeStringify(Object.assign({}, head, data, head));
+      } else {
+        line = `${time} ${l.toUpperCase().padEnd(5)} [${scope}] ${msg}`;
+        if (data) line += ` ${safeStringify(data)}`;
+      }
+      (l === "error" ? console.error : l === "warn" ? console.warn : console.log)(line);
     } catch {
       // logging must never take the caller down (closed stdout, a throwing message toString …)
     }
   };
-  return { debug: log("debug"), info: log("info"), warn: log("warn"), error: log("error"), child: (s) => createLogger(level, `${scope}:${s}`) };
+  return { debug: log("debug"), info: log("info"), warn: log("warn"), error: log("error"), child: (s) => createLogger(level, `${scope}:${s}`, format) };
 }

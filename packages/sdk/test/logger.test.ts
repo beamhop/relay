@@ -36,6 +36,17 @@ describe("logger and bus never throw", () => {
     expect(String(lines[0][0])).toContain('"n":"1"');
   });
 
+  test("json format: one parseable object per line, scope carried to children, data can't shadow the fixed fields", () => {
+    const log = createLogger("info", "beamhop", "json").child("db");
+    log.debug("hidden");
+    log.error("boom", { err: new Error("e"), level: "spoofed", msg: "spoofed", n: 1 });
+    expect(lines).toHaveLength(1);
+    const o = JSON.parse(String(lines[0][0]));
+    expect(Object.keys(o).slice(0, 4)).toEqual(["time", "level", "scope", "msg"]);
+    expect(o).toMatchObject({ level: "error", scope: "beamhop:db", msg: "boom", n: 1, err: { name: "Error", message: "e" } });
+    expect(Number.isNaN(Date.parse(o.time))).toBe(false);
+  });
+
   test("a failing bus handler is logged once per minute per (event, handler), through the logger", () => {
     const logged: { msg: string; data?: Record<string, unknown> }[] = [];
     const bus = new EventBus({ logger: { error: (msg, data) => void logged.push({ msg, data }) } });

@@ -173,7 +173,7 @@ function safeEqual(a: string, b: string): boolean {
 export async function createBeamhop(inputConfig: BeamhopConfig, overrides: BeamhopOverrides = {}): Promise<Beamhop> {
   const config: BeamhopConfig = structuredClone(inputConfig);
   const extras: ServerExtras = { pluginsEnabled: [], prometheus: true, ...overrides.extras };
-  const logger = overrides.logger ?? createLogger(config.logLevel);
+  const logger = overrides.logger ?? createLogger(config.logLevel, undefined, config.logFormat);
   const log = logger.child("server");
   const tasks = new TaskTracker({ logger: logger.child("tasks") });
   const lifecycle = new Lifecycle();
