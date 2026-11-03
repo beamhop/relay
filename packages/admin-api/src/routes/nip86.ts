@@ -2,6 +2,7 @@ import type { AdminRole, Permission, UserQuery, UserRecord } from "@beamhop/sdk"
 import type { ApiContext } from "../context";
 import { isZodError, zodMessage } from "../errors";
 import { isValidCidr } from "./ip";
+import { canonicalCidr } from "../util/ip";
 import { permissionsFor } from "../services/roles";
 import { AUTH_REPLAY_TTL_MS } from "../middleware/auth";
 import { parseNostrAuthorization, readBodyCapped, verifyNip98 } from "../util/nip98";
@@ -293,8 +294,9 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
     blockip: {
       permission: "ip.manage",
       async run(params, caller) {
-        const ip = str(params, 0, "ip").trim();
-        if (!isValidCidr(ip)) throw new RpcError("invalid ip");
+        const raw = str(params, 0, "ip").trim();
+        if (!isValidCidr(raw)) throw new RpcError("invalid ip");
+        const ip = canonicalCidr(raw);
         const reason = str(params, 1, "reason", true);
         const { disconnected } = await ctx.moderation.addIpRule({ cidr: ip, action: "block", reason }, caller.pubkey);
         await audit(caller, "ip.add", ip, { action: "block", reason, disconnected });
