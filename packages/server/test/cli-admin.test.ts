@@ -32,3 +32,27 @@ describe("beamhop admin commands work on the stores alone", () => {
     }
   });
 });
+
+describe("beamhop init", () => {
+  test("writes the config owner-only (it may carry a database password), also over an existing file", async () => {
+    const { mkdtempSync, rmSync, statSync, writeFileSync, chmodSync } = await import("node:fs");
+    (globalThis as { __BEAMHOP_NO_AUTORUN__?: boolean }).__BEAMHOP_NO_AUTORUN__ = true;
+    const { main } = await import("../src/cli");
+    const dir = mkdtempSync(join(import.meta.dir, ".tmp-cli-init-"));
+    const quiet = spyOn(console, "log").mockImplementation(() => {});
+    const old = process.umask(0o022);
+    try {
+      const path = join(dir, "beamhop.config.json");
+      await main(["init", "--config", path, "--db", "postgres", "--database-url", "postgres://u:hunter2@db/x"]);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      writeFileSync(path, "{}");
+      chmodSync(path, 0o644);
+      await main(["init", "--config", path, "--force"]);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(old);
+      quiet.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
