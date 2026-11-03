@@ -273,3 +273,20 @@ test("a save the server refuses is reported and the edit is kept", async ({ page
   await expect(unsaved(page)).toBeVisible();
   expect((await getSettings()).info.name).not.toBe(draft);
 });
+
+test("regression: a retention exempt pubkey entered as an npub is saved as hex", async ({ page }) => {
+  const before = (await getSettings()).retention;
+  try {
+    await page.goto("settings/retention");
+    await page.getByRole("button", { name: "Add rule" }).click();
+    const exempt = page.getByPlaceholder("npub or hex");
+    await exempt.fill("npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6");
+    await exempt.press("Enter");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(toast(page, "Settings saved")).toBeVisible();
+    const rules = (await getSettings()).retention.rules;
+    expect(rules.at(-1).exemptPubkeys).toEqual(["3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"]);
+  } finally {
+    await ownerApi("PATCH", "/settings", { retention: before });
+  }
+});

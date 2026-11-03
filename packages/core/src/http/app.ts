@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import * as nip19 from "nostr-tools/nip19";
 import type { RelayContext } from "../context";
 import { toWsUrl } from "../util/url";
 import { buildNip11 } from "./nip11";
 import { invitePage } from "./invite-page";
 import { verifyNip98 } from "./nip98";
 import { ipKey } from "../util/cidr";
+import { hexPubkey } from "../util/pubkey";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -144,18 +144,3 @@ function hostOf(v: string | undefined): string {
   }
 }
 
-/** NIP-05 keys must be lowercase hex; accept an operator-entered npub or uppercase hex. */
-function hexPubkey(v: string | undefined): string | undefined {
-  if (!v) return undefined;
-  const t = v.trim();
-  if (/^[0-9a-fA-F]{64}$/.test(t)) return t.toLowerCase();
-  if (t.startsWith("npub1")) {
-    try {
-      const d = nip19.decode(t);
-      if (d.type === "npub") return d.data;
-    } catch {
-      /* invalid */
-    }
-  }
-  return undefined;
-}
