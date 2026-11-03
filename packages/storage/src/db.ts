@@ -373,29 +373,111 @@ type PgSql = import("postgres").Sql;
 export const PG_STATEMENT_TIMEOUT_MS = 30_000;
 /** Postgres limit for a transaction left open without activity (its locks block other writers). */
 export const PG_IDLE_IN_TX_TIMEOUT_MS = 60_000;
+/** Longest wait (s) between reconnect attempts while the database is unreachable. */
+export const PG_MAX_BACKOFF_S = 2;
+
+/**
+ * Whether a postgres.js error means the connection is gone (closed, reset, refused, or the server terminating the
+ * session: SQLSTATE class 08 connection exception, 57P0x shutdown / admin termination).
+ */
+export function isConnectionLoss(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code !== "string") return false;
+  return (
+    code.startsWith("CONNECTION_") ||
+    code === "CONNECT_TIMEOUT" ||
+    code === "ECONNRESET" ||
+    code === "ECONNREFUSED" ||
+    code === "EPIPE" ||
+    code === "ETIMEDOUT" ||
+    code.startsWith("08") ||
+    /^57P0[1-3]$/.test(code)
+  );
+}
+
+/** State of one postgres transaction (see PostgresDb.tx). */
+interface PgTxState {
+  /** the transaction's connection is gone: nothing may be sent for it any more */
+  lost?: unknown;
+  /** PoolEvents.closes when the transaction last checked it */
+  closes: number;
+}
+
+/** Pool-wide events (postgres.js `onclose`), shared by a root PostgresDb and its transactions. */
+interface PoolEvents {
+  /** connections of the pool closed so far */
+  closes: number;
+}
+
+/** A promise that never settles (and holds nothing: the chain parked on it is collected with it). */
+const parked = <T>() => new Promise<T>(() => {});
+
 class PostgresDb extends BaseDb {
   readonly dialect = "postgres" as const;
-  constructor(private sql: PgSql, private root = true) {
+  constructor(
+    private sql: PgSql,
+    private pool: PoolEvents,
+    private root = true,
+    private txState?: PgTxState,
+  ) {
     super();
   }
+  /**
+   * Runs one statement. Inside a transaction whose connection is lost, nothing more is sent and the call never
+   * settles (see tx()).
+   */
+  private async stmt<T>(send: () => Promise<T>): Promise<T> {
+    const st = this.txState;
+    if (!st) return send();
+    if (st.lost === undefined && st.closes !== this.pool.closes) {
+      // a pool connection closed since the last statement, maybe this transaction's. begin() learns it synchronously
+      // but rejects through promise jobs that may not have run yet: let them run first
+      st.closes = this.pool.closes;
+      await new Promise((r) => setImmediate(r));
+    }
+    if (st.lost !== undefined) return parked();
+    try {
+      return await send();
+    } catch (err) {
+      if (!isConnectionLoss(err)) throw err;
+      st.lost = err;
+      return parked();
+    }
+  }
   async all<T>(q: string, params?: unknown[]) {
-    return (await this.sql.unsafe(toPgPlaceholders(q), normalizeParams(params) as never[])) as unknown as T[];
+    return this.stmt(async () => (await this.sql.unsafe(toPgPlaceholders(q), normalizeParams(params) as never[])) as unknown as T[]);
   }
   async get<T>(q: string, params?: unknown[]) {
     return (await this.all<T>(q, params))[0];
   }
   async run(q: string, params?: unknown[]) {
-    const r = await this.sql.unsafe(toPgPlaceholders(q), normalizeParams(params) as never[]);
+    const r = await this.stmt(() => this.sql.unsafe(toPgPlaceholders(q), normalizeParams(params) as never[]));
     return { changes: r.count ?? 0 };
   }
   async exec(q: string) {
-    await this.sql.unsafe(q).simple();
+    await this.stmt(() => this.sql.unsafe(q).simple());
   }
+  /**
+   * sql.begin(), made safe for a connection that dies mid transaction (database restart, failover, network cut).
+   * begin() then rejects at once, but its callback keeps running: the callback's next statement and begin's own
+   * ROLLBACK (sent when the callback settles) still go to that connection object. With its socket gone, postgres.js
+   * throws inside a setImmediate, an uncaughtException that shut the whole relay down on a postgres restart; once
+   * the pool has reconnected the object for another caller, they would run in that caller's session instead. So
+   * once a statement of the transaction failed with a connection loss, or begin() rejected with one, its statements
+   * send nothing and never settle: the callback stays parked (and is collected), and begin() never issues the
+   * ROLLBACK. tx() itself rejects through begin().
+   */
   async tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
     if (!this.root) return fn(this);
-    return (await (this.sql as unknown as { begin: (f: (s: PgSql) => Promise<T>) => Promise<T> }).begin((s) =>
-      fn(new PostgresDb(s, false)),
-    )) as T;
+    const state: PgTxState = { closes: this.pool.closes };
+    try {
+      return (await (this.sql as unknown as { begin: (f: (s: PgSql) => Promise<T>) => Promise<T> }).begin((s) =>
+        fn(new PostgresDb(s, this.pool, false, state)),
+      )) as T;
+    } catch (err) {
+      if (isConnectionLoss(err)) state.lost ??= err;
+      throw err;
+    }
   }
   async close() {
     if (this.root) await this.sql.end({ timeout: 5 });
@@ -430,9 +512,14 @@ export async function createDb(config: Pick<BeamhopConfig, "database">, sqliteOp
   if (driver === "postgres") {
     if (!postgresUrl) throw new Error("database.postgresUrl is required for postgres driver");
     const { default: postgres } = await import("postgres");
+    const pool: PoolEvents = { closes: 0 };
     const sql = postgres(postgresUrl, {
       max: 20,
       onnotice: () => {},
+      onclose: () => void pool.closes++,
+      // reconnect delay after failed attempts: postgres.js grows it to 20 s, which kept writes stalled that long after
+      // the database came back from a restart
+      backoff: (attempts: number) => (0.5 + Math.random() / 2) * Math.min(3 ** attempts / 100, PG_MAX_BACKOFF_S),
       connection: {
         statement_timeout: PG_STATEMENT_TIMEOUT_MS,
         idle_in_transaction_session_timeout: PG_IDLE_IN_TX_TIMEOUT_MS,
@@ -440,7 +527,7 @@ export async function createDb(config: Pick<BeamhopConfig, "database">, sqliteOp
       // int8 (COUNT(*), BIGINT timestamps, BIGSERIAL) → JS number instead of string
       types: { int8: { to: 20, from: [20], serialize: (x: unknown) => String(x), parse: (x: string) => Number(x) } },
     });
-    return new PostgresDb(sql);
+    return new PostgresDb(sql, pool);
   }
   const d = await openSqlite(sqlitePath);
   d.exec(

@@ -99,8 +99,60 @@ describe("sqlite query shapes", () => {
     // a long authors list keeps the generic form even when kinds alone would fit
     expect(stores.events.querySql({ authors: many, kinds: [1, 7], limit: 5 }, NOW, 5)!.sql).not.toContain("UNION ALL");
     expect(stores.events.querySql({ kinds: [1, 7] }, NOW)!.sql).not.toContain("UNION ALL");
-    expect(stores.events.querySql({ "#t": ["gm", "art"], limit: 5 }, NOW, 5)!.sql).not.toContain("CROSS JOIN");
+    // a multi-value tag: one event_tags-driven branch per value, deduplicated (UNION)
+    expect(stores.events.querySql({ "#t": ["gm", "art"], limit: 5 }, NOW, 5)!.sql).toContain(") UNION SELECT");
+    expect(stores.events.querySql({ "#t": ["gm", "art"] }, NOW)!.sql).not.toContain("CROSS JOIN");
     expect(generic.querySql({ kinds: [1, 7], "#t": ["gm"], limit: 5 }, NOW, 5)!.sql).not.toMatch(/UNION ALL|CROSS JOIN/);
+  });
+});
+
+describe("sqlite: long authors lists and multi-value tags", () => {
+  // 120 authors: the 30 that have events and 90 that don't (a follow list)
+  const follows = [...AUTHORS, ...Array.from({ length: 90 }, () => hex(64))];
+  const filters = (): Filter[] => {
+    const out: Filter[] = [];
+    for (let i = 0; i < 150; i++) {
+      const f: Filter = { authors: some(follows, 120), limit: 1 + Math.floor(rnd() * 80) };
+      if (f.authors!.length <= 50) f.authors = follows.slice(0, 51 + Math.floor(rnd() * 69));
+      if (rnd() < 0.5) f.kinds = some(KINDS, 3);
+      if (rnd() < 0.2) f.since = T + Math.floor(rnd() * 300);
+      if (rnd() < 0.3) f.until = T + 100 + Math.floor(rnd() * 300);
+      if (rnd() < 0.2) f["#t"] = some(TAG_VALUES.t, 3);
+      out.push(f);
+    }
+    return out;
+  };
+
+  test("authors lists past SPLIT_MAX_VALUES return exactly what the generic statement returns", async () => {
+    // windows: tiny (falls back to per-author statements), mid-sized and covering everything
+    for (const manyAuthorsWindow of [5, 200, 100_000]) {
+      const store = new SqlEventStore(stores.db, silentLogger, { fts: false, manyAuthorsWindow });
+      for (const f of filters()) {
+        const ids = (await store.query([f])).map((e) => e.id);
+        expect({ manyAuthorsWindow, f, ids }).toEqual({ manyAuthorsWindow, f, ids: (await generic.query([f])).map((e) => e.id) });
+      }
+    }
+  });
+
+  test("multi-value tags: an event carrying several of the values counts once against the limit", async () => {
+    const e = await createTestStores();
+    try {
+      const a = AUTHORS[0];
+      // 30 events tagged with both values, then 30 older ones with just one
+      for (let i = 0; i < 60; i++) {
+        const tags = i < 30 ? [["t", "x"], ["t", "y"]] : [["t", "x"]];
+        await e.events.save({ id: hex(64), pubkey: a, created_at: T + 1000 - i, kind: 1, tags, content: "", sig: hex(128) });
+      }
+      const plain = new SqlEventStore(e.db, silentLogger, { fts: false, queryShapes: false });
+      for (const limit of [10, 30, 40, 60, 100]) {
+        const f: Filter = { "#t": ["x", "y"], limit };
+        const ids = (await e.events.query([f])).map((x) => x.id);
+        expect(ids.length).toBe(Math.min(limit, 60));
+        expect(ids).toEqual((await plain.query([f])).map((x) => x.id));
+      }
+    } finally {
+      await e.close();
+    }
   });
 });
 
@@ -123,6 +175,10 @@ describe("sqlite query plans", () => {
     expect(tag.some((d) => d.includes("SEARCH e USING INTEGER PRIMARY KEY (rowid=?)"))).toBe(true);
     // ordered by the index: only the id tie-break needs sorting
     expect(tag.some((d) => d === "USE TEMP B-TREE FOR ORDER BY")).toBe(false);
+
+    // multi-value tag: each branch walks event_tags_lookup_idx in order
+    const tags = await plan({ "#t": ["gm", "art", "zap"], kinds: [1], limit: 20 });
+    expect(tags.filter((d) => /^SEARCH t USING (COVERING )?INDEX event_tags_lookup_idx \(name=\? AND value=\?\)$/.test(d)).length).toBe(3);
 
     const since = await plan({ "#t": ["gm"], since: T + 100, until: T + 300, limit: 20 });
     expect(since[0]).toContain("event_tags_lookup_idx (name=? AND value=? AND created_at>? AND created_at<?)");

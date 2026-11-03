@@ -10,6 +10,7 @@ import { codeOf, withPrefix } from "../util/reasons";
 import { checkAccess, checkProtected } from "./access";
 import { checkPow } from "./pow";
 import { fileRelayReport, KIND_AUTH, KIND_DELETION, KIND_VANISH, NOT_STORED, prepareSpecial, vanishTargetsUs } from "./special-kinds";
+import { LogThrottle } from "../util/log-throttle";
 
 export interface WriteOptions {
   conn?: Connection;
@@ -34,6 +35,9 @@ export const EPHEMERAL_DEDUP_MS = 5 * 60_000;
 /** Ephemeral ids remembered at most (the oldest are forgotten first). */
 export const EPHEMERAL_DEDUP_SIZE = 50_000;
 
+/** one "write pipeline failed" line per distinct error per 10 s (see LogThrottle) */
+const failures = new LogThrottle();
+
 /**
  * The event write pipeline (see docs/ARCHITECTURE.md):
  * size limits → id/sig → created_at → expiration → PoW → bans/mute/vanish → access mode → NIP-70 →
@@ -46,7 +50,8 @@ export async function processEvent(ctx: RelayContext, input: NostrEvent, opts: W
   try {
     return await run(ctx, input, opts);
   } catch (err) {
-    ctx.logger.error("write pipeline failed", { id: input.id, err: String(err) });
+    const t = failures.take(String(err).slice(0, 200));
+    if (t.log) ctx.logger.error("write pipeline failed", { id: input.id, err: String(err), ...(t.suppressed ? { repeated: t.suppressed } : {}) });
     ctx.bus.emit("event.rejected", { event: input, code: "error", reason: "error: internal error", connId: opts.conn?.id, ip: opts.conn?.ip, pubkey: input.pubkey, source: opts.source });
     return { ok: false, message: "error: internal error" };
   }

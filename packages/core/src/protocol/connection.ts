@@ -8,6 +8,13 @@ import { Gate, MAX_QUERIES_PER_CONN } from "./read-limits";
 export const SOFT_BUFFER_LIMIT = 1 << 20; // 1 MiB
 /** Above this the connection is considered a stuck slow consumer and closed. */
 const HARD_BUFFER_LIMIT = 8 << 20; // 8 MiB
+/**
+ * A connection whose send buffer stayed above SOFT_BUFFER_LIMIT this long (every live event dropped meanwhile) is
+ * closed as a slow consumer. The buffer of a client that stopped reading never reaches HARD_BUFFER_LIMIT: live
+ * delivery stops adding to it at SOFT_BUFFER_LIMIT (and Bun caps it at its 4 MiB backpressure limit anyway), so such
+ * clients stayed connected, missing every event, until they went away (seen in soak runs: open after 5 minutes).
+ */
+export const SLOW_CONSUMER_MS = 30_000;
 
 /** An event's JSON and its UTF-8 size (serialized once per broadcast, shared by all recipients). */
 export interface EventJson {
@@ -81,6 +88,8 @@ export class Connection implements ConnectionInfo {
   readonly queries = new Gate(MAX_QUERIES_PER_CONN);
   /** estimated bytes of stored results materialized but not yet sent */
   resultBytes = 0;
+  /** since when live events have been dropped because the send buffer is over SOFT_BUFFER_LIMIT (0: not) */
+  private congestedSince = 0;
 
   constructor(
     readonly id: string,
@@ -137,7 +146,13 @@ export class Connection implements ConnectionInfo {
       this.close(1008, "slow consumer");
       return false;
     }
-    if (buffered > SOFT_BUFFER_LIMIT) return false;
+    if (buffered > SOFT_BUFFER_LIMIT) {
+      const now = Date.now();
+      if (!this.congestedSince) this.congestedSince = now;
+      else if (now - this.congestedSince >= SLOW_CONSUMER_MS) this.close(1008, "slow consumer");
+      return false;
+    }
+    this.congestedSince = 0;
     const e = serialized ? serialized() : serializeEvent(event);
     this.sendEventRaw(subId, e.json, e.bytes);
     return true;
