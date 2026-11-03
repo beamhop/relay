@@ -412,6 +412,8 @@ function RetentionFields({ control, disabled }: { control: Control<any>; disable
               label="Exempt pubkeys"
               placeholder="npub or hex"
               validate={pubkeyValidate}
+              // retention matches authors as hex: an npub kept as typed would exempt nobody
+              normalize={(p: string) => parsePubkey(p) ?? p}
               format={(p: string) => shortNpub(parsePubkey(p) ?? p, 4)}
             />
           </div>

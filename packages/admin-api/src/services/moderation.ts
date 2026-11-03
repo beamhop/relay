@@ -1,4 +1,6 @@
 import type { AdminApiDeps, BanRequest, Db, IpRule, UserRecord } from "@beamhop/sdk";
+import { isValidCidr } from "../routes/ip";
+import { canonicalCidr } from "../util/ip";
 import { CredentialService } from "./credentials";
 import { deleteSessionDevices } from "./push";
 import { SessionService } from "./sessions";
@@ -100,10 +102,13 @@ export class ModerationService {
     return { disconnected };
   }
 
-  /** Removes an IP rule. False (and nothing emitted) when there was none. */
+  /** Removes an IP rule, given in any spelling of its address. False (and nothing emitted) when there was none. */
   async removeIpRule(cidr: string, actor: string): Promise<boolean> {
-    if (!(await this.deps.stores.ipRules.list()).some((r) => r.cidr === cidr)) return false;
-    await this.deps.stores.ipRules.remove(cidr);
+    const want = isValidCidr(cidr) ? canonicalCidr(cidr) : cidr;
+    // rules stored before rules were canonicalized may be spelled differently
+    const rule = (await this.deps.stores.ipRules.list()).find((r) => r.cidr === cidr || (isValidCidr(r.cidr) ? canonicalCidr(r.cidr) : r.cidr) === want);
+    if (!rule) return false;
+    await this.deps.stores.ipRules.remove(rule.cidr);
     this.deps.bus.emit("ip.rules.changed", { actor });
     return true;
   }

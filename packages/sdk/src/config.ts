@@ -141,14 +141,17 @@ export const AccessModeSchema = z.enum(["public", "whitelist", "invite", "auth-r
 /** Part of the plugin SDK contract (unused inside beamhop itself). */
 export type AccessMode = z.infer<typeof AccessModeSchema>;
 
+/** an event kind (NIP-01: 0–65535) */
+const Kind = z.number().int().min(0).max(65535);
+
 export const RetentionRuleSchema = z.object({
   id: z.string(),
   enabled: z.boolean().default(true),
-  kinds: z.array(z.number()).optional(),
+  kinds: z.array(Kind).optional(),
   /** delete events older than N days */
-  maxAgeDays: z.number().optional(),
+  maxAgeDays: z.number().min(0).optional(),
   /** keep at most N events per pubkey for these kinds */
-  maxPerPubkey: z.number().optional(),
+  maxPerPubkey: z.number().int().min(0).optional(),
   /** pubkeys exempt from this rule */
   exemptPubkeys: z.array(z.string()).default([]),
 });
@@ -159,7 +162,7 @@ export const WordFilterSchema = z.object({
   pattern: z.string(),
   isRegex: z.boolean().default(false),
   /** apply to these kinds only (empty = all) */
-  kinds: z.array(z.number()).default([]),
+  kinds: z.array(Kind).default([]),
   action: z.enum(["reject", "shadow", "report"]).default("reject"),
   enabled: z.boolean().default(true),
 });
@@ -237,23 +240,23 @@ export const RuntimeSettingsSchema = z.object({
   moderation: z
     .object({
       /** if non-empty, only these kinds accepted */
-      kindAllowlist: z.array(z.number()).default([]),
-      kindBlocklist: z.array(z.number()).default([]),
+      kindAllowlist: z.array(Kind).default([]),
+      kindBlocklist: z.array(Kind).default([]),
       /**
        * kinds allowed with NIP-86 allowkind while kindAllowlist is empty (all kinds accepted): reported by
        * listallowedkinds, never enforced
        */
-      kindExplicitlyAllowed: z.array(z.number()).default([]),
+      kindExplicitlyAllowed: z.array(Kind).default([]),
       wordFilters: z.array(WordFilterSchema).default([]),
       /** auto-ban pubkey after N reports (NIP-56) from distinct members (0 = off) */
-      autoBanReportThreshold: z.number().default(0),
+      autoBanReportThreshold: z.number().int().min(0).default(0),
     })
     .prefault({}),
   retention: z
     .object({
       rules: z.array(RetentionRuleSchema).default([]),
       /** how often retention job runs (minutes) */
-      intervalMinutes: z.number().default(60),
+      intervalMinutes: z.number().min(1).default(60),
       /** delete admin audit log entries older than N days (checked daily); 0 = keep forever */
       auditLogDays: z.number().int().min(0).default(0),
     })
@@ -264,7 +267,7 @@ export const RuntimeSettingsSchema = z.object({
       /** domain served; defaults to host of publicUrl */
       domain: z.string().default(""),
       /** extra relays advertised in nostr.json */
-      relays: z.array(z.string()).default([]),
+      relays: z.array(z.string().regex(/^wss?:\/\/\S+$/, "must be a ws(s):// URL")).default([]),
     })
     .prefault({}),
   groups: z
@@ -277,9 +280,9 @@ export const RuntimeSettingsSchema = z.object({
     .prefault({}),
   blossom: z
     .object({
-      maxUploadBytes: z.number().default(100 * 1024 * 1024),
+      maxUploadBytes: z.number().int().min(1).default(100 * 1024 * 1024),
       /** default per-user quota in bytes (0 = unlimited) */
-      defaultQuotaBytes: z.number().default(1024 * 1024 * 1024),
+      defaultQuotaBytes: z.number().int().min(0).default(1024 * 1024 * 1024),
       allowedMimeTypes: z.array(z.string()).default(["image/*", "video/*", "audio/*", "application/pdf"]),
       /** who may upload */
       uploadAccess: z.enum(["anyone", "members", "admins"]).default("members"),

@@ -1,5 +1,6 @@
 import { type EventStore, type Filter, type RetentionRule, nowSec, yieldToEventLoop } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
+import { hexPubkey } from "../util/pubkey";
 
 /** candidate authors fetched per page (keyset by pubkey) */
 const PAGE = 200;
@@ -20,7 +21,8 @@ export async function runRetention(ctx: RelayContext, signal?: AbortSignal): Pro
   for (const rule of ctx.s().retention.rules) {
     if (signal?.aborted) break;
     if (!rule.enabled) continue;
-    const exempt = new Set(rule.exemptPubkeys);
+    // authors are matched as hex: an exempt pubkey stored as an npub must still exempt them
+    const exempt = new Set(rule.exemptPubkeys.map((pk) => hexPubkey(pk) ?? pk));
     // never let retention eat relay-signed NIP-29 state
     if (!rule.kinds?.length || rule.kinds.some((k) => GROUP_META.includes(k))) exempt.add(ctx.key.pubkey);
     try {

@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startRelay, type Relay } from "../harness/relay";
 import { RelayClient, newUser, now, sign } from "../harness/client";
+import { api } from "./admin-helpers";
 import { connectAs, connectAuthed, fetchIds, nip11, nip86, nip86ok, note, setRole, tryConnect, uniqueIp, waitClosed, withSettings } from "./policy-helpers";
 
 let relay: Relay;
@@ -302,6 +303,23 @@ describe("IP methods", () => {
     } finally {
       await nip86ok(relay, "unblockip", [`${net}.0/24`]);
     }
+  });
+
+  test("regression: an IPv6 rule is stored in one spelling, so any spelling unblocks it and it disconnects", async () => {
+    const tail = Math.floor(Math.random() * 0xfff0 + 1).toString(16);
+    const canonical = `2001:db8::${tail}`;
+    const open = await connectAs(relay, canonical);
+    await nip86ok(relay, "blockip", [`2001:DB8:0:0::${tail.toUpperCase()}`, "v6"]);
+    await waitClosed(open);
+    expect(await nip86ok(relay, "listblockedips")).toContainEqual({ ip: canonical, reason: "v6" });
+    // the REST API sees the same rule, and a second spelling doesn't add another
+    expect((await api(relay.http, relay.owner.sk, "POST", "/ip-rules", { cidr: `2001:0db8::${tail}`, action: "block", reason: "v6" })).body.cidr).toBe(canonical);
+    expect((await nip86ok(relay, "listblockedips")).filter((r: { ip: string }) => r.ip.startsWith("2001:db8::")).length).toBe(1);
+    await nip86ok(relay, "unblockip", [`2001:0DB8:0000::${tail}`]);
+    expect((await nip86ok(relay, "listblockedips")).some((r: { ip: string }) => r.ip === canonical)).toBe(false);
+    const ok = await tryConnect(relay, canonical);
+    expect(ok.closed).toBe(false);
+    ok.client.close();
   });
 
   test("blockip refuses an invalid address", async () => {

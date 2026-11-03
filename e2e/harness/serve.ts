@@ -12,6 +12,7 @@ const port = Number(process.env.E2E_PORT ?? 3399);
 const PLUGINS = join(import.meta.dir, "../../plugins");
 const relay = await startRelay({
   port,
+  publicHost: process.env.E2E_HOST,
   overrides: { plugins: { packages: [join(PLUGINS, "hello"), join(PLUGINS, "spam-filter")] } },
   extras: { pluginsEnabled: ["hello", "spam-filter"] },
 });

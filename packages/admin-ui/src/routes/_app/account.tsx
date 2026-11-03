@@ -1,9 +1,9 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
-import { Bell, BellOff, EyeOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Plus, ShieldCheck, Sun, Trash2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bell, BellOff, EyeOff, Fingerprint, KeyRound, Laptop, LogOut, Monitor, Moon, Plus, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import type { PushTopic } from "@beamhop/sdk/admin-contract";
+import type { PushTopic, SessionView } from "@beamhop/sdk/admin-contract";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -61,6 +61,7 @@ function AccountPage() {
         <PasswordCard hasPassword={me.hasPassword} />
         <TotpCard hasPassword={me.hasPassword} enabled={me.hasTotp} />
         <PasskeysCard passkeys={me.passkeys} hasPassword={me.hasPassword} />
+        <SessionsCard />
         <PushCard />
         <PrivacyCard />
         <ThemeCard />
@@ -313,6 +314,81 @@ function ReauthDialog({ reauth, action, busy, onCancel, onSubmit }: { reauth: Re
         <p className="pb-2 text-sm text-muted-foreground">For your security, sign out and sign in again, then {action} within 15 minutes.</p>
       )}
     </ResponsiveDialog>
+  );
+}
+
+/** "Chrome on macOS" from a user agent; the raw string is in the tooltip. */
+function deviceName(ua: string | null): string {
+  if (!ua) return "Unknown device";
+  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : null;
+  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac OS X/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : null;
+  return browser && os ? `${browser} on ${os}` : (browser ?? os ?? ua.slice(0, 40));
+}
+
+const METHOD_LABEL: Record<SessionView["method"], string> = { nostr: "Nostr key", password: "password", passkey: "passkey", unknown: "unknown method" };
+
+function SessionsCard() {
+  const confirm = useConfirm();
+  const { data, isLoading } = useQuery({ queryKey: ["sessions"], queryFn: () => api.get<{ items: SessionView[] }>("/auth/sessions").then((r) => r.items) });
+  const end = useApiMutation({ fn: (id: string) => api.del(`/auth/sessions/${enc(id)}`), invalidate: [["sessions"]], success: "Session ended" });
+  const endOthers = useApiMutation({
+    fn: () => api.post<{ ended: number }>("/auth/sessions/end-others"),
+    invalidate: [["sessions"]],
+    success: (r) => `Signed out of ${r.ended} other session${r.ended === 1 ? "" : "s"}`,
+  });
+  const others = (data ?? []).filter((s) => !s.current);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Laptop className="size-4" /> Sessions
+        </CardTitle>
+        <CardDescription>Browsers signed in to this panel as you. End any you don’t recognize.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {(data ?? []).map((s) => (
+          <div key={s.id} className="flex items-center gap-3 rounded-lg border p-3">
+            <Laptop className="size-5 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium" title={s.userAgent ?? undefined}>
+                {deviceName(s.userAgent)}
+                {s.current && <span className="ml-2 text-xs font-normal text-success">this device</span>}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {s.ip ?? "unknown IP"} · signed in with {METHOD_LABEL[s.method]} {timeAgo(s.createdAt)} · active {timeAgo(s.lastSeenAt)}
+              </p>
+            </div>
+            {!s.current && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-destructive"
+                aria-label="End session"
+                disabled={end.isPending}
+                onClick={async () => {
+                  if (await confirm({ title: `Sign out ${deviceName(s.userAgent)}?`, destructive: true, confirmText: "Sign out" })) end.mutate(s.id);
+                }}
+              >
+                <LogOut />
+              </Button>
+            )}
+          </div>
+        ))}
+      </CardContent>
+      <CardFooter className="justify-end">
+        <Button
+          variant="outline"
+          disabled={!others.length || endOthers.isPending}
+          onClick={async () => {
+            if (await confirm({ title: "Sign out of all other sessions?", description: "Every other browser signed in as you is signed out, along with its push notifications.", destructive: true, confirmText: "Sign out others" }))
+              endOthers.mutate();
+          }}
+        >
+          <LogOut /> Sign out other sessions
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }
 
