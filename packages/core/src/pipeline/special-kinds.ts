@@ -123,6 +123,9 @@ async function applyVanish(ctx: RelayContext, event: NostrEvent): Promise<{ dele
   const pk = event.pubkey;
   const until = event.created_at;
   let marked = false;
+  // a marker at or past this request means it (or a later one) was applied already: a replay of it — anyone can
+  // re-send a signed request, and it isn't always stored — must not delete wraps that arrived since
+  const replayed = (ctx.vanished.get(pk) ?? -1) >= until;
   // Throwaway keys could otherwise grow the vanish list without bound: only pubkeys the relay knows
   // (a user record or stored events) get a lasting marker, up to MAX_VANISH_MARKERS of them.
   const known = !!(await ctx.users.get(pk)) || (await ctx.stores.events.query([{ authors: [pk], limit: 2 }])).some((e) => e.id !== event.id);
@@ -142,7 +145,8 @@ async function applyVanish(ctx: RelayContext, event: NostrEvent): Promise<{ dele
   // (they're signed by throwaway keys, so the author-based vanish check can't stop a re-broadcast).
   let n = await ctx.stores.events.deleteByPubkey(pk, until);
   for (;;) {
-    const wraps = await ctx.stores.events.query([{ kinds: [1059], "#p": [pk], limit: 1000 }], { maxLimit: 1000 });
+    if (replayed) break;
+    const wraps = await ctx.stores.events.query([{ kinds: [1059], "#p": [pk], until, limit: 1000 }], { maxLimit: 1000 });
     if (!wraps.length) break;
     const removed = await ctx.stores.events.deleteByIds(wraps.map((w) => w.id), { tombstone: event.id });
     n += removed;
