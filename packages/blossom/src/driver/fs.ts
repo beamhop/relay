@@ -91,6 +91,13 @@ export function createFsDriver(root: string): BlobDriver {
 
   return {
     name: "fs",
+    async check() {
+      await mkdir(root, { recursive: true });
+      const probe = join(root, `.probe.${randomBytes(6).toString("hex")}.tmp`);
+      const fh = await open(probe, "wx");
+      await fh.close();
+      await unlink(probe);
+    },
     async put(sha256, data) {
       assertSha256(sha256);
       await writeAtomic(sha256, sha256, data);
