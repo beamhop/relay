@@ -181,6 +181,17 @@ describe("s3 presence and sizes", () => {
     expect(s.log).toEqual([`HEAD ${sha}`]);
   });
 
+  // regression: an object removed from the bucket behind our back stayed "known" for presenceCacheMs, so a
+  // re-upload in that window skipped the PUT and the blob kept answering 404
+  test("a GET that finds the object gone drops it from the presence cache", async () => {
+    const s = faultyS3();
+    const d = driverFor(s);
+    await d.put(sha, new Uint8Array([1]), "image/png");
+    s.objects.delete(sha);
+    expect(await d.get(sha)).toBeUndefined();
+    expect(await d.has(sha, { size: 1 })).toBe(false);
+  });
+
   test("a GET without Content-Length reports an unknown size, not 0", async () => {
     const s = faultyS3();
     const d = driverFor(s);
