@@ -22,6 +22,14 @@ import {
   withQuerySlot,
 } from "./read-guard";
 import { eventSize, isSearchFilter, SEARCH_MAX_LIMIT } from "./read-limits";
+import { LogThrottle } from "../util/log-throttle";
+
+/** one "REQ query failed" line per distinct error per 10 s (a database outage fails every REQ) */
+const failures = new LogThrottle();
+function logQueryFailure(ctx: RelayContext, err: unknown, subId: string) {
+  const t = failures.take(String(err).slice(0, 200));
+  if (t.log) ctx.logger.error("REQ query failed", { err: String(err), subId, ...(t.suppressed ? { repeated: t.suppressed } : {}) });
+}
 
 // ------------------------------------------------------------------ REQ / CLOSE
 
@@ -187,7 +195,7 @@ async function streamStored(
     pages = r.value;
   } catch (err) {
     if (signal.aborted) return null;
-    ctx.logger.error("REQ query failed", { err: String(err), subId });
+    logQueryFailure(ctx, err, subId);
     return refuse("error: query failed");
   }
   if (signal.aborted || conn.subs.get(subId) !== sub) return null;
@@ -279,7 +287,7 @@ async function streamStored(
   } catch (err) {
     if (err instanceof StreamEnded) return err.reason ? refuse(err.reason) : null;
     if (signal.aborted) return null;
-    ctx.logger.error("REQ query failed", { err: String(err), subId });
+    logQueryFailure(ctx, err, subId);
     return refuse("error: query failed");
   } finally {
     if (held > 0) free(held);
