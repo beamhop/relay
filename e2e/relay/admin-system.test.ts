@@ -34,7 +34,7 @@ describe("system and metrics", () => {
   test("GET /system describes this instance", async () => {
     const r = await api(relay.http, owner(), "GET", "/system");
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ runtime: "bun", dbDialect: "sqlite", publicUrl: relay.http, blossomEnabled: true, geoipEnabled: false });
+    expect(r.body).toMatchObject({ runtime: "bun", dbDialect: process.env.BEAMHOP_E2E_PG ? "postgres" : "sqlite", publicUrl: relay.http, blossomEnabled: true, geoipEnabled: false });
     expect(r.body.relayPubkey).toMatch(/^[0-9a-f]{64}$/);
     expect(r.body.nips).toEqual(expect.arrayContaining([1, 11, 42]));
     const nip11 = await (await fetch(relay.http, { headers: { Accept: "application/nostr+json" } })).json();

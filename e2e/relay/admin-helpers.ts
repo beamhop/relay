@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from "nostr-tools";
 import { bytesToHex } from "nostr-tools/utils";
 import { createBeamhop, loadConfig, serve } from "@beamhop/server";
-import { freePort } from "../harness/relay";
+import { e2eDatabase, freePort } from "../harness/relay";
 import { now, sha256, type ApiResult } from "../harness/client";
 
 const nonce = () => randomBytes(8).toString("hex");
@@ -156,7 +156,7 @@ export async function bootRelay(opts: { dir?: string; ownerSk?: Uint8Array; over
   const base = {
     logLevel: "error",
     server: { host: "127.0.0.1", port, publicUrl: http },
-    database: { driver: "sqlite", sqlitePath: join(dir, "e2e.db") },
+    database: await e2eDatabase(dir),
     blossom: { fsPath: join(dir, "blobs") },
     admin: { owners: [pubkey] },
     plugins: { dir: join(dir, "plugins") },
