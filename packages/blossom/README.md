@@ -79,6 +79,9 @@ may differ from what the client uploaded. In that case `nip94` contains `["ox", 
   be re-encoded as **JPEG**, but the prebuilt sharp binaries (as in the Docker image) can't decode HEVC, so in
   practice HEIC/HEIF photos that carry EXIF/XMP are rejected with `415` and a message asking for JPEG/PNG/WebP. The
   same applies without sharp (and to every TIFF) — nothing is published with location data it couldn't remove.
+- Fail closed: a JPEG/PNG/WebP that still contains an EXIF or XMP payload after stripping (one the pure-JS walker
+  can't parse, e.g. junk bytes between JPEG segments or a truncated last chunk, which decoders read fine) is refused
+  with `415` rather than stored as it came.
 - With sharp, images it considers clean are stored byte-identical (the client's hash keeps matching), except PNGs
   whose text chunks hold a metadata profile libvips doesn't see (`Raw profile type exif/xmp/iptc`, `XML:com.adobe.xmp`,
   which can carry GPS): those still get the pure-JS pass.

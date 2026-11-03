@@ -7,7 +7,7 @@
  *   APP1 holding only that tag, so the photo still displays upright.
  * - PNG: eXIf, tEXt, zTXt, iTXt and tIME chunks.
  * - WebP: EXIF and XMP chunks (VP8X flags and RIFF size are updated).
- * Malformed input is returned unchanged.
+ * Malformed input is returned unchanged (`hasLeftoverMetadata` tells the caller whether that left metadata behind).
  *
  * The walkers only record the byte ranges to drop and then copy the spans between them once, so memory never grows
  * with the number of segments/chunks (a 100 MiB body of 2-byte JPEG markers once meant millions of views and
@@ -136,7 +136,7 @@ function scanJpeg(data: Uint8Array): JpegScan | undefined {
       break;
     }
     if (marker === 0xda) {
-      scan.end = primaryEnd(data, segStart);
+      scan.end = primaryEnd(data, segStart, scan);
       break;
     }
     // standalone RST/TEM markers belong inside entropy-coded data, never between header segments
@@ -164,9 +164,11 @@ function scanJpeg(data: Uint8Array): JpegScan | undefined {
 /**
  * Offset just past the EOI of the image whose first SOS marker is at `sos`: entropy-coded data runs until a marker
  * other than byte stuffing (FF00) or a restart (RSTn); progressive scans are separated by length-delimited segments
- * (DHT, SOS, …). -1 when it never ends (truncated) or is malformed. One pass, no allocation.
+ * (DHT, SOS, …). -1 when it never ends (truncated) or is malformed. One pass, no allocation. Metadata segments
+ * between those scans (decoders read them; an APP1 there carries EXIF like one in the header) are added to `scan`'s
+ * drops.
  */
-function primaryEnd(data: Uint8Array, sos: number): number {
+function primaryEnd(data: Uint8Array, sos: number, scan: JpegScan): number {
   let i = sos;
   for (let n = 0; n < MAX_JPEG_SEGMENTS; n++) {
     // i: the FF of a length-delimited segment
@@ -175,6 +177,10 @@ function primaryEnd(data: Uint8Array, sos: number): number {
     const len = (data[i + 2] << 8) | data[i + 3];
     let j = i + 2 + len;
     if (len < 2 || j > data.length) return -1;
+    if (JPEG_STRIP_MARKERS.has(marker)) {
+      scan.metadata = true;
+      drop(scan.drops, i, j);
+    }
     if (marker === 0xda) {
       for (;;) {
         j = data.indexOf(0xff, j);
@@ -299,6 +305,43 @@ export function stripWebpMetadata(data: Uint8Array): StripResult {
   if (vp8xFlags >= 0) out[vp8xFlags] &= ~(0x08 | 0x04); // clear EXIF + XMP flags
   new DataView(out.buffer).setUint32(4, out.length - 8, true);
   return { data: out, stripped: true };
+}
+
+const EXIF_NEEDLE = Uint8Array.from(EXIF_HEADER);
+const XMP_NAMESPACE = new TextEncoder().encode("http://ns.adobe.com/xap/");
+
+function indexOf(hay: Uint8Array, needle: Uint8Array): number {
+  const first = needle[0];
+  for (let i = hay.indexOf(first); i >= 0 && i + needle.length <= hay.length; i = hay.indexOf(first, i + 1)) {
+    let k = 1;
+    while (k < needle.length && hay[i + k] === needle[k]) k++;
+    if (k === needle.length) return i;
+  }
+  return -1;
+}
+
+/** Whether a WebP has an EXIF or XMP chunk; tolerant of a truncated or oversized last chunk. */
+function webpHasMetadataChunk(data: Uint8Array): boolean {
+  if (data.length < 12) return false;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  for (let i = 12, n = 0; i + 8 <= data.length && n < MAX_CHUNKS; n++) {
+    const fourcc = String.fromCharCode(data[i], data[i + 1], data[i + 2], data[i + 3]);
+    if (fourcc === "EXIF" || fourcc === "XMP ") return true;
+    const size = view.getUint32(i + 4, true);
+    i += 8 + size + (size & 1);
+  }
+  return false;
+}
+
+/**
+ * Whether JPEG/PNG/WebP bytes still carry EXIF/XMP: the check behind "strip or refuse". The walkers above give up
+ * on input they consider malformed (junk between JPEG segments, a stray marker, an over-long last chunk) and hand it
+ * back unchanged, though decoders read such files fine, metadata included.
+ */
+export function hasLeftoverMetadata(data: Uint8Array, mime: string): boolean {
+  if (mime === "image/png" && pngHasPrivateText(data)) return true;
+  if (mime === "image/webp" && webpHasMetadataChunk(data)) return true;
+  return indexOf(data, EXIF_NEEDLE) >= 0 || indexOf(data, XMP_NAMESPACE) >= 0;
 }
 
 export function stripMetadata(data: Uint8Array, mime: string): StripResult {
