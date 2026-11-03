@@ -13,6 +13,7 @@ import {
   admitSearch,
   authReadDenied,
   meteredStore,
+  ReadRefused,
   READ_RATE_ERROR,
   type ReadStore,
   readRate,
@@ -187,6 +188,7 @@ async function streamStored(
     pages = r.value;
   } catch (err) {
     if (signal.aborted) return null;
+    if (err instanceof ReadRefused) return refuse(err.message);
     ctx.logger.error("REQ query failed", { err: String(err), subId });
     return refuse("error: query failed");
   }
@@ -279,6 +281,7 @@ async function streamStored(
   } catch (err) {
     if (err instanceof StreamEnded) return err.reason ? refuse(err.reason) : null;
     if (signal.aborted) return null;
+    if (err instanceof ReadRefused) return refuse(err.message);
     ctx.logger.error("REQ query failed", { err: String(err), subId });
     return refuse("error: query failed");
   } finally {
