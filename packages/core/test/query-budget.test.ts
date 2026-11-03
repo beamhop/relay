@@ -65,3 +65,36 @@ describe("query-time budgets for plain reads", () => {
     expect((await c.req("b", { kinds: [1] })).end[0]).toBe("EOSE");
   });
 });
+
+describe("reads queued behind their slot are re-admitted when they run", () => {
+  test("a pipelined burst of COUNTs runs a few queries, not the whole burst on the balance it arrived at", async () => {
+    const env = await slowStore(QUERY_MS_PER_MINUTE.ipBurst + 1_000);
+    let calls = 0;
+    const count = env.stores.events.count.bind(env.stores.events);
+    env.stores.events.count = async (...a) => (calls++, count(...a));
+    const c = env.connect("10.0.0.1");
+    const from = c.socket.sent.length;
+    const n = 40;
+    for (let i = 0; i < n; i++) c.send(["COUNT", `c${i}`, { since: 0 }, { since: 1 }, { since: 2 }]);
+    for (let i = 0; i < n; i++) await c.socket.waitFor((m) => m[1] === `c${i}`, 2000, from);
+    const answers = c.socket.sent.slice(from).filter((m) => typeof m[1] === "string" && m[1].startsWith("c"));
+    const counted = answers.filter((m) => m[0] === "COUNT").length;
+    expect(counted).toBeGreaterThan(0);
+    // at most the queries already running when the budget went into debt
+    expect(calls).toBeLessThan(8);
+    expect(answers.filter((m) => m[0] === "CLOSED").every((m) => String(m[2]).startsWith("rate-limited:"))).toBe(true);
+    expect(answers.length).toBe(n);
+  });
+
+  test("REQs queued behind one connection's slots are refused once the address is in debt", async () => {
+    const env = await slowStore(QUERY_MS_PER_MINUTE.ipBurst + 1_000);
+    let calls = 0;
+    const query = env.stores.events.query.bind(env.stores.events);
+    env.stores.events.query = async (...a) => (calls++, query(...a));
+    const c = env.connect("10.0.0.2");
+    const from = c.socket.sent.length;
+    for (let i = 0; i < 20; i++) c.send(["REQ", `r${i}`, { kinds: [1] }]);
+    for (let i = 0; i < 20; i++) await c.socket.waitFor((m) => m[1] === `r${i}` && (m[0] === "EOSE" || m[0] === "CLOSED"), 2000, from);
+    expect(calls).toBeLessThan(8);
+  });
+});

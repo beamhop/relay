@@ -51,7 +51,39 @@ const MIME_TO_EXT: Record<string, string> = {
   "text/javascript": "js",
 };
 
-const SVG_START = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>/]/i;
+/**
+ * Whether `text` starts like an SVG document: BOM, an XML prolog, comments and one doctype may precede `<svg`. A linear
+ * scan: a regex with repeated lazy comment groups backtracks exponentially on input like `<!---->` \u00D7 40 that fails
+ * to match (hundreds of ms of event loop per few-hundred-byte upload).
+ */
+function startsLikeSvg(text: string): boolean {
+  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const skipSpace = () => {
+    while (i < text.length && /\s/.test(text[i])) i++;
+  };
+  skipSpace();
+  if (text.startsWith("<?xml", i)) {
+    const end = text.indexOf("?>", i);
+    if (end < 0 || text.slice(i, end).includes(">")) return false;
+    i = end + 2;
+    skipSpace();
+  }
+  let doctype = false;
+  for (;;) {
+    if (text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      if (end < 0) return false;
+      i = end + 3;
+    } else if (!doctype && text.slice(i, i + 9).toUpperCase() === "<!DOCTYPE") {
+      const end = text.indexOf(">", i);
+      if (end < 0) return false;
+      i = end + 1;
+      doctype = true;
+    } else break;
+    skipSpace();
+  }
+  return /^<svg[\s>/]/i.test(text.slice(i, i + 5));
+}
 /** How much of an unrecognised blob is looked at to tell text (and SVG) from binary. */
 const SNIFF_BYTES = 64 * 1024;
 
@@ -64,7 +96,7 @@ const SNIFF_BYTES = 64 * 1024;
 export function typeOfUnrecognized(data: Uint8Array, declared: string | undefined): string {
   const text = sniffText(data);
   if (text === undefined) return DEFAULT_MIME;
-  if (SVG_START.test(text)) return "image/svg+xml";
+  if (startsLikeSvg(text)) return "image/svg+xml";
   if (declared && (declared.startsWith("text/") || declared === "application/json")) return declared;
   return DEFAULT_MIME;
 }
@@ -72,7 +104,7 @@ export function typeOfUnrecognized(data: Uint8Array, declared: string | undefine
 /** Whether the bytes are UTF-8 text starting like an SVG document (an XML prolog, comments and a doctype allowed). */
 export function isSvgText(data: Uint8Array): boolean {
   const text = sniffText(data);
-  return text !== undefined && SVG_START.test(text);
+  return text !== undefined && startsLikeSvg(text);
 }
 
 /** The first SNIFF_BYTES as text, or undefined when they aren't UTF-8 text. */

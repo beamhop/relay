@@ -144,10 +144,20 @@ export async function withQuerySlot<T>(ctx: RelayContext, signal: AbortSignal | 
   if (gate === "busy") return { reason: "rate-limited: relay is busy, try again shortly" };
   try {
     return { value: await fn() };
+  } catch (err) {
+    if (err instanceof ReadRefused) return { reason: err.message };
+    throw err;
   } finally {
     ctx.reads.queries.release();
   }
 }
+
+/**
+ * Thrown by a metered store call refused when it was about to run: admission (admitQuery) only sees the budgets when a
+ * read arrives, and a burst of reads queued behind the per-connection and relay-wide slots would otherwise all run on
+ * the balance they were admitted at — minutes of synchronous sqlite time from one client's pipelined COUNTs.
+ */
+export class ReadRefused extends Error {}
 
 /** The event store calls reads make (metered per connection for plain reads, see meteredStore). */
 export type ReadStore = Pick<EventStore, "query" | "count" | "queryIdsForSync">;
@@ -164,11 +174,22 @@ export function admitQuery(ctx: RelayContext, conn: Connection, staff: boolean):
   return undefined;
 }
 
-/** The event store with each query's measured time charged to the query-time budgets (QUERY_MS_PER_MINUTE). */
+/**
+ * The event store with each query's measured time charged to the query-time budgets (QUERY_MS_PER_MINUTE). One per
+ * read (REQ, COUNT, NEG-OPEN): its first query re-runs admission.
+ */
 export function meteredStore(ctx: RelayContext, conn: Connection, staff: boolean): ReadStore {
   const events = ctx.stores.events;
   const Q = QUERY_MS_PER_MINUTE;
+  let readmitted = false;
   const timed = async <T>(q: () => Promise<T>): Promise<T> => {
+    // re-admitted when the read starts running: the budgets may have gone into debt while it waited for its slot.
+    // Once, so a read that went into debt doesn't lose the follow-up queries (pages, visibility checks) of its result.
+    if (!readmitted) {
+      readmitted = true;
+      const refused = admitQuery(ctx, conn, staff);
+      if (refused) throw new ReadRefused(refused);
+    }
     const t0 = performance.now();
     try {
       return await q();

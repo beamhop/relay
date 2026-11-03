@@ -396,6 +396,21 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
     await next();
   });
 
+  // IP block rules cover the public HTTP surfaces (Blossom, invite redemption, plugin routes, NIP-11/05) like they
+  // cover websockets. The admin panel/API and NIP-86 stay reachable (they need an admin's signature or session), so a
+  // too-broad block can still be lifted; so do the health probes.
+  if (d.relay.checkIp) {
+    const checkIp = d.relay.checkIp.bind(d.relay);
+    app.use("*", async (c, next) => {
+      const ip = c.env?.ip;
+      const p = c.req.path;
+      if (!ip || p === "/admin" || p.startsWith("/admin/") || p === "/health" || p.startsWith("/health/") || p === "/metrics") return next();
+      if (p === "/" && c.req.method === "POST" && isNip86(c.req.raw)) return next();
+      if (!checkIp(ip).blocked) return next();
+      return c.json({ error: "blocked: your address is not allowed to use this relay" }, 403, { "cache-control": "no-store" });
+    });
+  }
+
   // 2. NIP-86 relay management API
   app.post("/", async (c, next) => {
     if (!isNip86(c.req.raw)) return next();
@@ -434,7 +449,7 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
   // 5. plugin public routes
   const pluginRoute = async (c: Context<{ Bindings: ServerEnv }>) => {
     const res = await d.plugins.handlePublic(c.req.param("name")!, c.req.raw, c.env);
-    return res ?? c.json({ error: "plugin not found" }, 404);
+    return res ? withPluginDefaults(res) : c.json({ error: "plugin not found" }, 404);
   };
   app.all("/plugins/:name", pluginRoute);
   app.all("/plugins/:name/*", pluginRoute);
@@ -512,4 +527,18 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
 
   app.notFound((c) => c.text("not found", 404));
   return app;
+}
+
+/**
+ * Plugin public routes share the admin panel's origin, so script running in one of their pages could call the admin
+ * API with the panel's cookie. Unless a plugin sets its own policy, its responses can't run script or be framed.
+ */
+export const PLUGIN_PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";
+
+function withPluginDefaults(res: Response): Response {
+  if (res.status < 200 || (res.headers.has("content-security-policy") && res.headers.has("x-content-type-options"))) return res;
+  const out = new Response(res.body, res);
+  if (!out.headers.has("content-security-policy")) out.headers.set("content-security-policy", PLUGIN_PUBLIC_CSP);
+  if (!out.headers.has("x-content-type-options")) out.headers.set("x-content-type-options", "nosniff");
+  return out;
 }

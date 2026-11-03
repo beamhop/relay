@@ -1,6 +1,6 @@
 import type { BeamhopConfig, Db, Dialect, Logger, Migration } from "@beamhop/sdk";
 import { isBun, yieldToEventLoop } from "@beamhop/sdk";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -27,12 +27,33 @@ const keepLeadingBom = (p: unknown) => {
 };
 const bunParams = (params: unknown[] = []) => params.map(keepLeadingBom);
 
+/**
+ * The database holds the relay's secret key, the VAPID key, TOTP secrets and password hashes: a directory created for it
+ * is owner-only, and the database file and its WAL/SHM siblings lose any group/other permission bits (sqlite creates the
+ * siblings with the main file's mode, so this also covers ones created later).
+ */
+function restrictSqliteFiles(path: string): void {
+  for (const f of [path, `${path}-wal`, `${path}-shm`, `${path}-journal`]) {
+    try {
+      if (!existsSync(f)) continue;
+      const mode = statSync(f).mode & 0o777;
+      if (mode & 0o077) chmodSync(f, mode & 0o700);
+    } catch {
+      // not ours to change (e.g. a read-only bind mount): leave it
+    }
+  }
+}
+
 async function openSqlite(path: string): Promise<SqliteDriver> {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const restrict = () => {
+    if (path !== ":memory:" && !path.startsWith("file:")) restrictSqliteFiles(path);
+  };
   if (isBun) {
     const mod = "bun:sqlite";
     const { Database } = (await import(/* @vite-ignore */ mod)) as typeof import("bun:sqlite");
     const db = new Database(path, { create: true, strict: true });
+    restrict();
     const cache = new Map<string, ReturnType<typeof db.prepare>>();
     const stmt = (sql: string) => {
       let s = cache.get(sql);
@@ -57,6 +78,7 @@ async function openSqlite(path: string): Promise<SqliteDriver> {
   }
   const { default: Database } = await import("better-sqlite3");
   const db = new Database(path);
+  restrict();
   const cache = new Map<string, import("better-sqlite3").Statement<unknown[]>>();
   const stmt = (sql: string) => {
     let s = cache.get(sql);

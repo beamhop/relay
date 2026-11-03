@@ -21,7 +21,7 @@ import {
   NEG_OPEN_WAIT_MS,
   NEG_SESSION_TTL_MS,
 } from "./limits";
-import { admitQuery, authReadDenied, meteredStore, READ_RATE_ERROR, type ReadStore, readRate } from "./read-guard";
+import { admitQuery, authReadDenied, meteredStore, READ_RATE_ERROR, ReadRefused, type ReadStore, readRate } from "./read-guard";
 import { filterVisible, hiddenIds } from "./visibility-scan";
 
 // ------------------------------------------------------------------ NIP-77 negentropy
@@ -154,6 +154,7 @@ async function openNegSession(
         exclude = items.filter((it) => !ok.has(it.id));
       }
     } catch (err) {
+      if (err instanceof ReadRefused) return negErr(err.message);
       ctx.logger.error("NEG-OPEN query failed", { err: String(err) });
       return negErr("error: query failed");
     }
