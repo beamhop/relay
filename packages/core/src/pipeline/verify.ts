@@ -1,4 +1,5 @@
 import type { NostrEvent } from "@beamhop/sdk";
+import { createHash } from "node:crypto";
 import { getEventHash } from "nostr-tools/pure";
 import { Lru } from "../util/lru";
 import { schnorrOk } from "./schnorr";
@@ -69,6 +70,7 @@ export class Verifier {
     let hash: string;
     try {
       hash = getEventHash(ev);
+      if (hash !== ev.id && hasRawControl(ev)) hash = specEventHash(ev);
     } catch {
       return false;
     }
@@ -78,4 +80,24 @@ export class Verifier {
     if (this.cache.get(key)) return true;
     return { id: ev.id, pubkey: ev.pubkey, sig: ev.sig, key };
   }
+}
+
+/** Control characters JSON.stringify writes as \u00XX, but NIP-01 serializes verbatim (all but \n \r \t \b \f). */
+const RAW_CONTROL = /[\u0000-\u0007\u000b\u000e-\u001f]/;
+const SPEC_ESCAPES: Record<string, string> = { "\n": "\\n", '"': '\\"', "\\": "\\\\", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f" };
+const specString = (s: string) => `"${s.replace(/[\n"\\\r\t\b\f]/g, (c) => SPEC_ESCAPES[c])}"`;
+
+function hasRawControl(ev: Pick<NostrEvent, "tags" | "content">): boolean {
+  return RAW_CONTROL.test(ev.content) || ev.tags.some((t) => t.some((v) => RAW_CONTROL.test(v)));
+}
+
+/**
+ * The id as NIP-01 specifies it: only \n \" \\ \r \t \b \f are escaped, "all other characters must be included
+ * verbatim". JSON.stringify (getEventHash) escapes the other control characters as \u00XX instead, and most clients
+ * sign that way, so an event matching either serialization is accepted.
+ */
+function specEventHash(ev: Omit<NostrEvent, "sig">): string {
+  const tags = `[${ev.tags.map((t) => `[${t.map(specString).join(",")}]`).join(",")}]`;
+  const body = `[0,${specString(ev.pubkey)},${ev.created_at},${ev.kind},${tags},${specString(ev.content)}]`;
+  return createHash("sha256").update(body, "utf8").digest("hex");
 }

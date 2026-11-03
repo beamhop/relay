@@ -233,8 +233,10 @@ export class SqlEventStore implements EventStore {
     if (await tx.get("SELECT 1 AS x FROM events WHERE id = ?", [event.id])) {
       return { status: "duplicate", message: "duplicate: already have this event" };
     }
+    // NIP-09 / NIP-62: a deletion request naming a deletion request or a request to vanish has no effect
     if (
       event.kind !== 5 &&
+      event.kind !== 62 &&
       (await tx.get("SELECT 1 AS x FROM deleted_events WHERE pubkey = ? AND ref = ?", [event.pubkey, event.id]))
     ) {
       return { status: "deleted", message: "blocked: this event has been deleted" };
