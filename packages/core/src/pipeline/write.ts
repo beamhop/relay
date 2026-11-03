@@ -108,13 +108,16 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
   if (vanishedAt !== undefined && event.kind !== KIND_VANISH && event.created_at <= vanishedAt) return reject("blocked: pubkey has requested to vanish from this relay");
   if (user?.status === "muted" && !selfCleanup) return shadow("pubkey muted");
   // their deletions / vanish requests still take effect, but aren't stored or relayed (no way around the ban or mute)
-  const quiet = !!user && (user.denied || user.status === "banned" || user.status === "muted");
+  let quiet = !!user && (user.denied || user.status === "banned" || user.status === "muted");
 
   if (external && conn) {
     // ---- access mode, NIP-70
     if (!vanish) {
       const denied = (await checkAccess(ctx, event, user, conn)) ?? checkProtected(event, conn);
       if (denied) return reject(denied);
+    } else if (checkProtected(event, conn)) {
+      // NIP-70: a protected request to vanish not sent by its author still takes effect (NIP-62), but isn't stored or relayed
+      quiet = true;
     }
     // ---- replays of stored (or recently relayed ephemeral) events change nothing: answered before anyone's rate limit is charged
     if (isEphemeral(event.kind) ? ephemeralSeen(ctx, event.id) : await ctx.stores.events.getById(event.id)) {

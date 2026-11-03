@@ -201,6 +201,18 @@ describe("NIP-62 request to vanish", () => {
     await publishOk(c, sign(u.sk, { kind: 62, content: "", tags: [["relay", relay.ws]], created_at: now() - 5 }));
     expect(ids(await q(c, [{ ids: [keep.id] }]))).toEqual([keep.id]);
   });
+
+  // regression: NIP-70 "Relays that want to accept such events MUST first require that the client perform the NIP-42
+  // AUTH flow and then check if the authenticated client has the same pubkey". A protected request to vanish re-sent by
+  // anyone still takes effect (NIP-62), but must not be stored or relayed.
+  test("a protected request to vanish from an unauthenticated connection is not stored or relayed", async () => {
+    const c = await cs.connect(relay.ws);
+    const u = newUser();
+    await publishOk(c, sign(u.sk, { kind: 1, content: "x", created_at: now() - 10 }));
+    const vanish = sign(u.sk, { kind: 62, content: "", tags: [["relay", relay.ws], ["-"]], created_at: now() - 5 });
+    await c.publish(vanish);
+    expect(await q(c, [{ ids: [vanish.id] }])).toEqual([]);
+  });
 });
 
 // ------------------------------------------------------------------ NIP-56
