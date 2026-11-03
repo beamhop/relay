@@ -64,6 +64,8 @@ export class Connection implements ConnectionInfo {
   filterWeight = 0;
   /** NEG-OPENs being prepared (not yet in negSessions) */
   negOpening = 0;
+  /** the latest NEG-OPEN still being prepared, per sub id: a later NEG-OPEN, NEG-CLOSE or NEG-ERR for the id supersedes it */
+  readonly negOpens = new Map<string, object>();
   /** authenticated as relay staff, or connecting from an allow-listed IP: exempt from the inbound message limit */
   trusted = false;
   /** inbound messages per minute; raised for users with a rate-limit override (their own limits apply instead) */
