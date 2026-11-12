@@ -177,6 +177,10 @@ PostgreSQL URL including its password, so keep `data/` private.
 The old database is left untouched as a rollback point, marked with the date it was replaced, and listed in the panel
 until you delete it there. Switching back is a new full copy.
 
+Tables that rows are updated in place (users, settings, sessions, metrics, Blossom metadata, groups, plugin tables)
+are recopied whole during the pause; only events and the audit log are copied incrementally. On a relay with very
+large metrics tables the pause can hit its budget, in which case the switch is abandoned and nothing changes.
+
 Limits: one instance only. The switch is refused while another instance is running on the same database. Scaled
 PostgreSQL deployments switch the offline way: stop, `beamhop db copy --to-driver sqlite|postgres --to <path|url>`,
 change the config, start. Plugins that keep their own connections or caches outside `ctx.db` should implement

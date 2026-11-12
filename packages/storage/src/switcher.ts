@@ -94,6 +94,8 @@ export interface DatabaseSwitcherDeps {
 /** The switcher plus `whenIdle()` (resolves once no job is running: tests, shutdown). */
 export interface DatabaseSwitcherService extends DatabaseSwitcher {
   whenIdle(): Promise<void>;
+  /** id of the job still running (not done/failed/cancelled), for shutdown */
+  runningJobId(): string | undefined;
 }
 
 /** A refusal or failure with a message meant for the admin; `code` lets the admin API pick the HTTP status. */
@@ -633,5 +635,6 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
     cancel,
     deleteRollback,
     whenIdle: () => running,
+    runningJobId: () => (job && !["done", "failed", "cancelled"].includes(job.phase) ? job.id : undefined),
   };
 }

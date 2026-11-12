@@ -22,7 +22,11 @@ import {
   type RelayEngine,
   type SettingsService,
   type Stores,
+  type DatabaseStateFile,
+  type DatabaseTarget,
+  type SwitchableDb,
 } from "@beamhop/sdk";
+import type { DatabaseSwitcherService } from "@beamhop/storage";
 import type { ServerExtras } from "./config";
 import { createPluginManager, PluginError, type ServerPluginManager } from "./plugins/manager";
 import { PROMETHEUS_CONTENT_TYPE } from "@beamhop/metrics";
@@ -32,6 +36,8 @@ import { Lifecycle, runShutdown, shutdownBudgets } from "./lifecycle";
 import { LANDING_CSP, renderLanding } from "./landing";
 import { VERSION } from "./version";
 import { startInstanceHeartbeat, type InstanceHeartbeat } from "./instances";
+import { databaseEnvPinned } from "./config";
+import { readDatabaseState, writeDatabaseState } from "./database-state";
 
 export interface BeamhopFactories {
   createStores(config: BeamhopConfig, logger: Logger): Promise<Stores>;
@@ -53,6 +59,8 @@ export interface BeamhopOverrides {
   /** custom admin-ui asset source */
   assets?: AssetSource;
   cwd?: string;
+  /** whether env pins the database (disables runtime switching); default: from process.env */
+  databaseEnvPinned?: boolean;
 }
 
 /** Hono bindings passed by runtime adapters (compatible with hono/bun and @hono/node-server getConnInfo). */
@@ -86,6 +94,8 @@ export interface Beamhop {
   lifecycle: Lifecycle;
   /** this instance's heartbeat in kv, and the other instances sharing the database (runtime database switching) */
   instances: InstanceHeartbeat;
+  /** runtime database switching (absent when the stores can't switch) */
+  databaseSwitcher?: DatabaseSwitcherService;
   /** HTTP entry point for runtime adapters (counts in-flight requests; 503 while shutting down) */
   fetch(req: Request, env?: Partial<ServerEnv>): Response | Promise<Response>;
   /** starts relay jobs, metrics and plugins */
@@ -208,8 +218,9 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
       autoDiscoverNpm: overrides.autoDiscoverNpm ?? config.plugins.autoDiscoverNpm,
       cwd: overrides.cwd,
     });
+    const databaseSwitcher = await createSwitcher(config, stores, instances, logger.child("db-switch"), overrides.databaseEnvPinned);
     const adminApi = config.admin.enabled && f.createAdminApi
-      ? await f.createAdminApi({ ...base, logger: logger.child("admin"), relay, blossom, metrics, plugins, version: VERSION })
+      ? await f.createAdminApi({ ...base, logger: logger.child("admin"), relay, blossom, metrics, plugins, version: VERSION, databaseSwitcher })
       : undefined;
     const assets = overrides.assets ?? createAssetSource(config.admin.uiDir);
     if (config.admin.enabled) log.info(assets.kind === "none" ? "admin UI not built — serving placeholder at /admin" : `admin UI served from ${assets.location}`);
@@ -226,7 +237,7 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
     let started = false;
     let stopping: Promise<void> | undefined;
     const beamhop: Beamhop = {
-      config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION, tasks, lifecycle, instances,
+      config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION, tasks, lifecycle, instances, databaseSwitcher,
       fetch(req, env) {
         const ip = env?.ip ?? "127.0.0.1";
         return lifecycle.handle(req, () => app.fetch(req, { ...makeEnv(ip), ...env } as ServerEnv));
@@ -260,6 +271,12 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
                 ms: budget.drain,
                 run: {
                   http: (sc) => lifecycle.idle(sc.signal),
+                  // a switch still copying is cancelled; one already past the pause finishes (it never leaves writes paused)
+                  dbSwitch: databaseSwitcher && (async (sc) => {
+                    const job = databaseSwitcher.runningJobId();
+                    if (job) databaseSwitcher.cancel(job);
+                    await Promise.race([databaseSwitcher.whenIdle(), new Promise<void>((r) => sc.signal.addEventListener("abort", () => r(), { once: true }))]);
+                  }),
                   relay: relay.drain && ((sc) => relay.drain!(sc)),
                   admin: adminApi?.drain && ((sc) => adminApi.drain!(sc)),
                   blossom: blossom?.drain && ((sc) => blossom.drain!(sc)),
@@ -556,4 +573,39 @@ function withPluginDefaults(res: Response): Response {
   if (!out.headers.has("content-security-policy")) out.headers.set("content-security-policy", PLUGIN_PUBLIC_CSP);
   if (!out.headers.has("x-content-type-options")) out.headers.set("x-content-type-options", "nosniff");
   return out;
+}
+
+/**
+ * The runtime database switcher (admin panel: System → Database), when the stores are switchable and the server knows
+ * where to persist the choice.
+ */
+async function createSwitcher(
+  config: BeamhopConfig,
+  stores: Stores,
+  instances: InstanceHeartbeat,
+  logger: Logger,
+  envPinnedOverride?: boolean,
+): Promise<DatabaseSwitcherService | undefined> {
+  const swappable = (stores as Stores & { swappable?: SwitchableDb }).swappable;
+  const stateFile = config.database.stateFile;
+  if (!swappable || !stateFile) return undefined;
+  const storage = (await import("@beamhop/storage")) as unknown as { createDatabaseSwitcher(deps: unknown): DatabaseSwitcherService };
+  const { driver, sqlitePath, postgresUrl } = config.database;
+  return storage.createDatabaseSwitcher({
+    db: swappable,
+    logger,
+    initial: driver === "postgres" ? { driver, postgresUrl } : { driver, sqlitePath },
+    envPinned: envPinnedOverride ?? databaseEnvPinned(),
+    defaultPostgresUrl: postgresUrl || process.env.BEAMHOP_DATABASE_URL || undefined,
+    readState: () => readDatabaseState(stateFile),
+    writeState: (state: DatabaseStateFile) => writeDatabaseState(stateFile, state),
+    instances: () => instances.instances(),
+    audit: (e: { actor: string; action: string; target: string | null; details: Record<string, unknown> }) => stores.audit.record({ ...e, ip: null }),
+    onSwitched: (t: DatabaseTarget) => {
+      config.database.driver = t.driver;
+      if (t.sqlitePath) config.database.sqlitePath = t.sqlitePath;
+      config.database.postgresUrl = t.postgresUrl ?? (t.driver === "postgres" ? config.database.postgresUrl : undefined);
+      logger.info(`database switched to ${t.driver}`);
+    },
+  });
 }
