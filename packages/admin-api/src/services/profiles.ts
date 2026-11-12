@@ -68,4 +68,9 @@ export class ProfileService {
   invalidate(pubkey: string) {
     this.cache.delete(pubkey);
   }
+
+  /** Forgets every cached profile. */
+  clear() {
+    this.cache.clear();
+  }
 }

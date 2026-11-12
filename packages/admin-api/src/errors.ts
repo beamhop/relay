@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
-import type { ApiError, Logger } from "@beamhop/sdk";
+import { isDbSwitchingError, type ApiError, type Logger } from "@beamhop/sdk";
 
 export class HttpError extends Error {
   constructor(
@@ -19,6 +19,11 @@ export const unauthorized = (msg = "authentication required", code = "unauthoriz
 export const forbidden = (msg = "forbidden", code = "forbidden") => new HttpError(403, msg, code);
 export const notFound = (msg = "not found", code = "not_found") => new HttpError(404, msg, code);
 export const conflict = (msg: string, code = "conflict") => new HttpError(409, msg, code);
+
+/** The answer to a write refused while a database switch has writes paused: 503, retry after the given seconds. */
+export const DB_SWITCHING_MESSAGE = "database switch in progress, try again shortly";
+export const dbSwitching = (retryAfterSec = 5, msg = DB_SWITCHING_MESSAGE) =>
+  new HttpError(503, msg, "db_switching", { "Retry-After": String(Math.max(1, Math.ceil(retryAfterSec))) });
 
 interface ZodLikeError {
   name: string;
@@ -45,6 +50,11 @@ export function createErrorHandler(logger: Logger) {
       return c.json(errorBody(err.message, err.code), err.status);
     }
     if (isZodError(err)) return c.json(errorBody(zodMessage(err), "validation"), 400);
+    // a write refused while a database switch has writes paused: retryable, not a server fault
+    if (isDbSwitchingError(err)) {
+      c.header("Retry-After", String(Math.max(1, Math.ceil(err.retryAfterSec))));
+      return c.json(errorBody(DB_SWITCHING_MESSAGE, "db_switching"), 503);
+    }
     if (err instanceof HTTPException) {
       const status = err.status as ContentfulStatusCode;
       return c.json(errorBody(err.message || "request failed", status === 413 ? "too_large" : undefined), status);

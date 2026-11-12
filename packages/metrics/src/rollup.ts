@@ -1,5 +1,5 @@
 import type { Db, GeoPoint, TimeRange } from "@beamhop/sdk";
-import { upsertRows } from "@beamhop/sdk";
+import { isDbSwitchingError, upsertRows } from "@beamhop/sdk";
 import type { GeoInfo } from "./geo";
 
 const MINUTE = 60;
@@ -304,6 +304,12 @@ export class Rollup {
       });
       this.failedFlushes = 0;
     } catch (err) {
+      // writes paused by a database switch: kept as they are for the next flush, without spending the retry budget
+      if (isDbSwitchingError(err)) {
+        this.pendingMinutes.unshift(...minutes);
+        this.pendingHours.unshift(...hours);
+        throw err;
+      }
       if (countFailure) this.failedFlushes++;
       if (isPermanentDbError(err) || this.failedFlushes >= MAX_FLUSH_ATTEMPTS) {
         this.failedFlushes = 0;
@@ -331,6 +337,11 @@ export class Rollup {
       this.lastTrimmedHour = h;
       if (closedUpTo - h > 48 * HOUR) h = closedUpTo - HOUR; // don't walk ancient gaps one by one
     }
+  }
+
+  /** Drops cached query results (the database was switched at runtime). */
+  clearCache(): void {
+    this.longRangeCache.clear();
   }
 
   async prune(beforeSec: number): Promise<number> {

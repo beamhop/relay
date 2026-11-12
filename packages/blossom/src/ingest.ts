@@ -1,5 +1,5 @@
 import type { BlobStatus, UserRecord } from "@beamhop/sdk";
-import { nowSec as now } from "@beamhop/sdk";
+import { isDbSwitchingError, nowSec as now } from "@beamhop/sdk";
 import { discardIfUnreferenced } from "./admin-ops";
 import { BlossomError, sha256Hex } from "./http";
 import { DEFAULT_MIME, normalizeMime, typeOfUnrecognized } from "./mime";
@@ -112,6 +112,8 @@ export async function ingest(core: BlossomCore, input: IngestInput, user?: UserR
   try {
     verdict = await core.deps.hooks.runBlobUpload({ sha256, size: data.byteLength, type: storedType, pubkey: input.pubkey, ip: input.ip }, data);
   } catch (err) {
+    // a hook that writes to the database during a database switch: retryable (503 + Retry-After), not a policy failure
+    if (isDbSwitchingError(err)) throw err;
     // a hook that didn't answer in time fails closed, as "try again later" (duck-typed: the sdk's HookTimeoutError)
     if ((err as Error)?.name === "HookTimeoutError") {
       core.log.warn("blob upload hook timed out", { error: String(err) });

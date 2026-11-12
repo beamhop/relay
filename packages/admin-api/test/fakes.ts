@@ -450,6 +450,8 @@ export async function createHarness(
     /** any other AdminApiOptions (budgets, intervals) */
     apiOptions?: AdminApiOptions;
     storedOwner?: boolean;
+    /** runtime database switch hooks (stores.dbSwitch) */
+    dbSwitch?: Stores["dbSwitch"];
   } = {},
 ) {
   const owner = opts.owner ?? newKey();
@@ -463,6 +465,7 @@ export async function createHarness(
     ipRules: new FakeIpRuleStore(),
     kv: new FakeKv(),
     audit: new FakeAudit(),
+    ...(opts.dbSwitch ? { dbSwitch: opts.dbSwitch } : {}),
   };
   const config = ConfigSchema.parse({
     server: { publicUrl: PUBLIC_URL, trustProxy: opts.trustProxy ?? false },

@@ -1,4 +1,5 @@
 import { type Logger, whenAborted } from "@beamhop/sdk";
+import { logUnlessSwitching } from "../util/db-switching";
 
 type Timer = ReturnType<typeof setInterval>;
 /** A job gets the scheduler's signal: it fires at shutdown, so long jobs stop at their next safe point. */
@@ -29,7 +30,8 @@ export class Scheduler {
       try {
         await fn(signal);
       } catch (err) {
-        this.logger.error(`job ${name} failed`, { err: String(err) });
+        // writes refused during a database switch: the next run (interval) does it
+        logUnlessSwitching(this.logger, "error", `job ${name} failed`, err);
       } finally {
         this.running.delete(name);
       }

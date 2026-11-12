@@ -11,6 +11,7 @@ import { checkAccess, checkProtected } from "./access";
 import { checkPow } from "./pow";
 import { fileRelayReport, KIND_AUTH, KIND_DELETION, KIND_VANISH, NOT_STORED, prepareSpecial, vanishTargetsUs } from "./special-kinds";
 import { LogThrottle } from "../util/log-throttle";
+import { DB_SWITCHING_REASON, isDbSwitchingError, logUnlessSwitching, whenWritesFlow } from "../util/db-switching";
 
 export interface WriteOptions {
   conn?: Connection;
@@ -50,6 +51,11 @@ export async function processEvent(ctx: RelayContext, input: NostrEvent, opts: W
   try {
     return await run(ctx, input, opts);
   } catch (err) {
+    // a database switch has writes paused: a retryable refusal, not a relay fault (no error log, no incident)
+    if (isDbSwitchingError(err)) {
+      ctx.bus.emit("event.rejected", { event: input, code: "error", reason: DB_SWITCHING_REASON, connId: opts.conn?.id, ip: opts.conn?.ip, pubkey: input.pubkey, source: opts.source });
+      return { ok: false, message: DB_SWITCHING_REASON };
+    }
     const t = failures.take(String(err).slice(0, 200));
     if (t.log) ctx.logger.error("write pipeline failed", { id: input.id, err: String(err), ...(t.suppressed ? { repeated: t.suppressed } : {}) });
     ctx.bus.emit("event.rejected", { event: input, code: "error", reason: "error: internal error", connId: opts.conn?.id, ip: opts.conn?.ip, pubkey: input.pubkey, source: opts.source });
@@ -191,10 +197,10 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     // NIP-62: a vanish request processed while this event was in flight (its marker is set before deleting)
     const vanished = ctx.vanished.get(event.pubkey);
     if (vanished !== undefined && event.kind !== KIND_VANISH && event.created_at <= vanished) {
-      await ctx.stores.events.deleteByIds([event.id]);
+      await removeLater(ctx, event.id, "vanished event");
       return reject("blocked: pubkey has requested to vanish from this relay");
     }
-    ctx.stores.users.touch(event.pubkey, now).catch((err) => ctx.logger.warn("users.touch failed", { err: String(err) }));
+    ctx.stores.users.touch(event.pubkey, now).catch((err) => logUnlessSwitching(ctx.logger, "warn", "users.touch failed", err));
   }
 
   // ---- state changes (NIP-29): only for events stored as new, so replays change nothing
@@ -204,7 +210,7 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     } catch (err) {
       // the state change didn't happen, so the event must not stay stored either: otherwise a retry would
       // be a "duplicate" that never applies it (and a replay of one removed by 9005 would linger)
-      if (status !== "ephemeral") await ctx.stores.events.deleteByIds([event.id]);
+      if (status !== "ephemeral") await removeLater(ctx, event.id, "event whose group state change failed");
       if (err instanceof GroupDuplicate) return { ok: true, message: err.message, status: "duplicate" };
       if (err instanceof GroupConflict) return reject(err.message);
       throw err;
@@ -217,7 +223,7 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     try {
       await special.after();
     } catch (err) {
-      ctx.logger.error("post-store step failed", { id: event.id, kind: event.kind, err: String(err) });
+      logUnlessSwitching(ctx.logger, "error", "post-store step failed", err, { id: event.id, kind: event.kind });
     }
   }
   const recipients = ctx.broadcast(event);
@@ -238,6 +244,22 @@ async function run(ctx: RelayContext, input: NostrEvent, opts: WriteOptions): Pr
     }
   }
   return { ok: true, message: "", status };
+}
+
+/**
+ * Removes a stored event that must not stay. A database switch can pause writes between the save and this delete:
+ * then it waits for writes to resume (tracked, off the OK path) instead of leaving the event behind for good.
+ */
+async function removeLater(ctx: RelayContext, id: string, what: string): Promise<void> {
+  try {
+    await ctx.stores.events.deleteByIds([id]);
+  } catch (err) {
+    if (!isDbSwitchingError(err)) throw err;
+    const retry = whenWritesFlow(ctx.stores.dbSwitch, () => ctx.stores.events.deleteByIds([id]), (e) =>
+      ctx.logger.error(`removing ${what} failed`, { id, err: String(e) }),
+    );
+    ctx.tasks?.track(`remove ${what}`, retry);
+  }
 }
 
 /** Whether an ephemeral event with this id was relayed within EPHEMERAL_DEDUP_MS. */

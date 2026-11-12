@@ -1,4 +1,4 @@
-import type { Db } from "@beamhop/sdk";
+import { isDbSwitchingError, type Db } from "@beamhop/sdk";
 
 /** how often (sec) expired ids are swept */
 const PURGE_INTERVAL_SEC = 60;
@@ -28,7 +28,14 @@ export class ReplayGuard {
   private async maybePurge() {
     const now = Math.floor(this.nowMs() / 1000);
     if (now - this.lastPurge < PURGE_INTERVAL_SEC) return;
+    const last = this.lastPurge;
     this.lastPurge = now;
-    await this.db.run("DELETE FROM admin_used_auth WHERE expires_at < ?", [now]);
+    try {
+      await this.db.run("DELETE FROM admin_used_auth WHERE expires_at < ?", [now]);
+    } catch (err) {
+      // writes paused by a database switch (the id itself was recorded before): swept again at a later call
+      if (!isDbSwitchingError(err)) throw err;
+      this.lastPurge = last;
+    }
   }
 }

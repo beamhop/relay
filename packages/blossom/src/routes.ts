@@ -1,7 +1,8 @@
 import { Hono, type Context } from "hono";
 import { AuthError, authenticate, type AuthVerb, type BlossomAuth } from "./auth";
 import { SHA256_RE } from "./driver";
-import { BlossomError, CLIENT_CLOSED, clientIp, CORS_HEADERS, errorResponse, jsonResponse, parseRange, readLimited, withCors } from "./http";
+import { BlossomError, CLIENT_CLOSED, clientIp, CORS_HEADERS, errorResponse, jsonResponse, parseRange, readLimited, switchingResponse, withCors } from "./http";
+import { isDbSwitchingError } from "@beamhop/sdk";
 import { blobCsp, extFromMime, normalizeMime, isMimeAllowed, isInlineSafe, SCRIPT_DESTINATIONS, servedType } from "./mime";
 import { fetchRemote } from "./mirror";
 import { isHidden } from "./repo";
@@ -45,6 +46,12 @@ export function createRoutes(core: BlossomCore): Hono {
           return errorResponse(err.status, err.reason);
         }
         if (err instanceof AuthError) return errorResponse(err.status, err.message);
+        // a write (upload, mirror, delete) refused while a database switch has writes paused: retryable. Bytes stored
+        // for an upload whose rows didn't commit were already discarded by ingest.
+        if (isDbSwitchingError(err)) {
+          core.log.debug("blossom write refused: database switch in progress", { path: c.req.path });
+          return switchingResponse(err.retryAfterSec);
+        }
         // the client went away mid-request: nobody gets this answer, and it's not a server fault
         if (c.req.raw.signal?.aborted) {
           core.log.debug("client closed the request", { path: c.req.path, error: String(err) });

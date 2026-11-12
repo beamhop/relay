@@ -20,6 +20,7 @@ import { SessionService } from "./services/sessions";
 import { UserService } from "./services/users";
 import { PasswordHasher } from "./util/password";
 import { clientIp, NUL_MESSAGE } from "./util/request";
+import { isDbSwitchingError, logUnlessSwitching } from "./util/db-switching";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerUserRoutes } from "./routes/users";
 import { registerInviteRoutes } from "./routes/invites";
@@ -75,7 +76,9 @@ async function buildContext(deps: AdminApiDeps, opts: AdminApiOptions, reportLis
     try {
       await deps.stores.audit.record({ actor, action, target, details, ip, at });
     } catch (err) {
-      logger.error("audit write failed", { action, error: String(err) });
+      // a database switch paused writes right after the action itself went through: worth a warning, not an error
+      if (isDbSwitchingError(err)) logger.warn("audit write refused: database switch in progress", { action });
+      else logger.error("audit write failed", { action, error: String(err) });
     }
     deps.bus.emit("admin.action", { entry: { at, actor, action, target, details, ip } });
   };
@@ -134,7 +137,7 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>,
   const forgetDeleted = (ids: string[]) =>
     void tasks.track(
       "report index cleanup",
-      (ids.length ? ctx.reports.forget(ids) : ctx.reports.sweep()).catch((err) => ctx.logger.warn("report index cleanup failed", { error: String(err) })),
+      (ids.length ? ctx.reports.forget(ids) : ctx.reports.sweep()).catch((err) => logUnlessSwitching(ctx.logger, "warn", "report index cleanup failed", err)),
     );
   offs.push(bus.on("event.deleted", ({ ids }) => forgetDeleted(ids)));
   offs.push(bus.on("user.deleted", () => forgetDeleted([])));
@@ -153,7 +156,7 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>,
       await ctx.reports.index([event]);
     } catch (err) {
       // a later read picks it up (ReportService catch-up) as long as it isn't older than the newest indexed report
-      ctx.logger.warn("report indexing failed", { error: String(err) });
+      logUnlessSwitching(ctx.logger, "warn", "report indexing failed", err);
     }
     try {
       const push = ctx.push.enabled && reportDigest.offer();
@@ -169,7 +172,7 @@ function wireBus(ctx: ApiContext, reportListeners: Set<(r: ReportView) => void>,
         tag: `report-${event.id}`,
       });
     } catch (err) {
-      ctx.logger.warn("report notification failed", { error: String(err) });
+      logUnlessSwitching(ctx.logger, "warn", "report notification failed", err);
     }
   };
   offs.push(bus.on("report.created", ({ event }) => void tasks.track("report notification", onReport(event))));
@@ -234,7 +237,17 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   app.use("*", (c, next) => (isImportRequest(c) ? next() : limiter(c, next)));
   app.use("*", authenticate(ctx));
 
-  registerAuthRoutes(app, ctx);
+  const loginGuard = registerAuthRoutes(app, ctx);
+  /**
+   * The database was switched at runtime (writes still paused): caches holding rows of the old one start over —
+   * sessions, banned event ids, profiles, persisted HMAC keys. The new database holds the same rows.
+   */
+  let offSwapped = deps.stores.dbSwitch?.onSwapped(async () => {
+    ctx.sessions.clearCache();
+    ctx.profiles.clear();
+    loginGuard.forgetPersistedKeys();
+    await ctx.bannedEvents.reload();
+  }, "admin");
   registerSystemRoutes(app, ctx);
   registerMetricsRoutes(app, ctx);
   const streams = registerStreamRoutes(app, ctx);
@@ -255,6 +268,8 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
   const shutdown = async (sc: StopContext) => {
     unwire();
     stopAuditRetention();
+    offSwapped?.();
+    offSwapped = undefined;
     streams.closeAll();
     await tasks.idle(sc.signal);
   };

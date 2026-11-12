@@ -87,6 +87,7 @@ export class BlossomCore {
   /** prunes, retries and sweeps running in the background (awaited at shutdown) */
   readonly tasks: TaskTracker;
   private maintenance: ReturnType<typeof setInterval> | undefined;
+  private offSwapped: (() => void) | undefined;
 
   constructor(
     readonly deps: CoreDeps,
@@ -199,9 +200,30 @@ export class BlossomCore {
     (this.maintenance as { unref?: () => void }).unref?.();
   }
 
+  /**
+   * After a runtime database switch (writes still paused): the used delete-token cache starts over (it is read again
+   * from the new database on use), and byte deletions queued in it are retried once writes flow again. Blocklist,
+   * held statuses and quotas are not cached: they are read from the database on every check.
+   */
+  watchDatabaseSwitch(): void {
+    const hooks = this.deps.stores.dbSwitch;
+    if (!hooks || this.offSwapped) return;
+    const offSwapped = hooks.onSwapped(() => {
+      this.tokens.usedDeleteTokens.clear();
+      const offPhase = hooks.onPhase((phase) => {
+        if (phase !== "normal") return;
+        offPhase();
+        void this.tasks.run("blossom pending deletes", () => retryPendingDeletes(this));
+      });
+    }, "blossom");
+    this.offSwapped = offSwapped;
+  }
+
   /** Shutdown: refuse new uploads/mirrors, stop the upkeep timer, await background work until `ctx.deadline`. */
   async shutdown(ctx: StopContext): Promise<void> {
     this.admission.draining = true;
+    this.offSwapped?.();
+    this.offSwapped = undefined;
     clearInterval(this.maintenance);
     this.maintenance = undefined;
     await this.tasks.idle(ctx.signal);
@@ -232,6 +254,7 @@ export async function buildService(deps: CoreDeps, options: BlossomOptions, crea
   void core.tasks.run("blossom token prune", () => core.tokens.pruneUsedDeleteTokens());
   void core.tasks.run("blossom deletion prune", () => core.tokens.pruneDeletions());
   core.startMaintenance();
+  core.watchDatabaseSwitch();
   if (!images.sharp) core.log.info("sharp not available: thumbnails disabled, using pure-js EXIF stripping");
 
   const withOwners = async (rows: BlobRow[]) => {

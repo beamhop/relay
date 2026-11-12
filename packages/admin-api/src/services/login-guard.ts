@@ -177,6 +177,11 @@ export class LoginGuard {
     return key;
   }
 
+  /** Forgets the persisted keys read so far (the database was switched: they are read again on use). */
+  forgetPersistedKeys(): void {
+    this.persistedKeys.clear();
+  }
+
   // ---------------------------------------------------------------- trusted devices
   /** HMAC of a trusted-device cookie, with a key persisted so the marker survives restarts. */
   private async deviceMac(pubkey: string, issuedAt: number) {

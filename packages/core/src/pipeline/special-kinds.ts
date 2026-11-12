@@ -2,6 +2,7 @@ import type { EventSource, NostrEvent, UserRecord } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 import { isVisibleTo } from "../subscriptions/visibility";
 import { isHex64 } from "../util/hex";
+import { logUnlessSwitching } from "../util/db-switching";
 import { sameRelayUrl } from "../util/url";
 
 export const KIND_DELETION = 5;
@@ -137,7 +138,15 @@ async function applyVanish(ctx: RelayContext, event: NostrEvent): Promise<{ dele
       ctx.logger.warn("vanish marker limit reached: request honoured without a lasting marker", { pubkey: pk });
     } else if (until > (prev ?? 0)) {
       ctx.vanished.set(pk, until);
-      await ctx.stores.kv.set(VANISH_KV_NAMESPACE, pk, until);
+      try {
+        await ctx.stores.kv.set(VANISH_KV_NAMESPACE, pk, until);
+      } catch (err) {
+        // not persisted (e.g. writes paused by a database switch): the request is refused and will be retried, and
+        // a marker left in memory would make that retry look like a replay (skipping the gift wrap deletion)
+        if (prev === undefined) ctx.vanished.delete(pk);
+        else ctx.vanished.set(pk, prev);
+        throw err;
+      }
       marked = true;
     }
   }
@@ -174,7 +183,7 @@ function scheduleAutoBan(ctx: RelayContext, report: NostrEvent): void {
   if (!chains) autoBanChains.set(ctx, (chains = new Map()));
   const run = (chains.get(target) ?? Promise.resolve())
     .then(() => maybeAutoBan(ctx, report, target))
-    .catch((err) => ctx.logger.error("auto-ban check failed", { err: String(err) }));
+    .catch((err) => logUnlessSwitching(ctx.logger, "error", "auto-ban check failed", err));
   chains.set(target, run);
   ctx.tasks?.track("auto-ban check", run);
   void run.then(() => {

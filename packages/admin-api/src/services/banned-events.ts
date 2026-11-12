@@ -74,6 +74,12 @@ export class BannedEventCache {
     return this.ids.has(id);
   }
 
+  /** Reads the id set again now (the database was switched). Throws when it can't be read. */
+  async reload(): Promise<void> {
+    this.loadedAt = Number.NEGATIVE_INFINITY;
+    await this.load();
+  }
+
   /** Call after the database row was written / removed. */
   set(id: string, banned: boolean): void {
     this.recent.set(id, { banned, seq: ++this.seq });
@@ -117,6 +123,11 @@ export class BannedEventService {
       "admin",
       0,
     );
+  }
+
+  /** Reloads the banned id cache (the database was switched at runtime). */
+  reload(): Promise<void> {
+    return this.cache.reload();
   }
 
   /** Stops enforcing (admin API stopped). */

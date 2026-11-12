@@ -1,3 +1,4 @@
+import { isDbSwitchingError } from "@beamhop/sdk";
 import type {
   BlossomService, BusEvents, CoreDeps, CreateMetrics, LiveSnapshot, MetricName, MetricsService, RelayEngine, TimeRange,
 } from "@beamhop/sdk";
@@ -249,7 +250,9 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
     try {
       await rollup.flush();
     } catch (err) {
-      logger.error("metrics flush failed", { error: String(err) });
+      // writes paused by a database switch: the data stays buffered for the next flush
+      if (isDbSwitchingError(err)) logger.debug("metrics flush deferred: database switch in progress");
+      else logger.error("metrics flush failed", { error: String(err) });
     }
   }
 
@@ -260,10 +263,47 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       if (n) logger.info("pruned old metrics", { rows: n, retentionDays });
       return n;
     } catch (err) {
-      logger.error("metrics prune failed", { error: String(err) });
+      if (isDbSwitchingError(err)) {
+        // retried soon instead of a day later
+        logger.debug("metrics prune deferred: database switch in progress");
+        pruneRetry ??= setTimeout(() => {
+          pruneRetry = undefined;
+          if (running) background("metrics prune", prune);
+        }, 60_000);
+        (pruneRetry as { unref?: () => void }).unref?.();
+      } else logger.error("metrics prune failed", { error: String(err) });
       return 0;
     }
   }
+
+  let pruneRetry: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Runtime database switch: buffered rollups are written to the old database before its final copy (so the copy
+   * carries them), and once switched, cached query results and store stats are refreshed from the new one.
+   */
+  let switchUnsubs: (() => void)[] = [];
+  const watchDatabaseSwitch = () => {
+    const hooks = stores.dbSwitch;
+    if (!hooks || switchUnsubs.length) return;
+    switchUnsubs = [
+      hooks.onBeforeFinalCopy(async () => {
+        // closed minutes and the hour so far; the minute in progress stays in memory (it carries over either way)
+        try {
+          await rollup.flush({ countFailure: false });
+        } catch (err) {
+          // not lost: still buffered, and written to the new database by a later flush
+          logger.warn("metrics flush before the database switch failed; buffered data follows to the new database", { error: String(err) });
+        }
+      }, "metrics"),
+      hooks.onSwapped(() => {
+        rollup.clearCache();
+        stats.at = -Infinity;
+        stats.mediaAt = -Infinity;
+      }, "metrics"),
+    ];
+  };
+  watchDatabaseSwitch();
 
   const every = (ms: number, fn: () => unknown) => {
     const t = setInterval(fn, ms);
@@ -277,6 +317,7 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       running = true;
       collector.attach(bus);
       watchStores();
+      watchDatabaseSwitch();
       if (config.metrics.otel.enabled) {
         otel = await setupOtel(config.metrics.otel, () => snap, () => collector.totals, logger, opts.version);
         if (otel) {
@@ -296,6 +337,9 @@ export async function createMetricsService(deps: MetricsDeps, opts: MetricsOptio
       if (!running) return;
       running = false;
       for (const t of timers.splice(0)) clearInterval(t);
+      clearTimeout(pruneRetry);
+      pruneRetry = undefined;
+      for (const u of switchUnsubs.splice(0)) u();
       lagMonitor?.stop();
       collector.detach();
       for (const u of statsUnsubs.splice(0)) u();
