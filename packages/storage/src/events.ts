@@ -11,6 +11,7 @@ import type {
 import { getDTag, isAddressable, isEphemeral, isReplaceable, nowSec, yieldToEventLoop } from "@beamhop/sdk";
 import { parseSearch } from "@beamhop/sdk/search";
 import { chunk, escapeLike, greatest, inList, insertRows, isUniqueViolation, parseJson, toNum } from "./sql";
+import { sqliteFtsReady, sqliteHasFts5 } from "./migrations";
 
 /** Tag values longer than this many UTF-8 bytes are not indexed (and thus not matchable by `#x` filters). */
 export const MAX_INDEXED_TAG_VALUE = 1024;
@@ -168,12 +169,30 @@ export class SqlEventStore implements EventStore {
   /** sqlite: saves waiting for the next group-commit transaction (see flushSaves) */
   private saveQueue: SaveJob[] = [];
   private flushing = false;
+  /** NIP-50 search uses full-text search (sqlite: FTS5 table present; postgres: always). See rebind(). */
+  private fts: boolean;
 
   constructor(
     private db: Db,
     private logger: Logger,
     private opts: EventStoreOptions,
-  ) {}
+  ) {
+    this.fts = opts.fts;
+  }
+
+  /**
+   * Recomputes the state derived from the database: run at startup by createStores() and after a database switch
+   * (the dialect, and with it full-text search availability, may have changed). Everything else reads
+   * `db.dialect` per call.
+   */
+  async rebind(): Promise<void> {
+    if (this.db.dialect === "postgres") {
+      this.fts = true;
+      return;
+    }
+    this.fts = (await sqliteHasFts5(this.db)) && (await sqliteFtsReady(this.db));
+    if (!this.fts) this.logger.debug("sqlite full-text search unavailable; NIP-50 search falls back to LIKE");
+  }
 
   /** Schema is created by createStores(); init() refreshes planner stats on sqlite. */
   async init(): Promise<void> {
@@ -832,7 +851,7 @@ export class SqlEventStore implements EventStore {
           const q = toWebsearch(terms, phrases);
           add({ sql: "e.search @@ websearch_to_tsquery('simple', ?)", params: [q] });
           rank = { sql: "ts_rank(e.search, websearch_to_tsquery('simple', ?)) DESC", params: [q] };
-        } else if (this.opts.fts) {
+        } else if (this.fts) {
           // CROSS JOIN pins the FTS index as the outer loop. Otherwise, without planner stats (fresh
           // database), sqlite may walk an events index and probe FTS once per row: quadratic in the
           // number of matches, and a synchronous stall of the whole relay.
