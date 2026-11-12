@@ -217,6 +217,11 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
   let busy = false;
   let running: Promise<void> = Promise.resolve();
 
+  /** the copier's own progress when it has any (onProgress may lag behind its last update), else the last reported */
+  const liveTables = (j: Job): TableProgress[] => {
+    const live = j.copier?.progress();
+    return live?.length ? live : j.tables;
+  };
   const view = (j: Job): DatabaseSwitchJobView => ({
     id: j.id,
     from: redactTarget(j.from),
@@ -224,7 +229,7 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
     phase: j.phase,
     startedAt: j.startedAt,
     ...(j.finishedAt !== undefined ? { finishedAt: j.finishedAt } : {}),
-    tables: (j.tables.length ? j.tables : (j.copier?.progress() ?? [])).map((t) => ({ ...t })),
+    tables: liveTables(j).map((t) => ({ ...t })),
     ...(j.pauseStartedAt !== undefined ? { pausedMs: j.pausedMs ?? now() - j.pauseStartedAt } : {}),
     ...(j.error !== undefined ? { error: j.error } : {}),
     cancellable: j.cancellable,
