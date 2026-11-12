@@ -6,6 +6,7 @@ import type { EventBus, EventSource } from "./bus";
 import type { HookRegistry } from "./hooks";
 import type { Logger } from "./logger";
 import type { StopContext, TaskTracker } from "./lifecycle";
+import type { DatabaseSwitcher } from "./db-switch";
 
 /** Shared dependencies passed to every service factory. */
 export interface CoreDeps {
@@ -231,6 +232,8 @@ export interface AdminApiDeps extends CoreDeps {
   metrics: MetricsService;
   plugins: PluginManager;
   version: string;
+  /** runtime database switching (absent when unavailable, e.g. tests) */
+  databaseSwitcher?: DatabaseSwitcher;
 }
 export interface AdminApi {
   /** mounted at /admin/api */

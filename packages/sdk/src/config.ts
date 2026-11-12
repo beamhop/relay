@@ -42,6 +42,8 @@ export const ConfigSchema = z.object({
       driver: z.enum(["sqlite", "postgres"]).default("sqlite"),
       sqlitePath: z.string().default("./data/beamhop.db"),
       postgresUrl: z.string().optional(),
+      /** database chosen in the admin panel (written by a runtime switch; default ./data/database.json, resolved by loadConfig); overrides this section, env still wins */
+      stateFile: z.string().optional(),
     })
     .prefault({}),
   /** hex secret key of the relay itself (NIP-29 group metadata signing, NIP-11 `self`). Generated + persisted to KV if absent. */

@@ -1,5 +1,6 @@
 import type { Filter, NostrEvent } from "./nostr";
 import type { Db } from "./db";
+import type { DbSwitchHooks } from "./db-switch";
 
 export type SaveStatus = "saved" | "duplicate" | "replaced" | "stale" | "deleted" | "blocked";
 export interface SaveResult {
@@ -197,6 +198,8 @@ export type AdminRole = "owner" | "admin" | "moderator" | "viewer";
 /** Everything the storage package provides. */
 export interface Stores {
   db: Db;
+  /** present when the database can be switched at runtime (see db-switch.ts) */
+  dbSwitch?: DbSwitchHooks;
   events: EventStore;
   users: UserStore;
   invites: InviteStore;

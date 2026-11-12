@@ -1,5 +1,6 @@
 import type { BeamhopConfig, Db, Logger, Migration, Stores } from "@beamhop/sdk";
 import { createDb, type SqliteOptions } from "./db";
+import { SwappableDb } from "./swappable";
 import { SqlEventStore } from "./events";
 import { FTS_MIGRATION_ID, NAMESPACE, sqliteFtsReady, sqliteHasFts5, storageMigrations } from "./migrations";
 import { SqlAuditLog, SqlInviteStore, SqlIpRuleStore, SqlKvStore } from "./misc";
@@ -22,6 +23,8 @@ export interface StorageStores extends Stores {
   kv: SqlKvStore;
   /** writes buffered data (user activity) to the database */
   flush(): Promise<void>;
+  /** the switchable wrapper every store is built on */
+  swappable: SwappableDb;
   /** flushes and closes the database (same as `db.close()`) */
   close(): Promise<void>;
 }
@@ -68,7 +71,8 @@ class ManagedDb implements Db {
 
 export async function createStores(config: BeamhopConfig, logger: Logger, opts: CreateStoresOptions = {}): Promise<StorageStores> {
   const log = logger.child("storage");
-  const raw = opts.db ?? (await createDb(config, { ...opts.sqlite, logger: log.child("db") }));
+  const swappable = new SwappableDb(opts.db ?? (await createDb(config, { ...opts.sqlite, logger: log.child("db") })), { logger: log.child("swap") });
+  const raw: SwappableDb = swappable;
   let fts = raw.dialect === "postgres";
   if (raw.dialect === "sqlite") {
     const available = await sqliteHasFts5(raw);
@@ -104,6 +108,8 @@ export async function createStores(config: BeamhopConfig, logger: Logger, opts: 
     ipRules: new SqlIpRuleStore(raw),
     kv: new SqlKvStore(raw),
     audit: new SqlAuditLog(raw),
+    dbSwitch: swappable,
+    swappable,
     flush: () => users.flush(),
     close: () => db.close(),
   };

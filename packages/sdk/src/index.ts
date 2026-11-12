@@ -1,5 +1,6 @@
 export * from "./nostr";
 export * from "./db";
+export * from "./db-switch";
 export * from "./stores";
 export * from "./config";
 export * from "./logger";

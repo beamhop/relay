@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import type { z } from "zod";
 import type { Db, Migration } from "./db";
+import type { DbSwappedEvent } from "./db-switch";
 import type { EventStore, KvStore, UserStore, AuditLog } from "./stores";
 import type { BusEvents, EventBus } from "./bus";
 import type { BlobUploadHook, HookOptions, QueryHook, VisibilityHook, WritePolicy } from "./hooks";
@@ -68,6 +69,11 @@ export interface BeamhopPlugin<S extends z.ZodType = z.ZodType> {
   ui?: string;
   /** Must finish within 30 s, or the plugin is marked error and everything it registered is removed. */
   setup(ctx: PluginContext<z.infer<S>>): void | Promise<void>;
+  /**
+   * Called after the database was switched at runtime (writes still paused). Drop caches holding database state.
+   * `ctx.db` already points at the new database. Given 10 s; a throw is logged, it does not abort the switch.
+   */
+  onDatabaseSwapped?(e: DbSwappedEvent): void | Promise<void>;
   /** Runs on disable and at shutdown; given 5 s. */
   teardown?(): void | Promise<void>;
 }
