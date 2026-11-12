@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { nip19 } from "nostr-tools";
-import { ConfigSchema, type BeamhopConfig } from "@beamhop/sdk";
+import { ConfigSchema, type BeamhopConfig, type DatabaseStateFile } from "@beamhop/sdk";
 import { deepMerge } from "@beamhop/sdk/util";
 import { proxyMatcher } from "./runtime/common";
+import { readDatabaseState } from "./database-state";
 
 type Json = Record<string, unknown>;
 
@@ -22,9 +23,29 @@ export interface LoadedConfig {
   extras: ServerExtras;
   /** absolute path of the config file that was read, if any */
   configPath?: string;
-  /** unknown config file keys / BEAMHOP_* variables (already passed to `warn`) */
+  /** unknown config file keys / BEAMHOP_* variables, database pinned by env (already passed to `warn`) */
   warnings: string[];
+  /** contents of config.database.stateFile when it exists (also when env / CLI flags override it) */
+  databaseState?: DatabaseStateFile;
+  /** where config.database (driver / sqlitePath / postgresUrl) came from */
+  databaseSource: DatabaseSource;
 }
+
+export type DatabaseSource = "default" | "config" | "state" | "env" | "override";
+
+/** Default location of the database state file, relative to the config file (or the working directory). */
+export const DEFAULT_DATABASE_STATE_FILE = "./data/database.json";
+
+const DB_ENV = ["BEAMHOP_DB_DRIVER", "BEAMHOP_SQLITE_PATH", "BEAMHOP_DATABASE_URL"] as const;
+const DB_KEYS = ["driver", "sqlitePath", "postgresUrl"] as const;
+
+/** true when env vars choose the database (BEAMHOP_DB_DRIVER / BEAMHOP_SQLITE_PATH / BEAMHOP_DATABASE_URL; blank = unset). */
+export function databaseEnvPinned(env: Record<string, string | undefined> = process.env): boolean {
+  return DB_ENV.some((k) => (env[k] ?? "").trim() !== "");
+}
+
+export const DATABASE_PINNED_WARNING =
+  "database pinned by environment; the database chosen in the admin panel (data/database.json) is ignored";
 
 export interface LoadConfigOptions {
   /** explicit config path (from --config) */
@@ -257,7 +278,10 @@ export function findConfigFile(opts: { configPath?: string; env?: Record<string,
   return existsSync(def) ? def : undefined;
 }
 
-/** defaults ← beamhop.config.json ← env (BEAMHOP_*) ← overrides (CLI flags) */
+/**
+ * defaults ← beamhop.config.json ← env (BEAMHOP_*) ← overrides (CLI flags). For `database` the state file
+ * (config.database.stateFile, written by a runtime switch) sits between the config file and env.
+ */
 export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   const env = opts.env ?? process.env;
   const warn = opts.warn ?? ((m: string) => console.error(`beamhop: warning: ${m}`));
@@ -282,7 +306,52 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   if (Array.isArray(fileOwners)) (fileJson.admin as Json).owners = fileOwners.map((o) => toHexPubkey(String(o)));
   if (typeof fileJson.relaySecretKey === "string") fileJson.relaySecretKey = toHexSecretKey(fileJson.relaySecretKey);
 
-  const merged = deepMerge(deepMerge(fileJson, envToConfig(env)), opts.overrides ?? {});
+  const envJson = envToConfig(env);
+  const overrides = opts.overrides ?? {};
+  const merged: Json = deepMerge(deepMerge(fileJson, envJson), overrides);
+
+  // database: defaults ← config file ← state file ← env ← overrides. The state file's target replaces the
+  // driver / sqlitePath / postgresUrl trio as a whole; env or CLI flags that pick another database replace it.
+  const base = configPath ? dirname(configPath) : (opts.cwd ?? process.cwd());
+  const abs = (p: string) => (p === ":memory:" ? p : resolve(base, p));
+  const dbOf = (j: Json): Json => (isObj(j.database) ? j.database : {});
+  const has = (j: Json, k: string) => j[k] !== undefined;
+  const fileDb = dbOf(fileJson);
+  const envDb = dbOf(envJson);
+  const ovDb = dbOf(overrides);
+  const stateFileSetting = ovDb.stateFile ?? fileDb.stateFile;
+  const stateFile = abs(typeof stateFileSetting === "string" && stateFileSetting.trim() ? stateFileSetting : DEFAULT_DATABASE_STATE_FILE);
+  const databaseState = readDatabaseState(stateFile);
+  let databaseSource: DatabaseSource = DB_KEYS.some((k) => has(ovDb, k))
+    ? "override"
+    : DB_KEYS.some((k) => has(envDb, k))
+      ? "env"
+      : DB_KEYS.some((k) => has(fileDb, k))
+        ? "config"
+        : "default";
+  if (databaseState) {
+    const cur = databaseState.current;
+    const urlDiffers = (u: unknown) => u !== undefined && (cur.driver !== "postgres" || u !== cur.postgresUrl);
+    const pathDiffers = (p: unknown) =>
+      p !== undefined && (cur.driver !== "sqlite" || typeof p !== "string" || abs(p) !== abs(cur.sqlitePath ?? ""));
+    // BEAMHOP_SQLITE_PATH alone doesn't pin: the container image sets it by default
+    const envPins = has(envDb, "driver") || urlDiffers(envDb.postgresUrl);
+    const ovPins = has(ovDb, "driver") || urlDiffers(ovDb.postgresUrl) || pathDiffers(ovDb.sqlitePath);
+    if (envPins || ovPins) {
+      databaseSource = ovPins ? "override" : "env";
+      warnings.push(DATABASE_PINNED_WARNING);
+      warn(DATABASE_PINNED_WARNING);
+    } else {
+      const db: Json = { ...dbOf(merged) };
+      for (const k of DB_KEYS) delete db[k];
+      db.driver = cur.driver;
+      if (cur.sqlitePath !== undefined) db.sqlitePath = cur.sqlitePath;
+      if (cur.postgresUrl !== undefined) db.postgresUrl = cur.postgresUrl;
+      merged.database = db;
+      databaseSource = "state";
+    }
+  }
+
   const parsed = ConfigSchema.safeParse(merged);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
@@ -296,10 +365,9 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   if (config.database.driver === "postgres" && !config.database.postgresUrl) throw new Error("database.driver is postgres but no database.postgresUrl / BEAMHOP_DATABASE_URL given");
   proxyMatcher(config.server.trustedProxies); // fail at boot on an entry that isn't an address or range
 
-  // resolve relative file paths against the config file location (or cwd)
-  const base = configPath ? dirname(configPath) : (opts.cwd ?? process.cwd());
-  const abs = (p: string) => (p === ":memory:" ? p : resolve(base, p));
+  // resolve relative file paths against the config file location (or cwd); state-file paths are already absolute
   config.database.sqlitePath = abs(config.database.sqlitePath);
+  config.database.stateFile = stateFile;
   config.blossom.fsPath = abs(config.blossom.fsPath);
   config.plugins.dir = abs(config.plugins.dir);
   // explicit plugin paths are relative to the config file like every other path (bare names stay npm specifiers)
@@ -327,5 +395,5 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     extras.metricsToken = undefined;
     extras.prometheus = false;
   }
-  return { config, extras, configPath, warnings };
+  return { config, extras, configPath, warnings, databaseState, databaseSource };
 }

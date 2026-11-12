@@ -70,6 +70,8 @@ const CONFIG_DESC: Record<string, string> = {
   "database.driver": "`sqlite` keeps everything in one local file. `postgres` uses a PostgreSQL server (set `postgresUrl`).",
   "database.sqlitePath": "The SQLite database file. A relative path is resolved against the config file's folder (or the working directory when there is no file). `:memory:` keeps the database in memory only.",
   "database.postgresUrl": "PostgreSQL connection URL, such as `postgres://user:password@host:5432/beamhop`. Required when `driver` is `postgres`.",
+  "database.stateFile":
+    "Where beamhop records the database chosen in the admin panel. Defaults to `./data/database.json`, resolved against the config file's folder (or the working directory when there is no file). When the file exists, its database replaces `driver`, `sqlitePath` and `postgresUrl` from this section. `BEAMHOP_DB_DRIVER`, or a `BEAMHOP_DATABASE_URL` naming a different database, still wins, and beamhop logs a warning. The file is owner-only (mode 0600) and holds the Postgres URL unencrypted.",
   relaySecretKey:
     "The relay's own secret key, as hex or `nsec`. It signs NIP-29 group metadata and is published as `self` in the NIP-11 document. If you leave it out, beamhop generates one on first start and keeps it in the database.",
   "blossom.enabled": "Turn the Blossom media server on or off.",
