@@ -45,7 +45,7 @@ export interface DatabaseCopierLike {
 /** The database operations the switcher runs; defaults to the real ones from ./transfer (tests inject fakes). */
 export interface DatabaseSwitcherOps {
   openDatabase(target: DatabaseTarget, sqlite?: SqliteOptions): Promise<Db>;
-  inspectDatabase(db: Db): Promise<DatabaseInspection>;
+  inspectDatabase(db: Db, target?: DatabaseTarget): Promise<DatabaseInspection>;
   wipeDatabase(db: Db): Promise<void>;
   prepareSchema(target: Db, namespaces: NamespaceMigrations[]): Promise<void>;
   createCopier(source: Db, target: Db, opts: TransferOptions): DatabaseCopierLike;
@@ -323,7 +323,7 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
     try {
       db = await ops.openDatabase(target, deps.sqlite);
       result.reachable = true;
-      const info = await ops.inspectDatabase(db);
+      const info = await ops.inspectDatabase(db, target);
       result.serverVersion = info.serverVersion;
       result.existingTables = info.tables;
       result.empty = info.tables.length === 0;
@@ -340,7 +340,7 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
     let tables: { name: string; rows: number }[] = [];
     let sizeBytes: number | undefined;
     try {
-      const info = await ops.inspectDatabase(deps.db.current);
+      const info = await ops.inspectDatabase(deps.db.current, current);
       tables = info.tables;
       sizeBytes = info.sizeBytes;
     } catch (err) {
@@ -385,7 +385,7 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
       }
       let info: DatabaseInspection;
       try {
-        info = await ops.inspectDatabase(targetDb);
+        info = await ops.inspectDatabase(targetDb, target);
       } catch (err) {
         throw new DatabaseSwitchRefusedError(`cannot inspect the target database: ${scrub(errMsg(err), target)}`, "db_switch_refused");
       }
