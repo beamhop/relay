@@ -27,6 +27,9 @@ Commands:
   import [--skip-verify]         read events as JSONL from stdin
   migrate                        run core/admin/blossom migrations and those of enabled plugins (plugins.dir /
                                  plugins.packages; npm auto-discovery is not used), then exit
+  db copy --to-driver sqlite|postgres --to <path|url> [--wipe]
+                                 copy the configured database (server stopped) into another one, schema included, and
+                                 verify it; a non-empty target is refused unless --wipe (drops everything in it)
 
 Options:
   -c, --config <path>            config file (default ./beamhop.config.json, env BEAMHOP_CONFIG)
@@ -65,6 +68,9 @@ const options = {
   force: { type: "boolean" },
   "reset-2fa": { type: "boolean" },
   "skip-verify": { type: "boolean" },
+  "to-driver": { type: "string" },
+  to: { type: "string" },
+  wipe: { type: "boolean" },
   version: { type: "boolean", short: "v" },
   help: { type: "boolean", short: "h" },
 } as const;
@@ -359,6 +365,100 @@ async function cmdMigrate(v: Values) {
   console.log(`migrations up to date (${db}; checked ${plugins} enabled plugin(s) with migrations)`);
 }
 
+/** postgres URL without its password, for messages */
+const redactUrl = (url: string) => url.replace(/\/\/([^:/@]+):[^@]*@/, "//$1:***@");
+
+/**
+ * `db copy`: copies the configured database into another one (any driver pair) with the server stopped. The target
+ * gets the schema of every migration namespace the server registers (core, admin, blossom, metrics, enabled plugins),
+ * collected the way `migrate` builds them.
+ */
+async function cmdDb(v: Values, args: string[]) {
+  const [sub] = args;
+  if (sub !== "copy") throw new Error('usage: beamhop db copy --to-driver sqlite|postgres --to <path|url> [--wipe]');
+  const driver = v["to-driver"];
+  if (driver !== "sqlite" && driver !== "postgres") throw new Error("--to-driver must be sqlite or postgres");
+  if (!v.to) throw new Error("--to <path|url> is required");
+  const { config, extras } = load(v);
+  const storage = await import("@beamhop/storage");
+  const { createBeamhop } = await import("./app");
+  const target: import("@beamhop/sdk").DatabaseTarget =
+    driver === "sqlite" ? { driver, sqlitePath: resolve(v.to) } : { driver, postgresUrl: v.to };
+  const source: import("@beamhop/sdk").DatabaseTarget =
+    config.database.driver === "sqlite"
+      ? { driver: "sqlite", sqlitePath: resolve(config.database.sqlitePath) }
+      : { driver: "postgres", postgresUrl: config.database.postgresUrl };
+  if (source.driver === target.driver && (source.sqlitePath ?? source.postgresUrl) === (target.sqlitePath ?? target.postgresUrl)) {
+    throw new Error("the target is the configured database itself");
+  }
+  const where = (t: typeof target) => (t.driver === "sqlite" ? t.sqlitePath! : redactUrl(t.postgresUrl ?? ""));
+
+  // the migration namespaces the server registers: compose it once (as `migrate` does), recording migrate() calls
+  let recorder: ReturnType<typeof storage.recordMigrations> | undefined;
+  const bh = await createBeamhop(config, {
+    autoDiscoverNpm: false,
+    extras,
+    factories: {
+      createStores: async (c, logger) => {
+        recorder = storage.recordMigrations(await storage.createDb(c, { logger }));
+        return storage.createStores(c, logger, { db: recorder.db });
+      },
+    },
+  });
+  let namespaces: import("@beamhop/sdk").NamespaceMigrations[] = [];
+  try {
+    await bh.plugins.migrate();
+    try {
+      namespaces = (bh.stores as { swappable?: { registeredMigrations?(): typeof namespaces } }).swappable?.registeredMigrations?.() ?? [];
+    } catch {
+      namespaces = [];
+    }
+    if (!namespaces.length) namespaces = recorder?.recorded() ?? [];
+  } finally {
+    await bh.stop();
+  }
+  if (!namespaces.length) throw new Error("could not determine the database schema (no migrations were registered)");
+
+  const logger = createLogger("warn");
+  const src = await storage.openDatabase(source);
+  let dst: import("@beamhop/sdk").Db | undefined;
+  try {
+    dst = await storage.openDatabase(target);
+    const info = await storage.inspectDatabase(dst, target);
+    if (info.tables.length) {
+      const list = info.tables.map((t) => `${t.name} (${t.rows})`).join(", ");
+      if (!v.wipe) throw new Error(`the target database is not empty: ${list}. Pass --wipe to drop everything in it first`);
+      console.error(`wiping ${where(target)}: ${list}`);
+      await storage.wipeDatabase(dst);
+    }
+    console.error(`copying ${where(source)} → ${where(target)} (${info.serverVersion})`);
+    await storage.prepareSchema(dst, namespaces);
+    let lastPrint = 0;
+    const copier = new storage.DatabaseCopier(src, dst, {
+      logger,
+      onProgress: (tables) => {
+        if (Date.now() - lastPrint < 1000) return;
+        lastPrint = Date.now();
+        const total = tables.reduce((n, t) => n + t.total, 0);
+        const copied = tables.reduce((n, t) => n + t.copied, 0);
+        const busy = tables.find((t) => !t.done && t.copied > 0);
+        console.error(`… ${copied}/${total} rows${busy ? ` (${busy.table} ${busy.copied}/${busy.total})` : ""}`);
+      },
+    });
+    await copier.bulkCopy();
+    await copier.finalCopy();
+    const report = await copier.verify();
+    for (const t of report.tables) {
+      console.error(`${t.ok ? "ok  " : "FAIL"} ${t.table}: ${t.sourceRows} → ${t.targetRows}${t.detail ? ` (${t.detail})` : ""}`);
+    }
+    if (!report.ok) throw new Error("verification failed: the copy does not match the source (see above)");
+    console.log(`copied ${report.tables.reduce((n, t) => n + t.targetRows, 0)} rows into ${where(target)}`);
+  } finally {
+    await dst?.close();
+    await src.close();
+  }
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { values, positionals } = parse(argv);
   if (values.version) return void console.log(VERSION);
@@ -380,6 +480,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return cmdImport(values);
     case "migrate":
       return cmdMigrate(values);
+    case "db":
+      return cmdDb(values, rest);
     default:
       throw new Error(`unknown command "${cmd}" (see beamhop --help)`);
   }
