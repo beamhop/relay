@@ -149,7 +149,37 @@ Add `-n <schema>` to both when beamhop lives in its own schema (`?search_path=` 
 ### Events only
 
 `beamhop export > events.jsonl` / `beamhop import < events.jsonl` move events (not users, settings, admin state or
-blobs) between relays or backends, e.g. from SQLite to PostgreSQL.
+blobs) between relays or backends. To move a whole relay to another backend, see
+[Switching databases](#switching-databases).
+
+## Switching databases
+
+An owner can move a running relay between SQLite and PostgreSQL from the admin panel (**System → Database**), with
+no restart:
+
+1. Enter the target: a PostgreSQL URL (prefilled from `BEAMHOP_DATABASE_URL` when set) or a SQLite file path.
+   **Test** checks that it can be reached and that it is empty. A target that already holds tables can only be used
+   after typing the wipe confirmation; its contents are dropped, never merged.
+2. Everything is copied while the relay keeps serving: events, users, settings, the relay key, admin accounts and
+   sessions, Blossom metadata, metrics, NIP-29 groups and plugin tables. Blob files stay where they are.
+3. Writes then pause for a few seconds while the last changes are copied and checked. During the pause, EVENTs get
+   `OK false "error: database switch in progress, try again shortly"`, Blossom uploads/deletes and admin writes get
+   `503` with `Retry-After`, and `/health` reports `switching` (still `200`). Reads keep working.
+4. The relay switches over and resumes writes. If the final copy runs over budget (15 s) or the check fails, writes
+   resume on the old database and nothing changes.
+
+The choice is saved to `data/database.json` (`database.stateFile`, `0600`), which overrides the `database` section of
+the config file at the next start. `BEAMHOP_DB_DRIVER`, `BEAMHOP_SQLITE_PATH` and `BEAMHOP_DATABASE_URL` still take
+precedence: when one is set, the panel disables switching, because the next restart would undo it. The file holds the
+PostgreSQL URL including its password, so keep `data/` private.
+
+The old database is left untouched as a rollback point, marked with the date it was replaced, and listed in the panel
+until you delete it there. Switching back is a new full copy.
+
+Limits: one instance only. The switch is refused while another instance is running on the same database. Scaled
+PostgreSQL deployments switch the offline way: stop, `beamhop db copy --to-driver sqlite|postgres --to <path|url>`,
+change the config, start. Plugins that keep their own connections or caches outside `ctx.db` should implement
+`onDatabaseSwapped`.
 
 ## Upgrades
 
