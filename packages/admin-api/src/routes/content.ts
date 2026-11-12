@@ -13,7 +13,11 @@ import type {
 } from "@beamhop/sdk";
 import type { AdminApp, ApiContext } from "../context";
 import { principalOf } from "../context";
-import { badRequest, forbidden, HttpError, notFound } from "../errors";
+import { badRequest, DB_SWITCHING_MESSAGE, dbSwitching, forbidden, HttpError, notFound } from "../errors";
+import { isDbSwitchingError } from "../util/db-switching";
+
+/** how the relay answers an EVENT refused while a database switch has writes paused */
+const RELAY_SWITCHING_PREFIX = "error: database switch in progress";
 import { IMPORT_MAX_BYTES, requirePermission } from "../middleware/auth";
 import { audited, auditLists } from "../util/audit";
 import { FiltersSchema, isConstrained, parseFiltersParam } from "../util/filters";
@@ -176,6 +180,8 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
   app.post("/events/import", requirePermission("content.import"), async (c) => {
     const bypass = c.req.query("bypassPolicies") === "true";
     const result: ImportResult = { imported: 0, duplicates: 0, rejected: 0, errors: [] };
+    /** a database switch paused writes: the import stops at this line (the client resumes from it later) */
+    let switching: { line: number; retryAfterSec: number } | undefined;
     const err = (line: number, msg: string) => {
       result.rejected++;
       if (result.errors.length < MAX_IMPORT_ERRORS) result.errors.push(`line ${line}: ${msg}`);
@@ -194,7 +200,14 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       if (!isNostrEventShape(ev)) return err(n, "not a nostr event");
       if (bypass) {
         if (!isValidSignedEvent(ev)) return err(n, "invalid: bad id or signature");
-        const r = await stores.events.save(ev);
+        let r: Awaited<ReturnType<typeof stores.events.save>>;
+        try {
+          r = await stores.events.save(ev);
+        } catch (e) {
+          if (!isDbSwitchingError(e)) throw e;
+          switching = { line: n, retryAfterSec: e.retryAfterSec };
+          return;
+        }
         // stored without going through the relay, so without its "report.created": the queue indexes it here
         if ((r.status === "saved" || r.status === "replaced") && ev.kind === 1984) await ctx.reports.index([ev]);
         if (r.status === "saved" || r.status === "replaced") result.imported++;
@@ -203,6 +216,10 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
         return;
       }
       const r = await relay.publish(ev, "import");
+      if (!r.ok && r.message.startsWith(RELAY_SWITCHING_PREFIX)) {
+        switching = { line: n, retryAfterSec: 5 };
+        return;
+      }
       if (r.ok) {
         if (/^duplicate:/i.test(r.message)) result.duplicates++;
         else result.imported++;
@@ -245,6 +262,11 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
           continue;
         }
         await handle(line, lineNo);
+        if (switching) break;
+      }
+      if (switching) {
+        await reader.cancel().catch(() => {});
+        break;
       }
       if (buf.length > MAX_LINE_BYTES) {
         if (!skipping) err(lineNo + 1, "line too long");
@@ -254,7 +276,7 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       if (done) break;
     }
     // a body cut off by the cap ends mid-line: its last partial line is dropped, not imported
-    if (!tooLarge && buf.trim() && !skipping) await handle(buf, ++lineNo);
+    if (!tooLarge && !switching && buf.trim() && !skipping) await handle(buf, ++lineNo);
 
     await ctx.audit(c, "event.import", null, {
       bypassPolicies: bypass,
@@ -262,7 +284,14 @@ export function registerContentRoutes(app: AdminApp, ctx: ApiContext) {
       duplicates: result.duplicates,
       rejected: result.rejected,
       ...(tooLarge ? { truncatedAtBytes: maxBytes } : {}),
+      ...(switching ? { stoppedAtLine: switching.line, reason: "database switch in progress" } : {}),
     });
+    if (switching) {
+      throw dbSwitching(
+        switching.retryAfterSec,
+        `${DB_SWITCHING_MESSAGE}: import stopped at line ${switching.line} (${result.imported} imported, ${result.duplicates} duplicates, ${result.rejected} rejected); resend from that line`,
+      );
+    }
     if (tooLarge) {
       throw new HttpError(413, `import body exceeds ${maxBytes} bytes: stopped after line ${lineNo} (${result.imported} imported, ${result.duplicates} duplicates, ${result.rejected} rejected)`, "too_large");
     }

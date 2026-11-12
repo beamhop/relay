@@ -7,7 +7,7 @@ import type { RelayContext } from "./context";
 import { createHttp } from "./http/app";
 import { buildNip11 } from "./http/nip11";
 import { IpRuleCache } from "./ip-rules";
-import { runRetention } from "./jobs/retention";
+import { forgetRetentionMemos, runRetention } from "./jobs/retention";
 import { Scheduler } from "./jobs/scheduler";
 import { GroupsService } from "./nips/nip29/groups";
 import { GroupRepo } from "./nips/nip29/repo";
@@ -51,6 +51,7 @@ import { Lru } from "./util/lru";
 import { RateLimiter } from "./util/rate-limit";
 import { ipSiteKey } from "./util/cidr";
 import { toWsUrl } from "./util/url";
+import { isDbSwitchingError } from "./util/db-switching";
 
 const IP_RULES_REFRESH_MS = 30_000;
 const EXPIRATION_PURGE_MS = 60_000;
@@ -120,11 +121,35 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
   };
   ctx.groups = new GroupsService(ctx, new GroupRepo(deps.stores.db));
   await ctx.groups.init();
-  for (const [pk, at] of Object.entries(await deps.stores.kv.list<number>(VANISH_KV_NAMESPACE))) {
-    if (ctx.vanished.size >= MAX_VANISH_MARKERS) break;
-    if (typeof at === "number") ctx.vanished.set(pk, at);
-  }
+  /** NIP-62 vanish markers, from kv into ctx.vanished (replacing what it held) */
+  const loadVanished = async () => {
+    const next = new Map<string, number>();
+    for (const [pk, at] of Object.entries(await deps.stores.kv.list<number>(VANISH_KV_NAMESPACE))) {
+      if (next.size >= MAX_VANISH_MARKERS) break;
+      if (typeof at === "number") next.set(pk, at);
+    }
+    // markers set in memory meanwhile (a vanish request being processed) are kept
+    for (const [pk, at] of ctx.vanished) if ((next.get(pk) ?? -1) < at) next.set(pk, at);
+    ctx.vanished.clear();
+    for (const [pk, at] of next) ctx.vanished.set(pk, at);
+  };
+  await loadVanished();
   await ctx.ipRules.refresh();
+
+  /**
+   * The database was switched at runtime (writes still paused): everything held from it is read again from the new
+   * one — group state, vanish markers, IP rules — and the per-pubkey caches start over. The copy is identical, so
+   * this is a safety net, not a migration.
+   */
+  const rebind = () =>
+    deps.stores.dbSwitch?.onSwapped(async () => {
+      await ctx.groups.reload();
+      await loadVanished();
+      await ctx.ipRules.refresh();
+      ctx.users.invalidate();
+      forgetRetentionMemos(deps.stores.events);
+    }, "core");
+  let offSwapped = rebind();
 
   /** open connections per address and (IPv6) per /64 and per /48 */
   const ipCounts = new Map<string, number>();
@@ -360,7 +385,13 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     const intervalMs = Math.max(1, ctx.s().retention.intervalMinutes) * 60_000;
     if (Date.now() - lastRetention < intervalMs) return;
     lastRetention = Date.now();
-    await runRetention(ctx, signal);
+    try {
+      await runRetention(ctx, signal);
+    } catch (err) {
+      // refused by a database switch: run again at the next tick instead of a whole interval later
+      if (isDbSwitchingError(err)) lastRetention = 0;
+      throw err;
+    }
   }
 
   const engine: RelayEngine = {
@@ -385,6 +416,7 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
     },
     async start() {
       stopped = false;
+      offSwapped ??= rebind();
       draining = false;
       ctx.refuseQueuedEvents = false;
       scheduler.resume();
@@ -433,6 +465,8 @@ export const createRelay: CreateRelay = async (deps: CoreDeps): Promise<RelayEng
       closers.clear();
       ctx.policy.dispose();
       ctx.users.dispose();
+      offSwapped?.();
+      offSwapped = undefined;
     },
   };
   return engine;

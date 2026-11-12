@@ -11,6 +11,7 @@ import {
   type BeamhopPlugin,
   type BlossomService,
   type BusEvents,
+  type DbWritePhase,
   type CreateAdminApi,
   type CreateBlossom,
   type CreateMetrics,
@@ -30,6 +31,7 @@ import { proxyMatcher, type RunningServer } from "./runtime/common";
 import { Lifecycle, runShutdown, shutdownBudgets } from "./lifecycle";
 import { LANDING_CSP, renderLanding } from "./landing";
 import { VERSION } from "./version";
+import { startInstanceHeartbeat, type InstanceHeartbeat } from "./instances";
 
 export interface BeamhopFactories {
   createStores(config: BeamhopConfig, logger: Logger): Promise<Stores>;
@@ -82,6 +84,8 @@ export interface Beamhop {
   tasks: TaskTracker;
   /** phase (starting → ready → draining → stopping → stopped) and in-flight HTTP requests */
   lifecycle: Lifecycle;
+  /** this instance's heartbeat in kv, and the other instances sharing the database (runtime database switching) */
+  instances: InstanceHeartbeat;
   /** HTTP entry point for runtime adapters (counts in-flight requests; 503 while shutting down) */
   fetch(req: Request, env?: Partial<ServerEnv>): Response | Promise<Response>;
   /** starts relay jobs, metrics and plugins */
@@ -185,6 +189,8 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
   const cleanupOnFail: (() => Promise<void>)[] = [() => stores.db.close()];
   try {
     await ensureSecrets(config, stores, log);
+    const instances = startInstanceHeartbeat({ kv: stores.kv, logger: logger.child("instances") });
+    cleanupOnFail.unshift(() => instances.stop());
     const settings = await f.createSettingsService(stores, bus, logger.child("settings"));
     const base = { config, stores, settings, hooks, bus, tasks };
     const relay = await f.createRelay({ ...base, logger: logger.child("relay") });
@@ -215,12 +221,12 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
       );
     }
 
-    const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, lifecycle, checkHealth: () => stores.db.get("SELECT 1 AS ok") });
+    const app = buildApp({ config, extras, settings, relay, blossom, metrics, plugins, adminApi, assets, renderPrometheus: f.renderPrometheus, logger: log, version: VERSION, lifecycle, checkHealth: () => stores.db.get("SELECT 1 AS ok"), dbPhase: () => stores.dbSwitch?.phase ?? "normal" });
 
     let started = false;
     let stopping: Promise<void> | undefined;
     const beamhop: Beamhop = {
-      config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION, tasks, lifecycle,
+      config, extras, logger, bus, hooks, stores, settings, relay, blossom, metrics, plugins, adminApi, assets, app, version: VERSION, tasks, lifecycle, instances,
       fetch(req, env) {
         const ip = env?.ip ?? "127.0.0.1";
         return lifecycle.handle(req, () => app.fetch(req, { ...makeEnv(ip), ...env } as ServerEnv));
@@ -288,8 +294,10 @@ export async function createBeamhop(inputConfig: BeamhopConfig, overrides: Beamh
               {
                 name: "db",
                 run: {
-                  db: () => {
+                  db: async () => {
                     tasks.close();
+                    // its heartbeat goes while the database is still open (other instances stop counting this one)
+                    await instances.stop();
                     return stores.db.close();
                   },
                 },
@@ -373,6 +381,8 @@ interface AppDeps {
   checkHealth?: () => Promise<unknown>;
   /** phase for /health (absent: always "ready") */
   lifecycle?: Pick<Lifecycle, "phase">;
+  /** database write phase: "paused" while a runtime database switch runs its final copy (absent: always "normal") */
+  dbPhase?: () => DbWritePhase;
 }
 
 /** /health answers 503 when the database check takes longer than this (a hung pool must not hang the probe) */
@@ -456,7 +466,9 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
 
   // liveness: the process answers (Docker HEALTHCHECK — a restart wouldn't fix a slow database, and must not cut a
   // graceful shutdown short)
-  app.get("/health/live", (c) => c.json({ ok: true, status: d.lifecycle?.phase ?? "ready", version: d.version }, 200, { "cache-control": "no-store" }));
+  app.get("/health/live", (c) =>
+    c.json({ ok: true, status: d.lifecycle?.phase ?? "ready", version: d.version, ...(d.dbPhase?.() === "paused" ? { database: "switching" } : {}) }, 200, { "cache-control": "no-store" }),
+  );
 
   // readiness (load balancers): 503 while starting or shutting down, or when the database doesn't answer in time
   app.get("/health", async (c) => {
@@ -470,6 +482,9 @@ export function buildApp(d: AppDeps): Hono<{ Bindings: ServerEnv }> {
           timer = setTimeout(() => reject(new Error(`database check took longer than ${HEALTH_TIMEOUT_MS} ms`)), HEALTH_TIMEOUT_MS);
         }),
       ]);
+      // a runtime database switch has writes paused for a few seconds: still ready (reads work, writes get retryable
+      // refusals), so orchestrators neither restart nor unroute the process
+      if (d.dbPhase?.() === "paused") return c.json({ ok: true, status: "switching", version: d.version }, 200, { "cache-control": "no-store" });
       return c.json({ ok: true, status, version: d.version }, 200, { "cache-control": "no-store" });
     } catch (err) {
       // the probe is public: log the cause, don't leak driver errors (hosts, paths, credentials in DSNs)

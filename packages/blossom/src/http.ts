@@ -37,6 +37,16 @@ export function errorResponse(status: number, reason: string): Response {
   return withCors(new Response(reason, { status, headers: { "X-Reason": header, "Content-Type": "text/plain; charset=utf-8" } }));
 }
 
+/** Reason given for writes refused while a database switch has writes paused. */
+export const DB_SWITCHING_REASON = "database switch in progress, try again shortly";
+
+/** 503 for a write refused during a database switch, with Retry-After (seconds) and the X-Reason header. */
+export function switchingResponse(retryAfterSec: number): Response {
+  const res = errorResponse(503, DB_SWITCHING_REASON);
+  res.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfterSec))));
+  return res;
+}
+
 export function jsonResponse(body: unknown, status = 200): Response {
   return withCors(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 }

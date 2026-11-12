@@ -87,6 +87,27 @@ export class GroupsService {
     this.changed();
   }
 
+  /**
+   * Reads group state again (the database was switched at runtime, writes paused). Objects are updated in place, so
+   * work holding one keeps seeing the current state; memory-only fields (metadata clock, `deleting`) are kept.
+   */
+  async reload(): Promise<void> {
+    const fresh = await this.repo.loadAll();
+    const seen = new Set<string>();
+    for (const g of fresh) {
+      seen.add(g.id);
+      const old = this.groups.get(g.id);
+      if (!old) {
+        this.groups.set(g.id, g);
+        continue;
+      }
+      Object.assign(old, { ...g, lastMetaAt: Math.max(old.lastMetaAt, g.lastMetaAt), deleting: old.deleting });
+      if (!old.deleting) delete old.deleting;
+    }
+    for (const [id, g] of this.groups) if (!seen.has(id) && !g.deleting) this.groups.delete(id);
+    this.changed();
+  }
+
   get size() {
     return this.groups.size;
   }

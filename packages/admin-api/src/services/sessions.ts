@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { Db } from "@beamhop/sdk";
+import { isDbSwitchingError, type Db } from "@beamhop/sdk";
 
 export const SESSION_TTL_SEC = 7 * 24 * 3600;
 /** absolute lifetime: sliding renewal never extends a session past createdAt + this */
@@ -122,8 +122,13 @@ export class SessionService {
     }
     const now = this.nowSec();
     if (s.expiresAt <= now || now - s.createdAt >= SESSION_MAX_AGE_SEC) {
-      await this.destroy(id);
-      await this.onExpired(id);
+      try {
+        await this.destroy(id);
+        await this.onExpired(id);
+      } catch (err) {
+        // writes paused by a database switch: the session is over all the same (the hourly sweep removes the row)
+        if (!isDbSwitchingError(err)) throw err;
+      }
       return undefined;
     }
     return s;
@@ -134,14 +139,24 @@ export class SessionService {
     const now = this.nowSec();
     if (now - s.lastSeenAt < TOUCH_INTERVAL_SEC) return false;
     const expiresAt = Math.min(now + SESSION_TTL_SEC, s.createdAt + SESSION_MAX_AGE_SEC);
-    s.lastSeenAt = now;
-    if (expiresAt <= s.expiresAt) {
-      await this.db.run("UPDATE admin_sessions SET last_seen_at = ? WHERE id = ?", [s.lastSeenAt, s.id]);
+    const before = { lastSeenAt: s.lastSeenAt, expiresAt: s.expiresAt };
+    try {
+      if (expiresAt <= s.expiresAt) {
+        s.lastSeenAt = now;
+        await this.db.run("UPDATE admin_sessions SET last_seen_at = ? WHERE id = ?", [now, s.id]);
+        return false;
+      }
+      s.lastSeenAt = now;
+      s.expiresAt = expiresAt;
+      await this.db.run("UPDATE admin_sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?", [now, expiresAt, s.id]);
+      return true;
+    } catch (err) {
+      // writes paused by a database switch: reads must keep working, so the renewal waits for a later request
+      if (!isDbSwitchingError(err)) throw err;
+      s.lastSeenAt = before.lastSeenAt;
+      s.expiresAt = before.expiresAt;
       return false;
     }
-    s.expiresAt = expiresAt;
-    await this.db.run("UPDATE admin_sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?", [s.lastSeenAt, s.expiresAt, s.id]);
-    return true;
   }
 
   /** Live sessions of a pubkey, newest first (`token` is empty: only the cookie holds it). */
@@ -181,8 +196,20 @@ export class SessionService {
   private async maybePurge() {
     const now = this.nowSec();
     if (now - this.lastPurge < 3600) return;
+    const last = this.lastPurge;
     this.lastPurge = now;
-    await this.db.run("DELETE FROM admin_sessions WHERE expires_at <= ?", [now]);
-    await this.onExpired();
+    try {
+      await this.db.run("DELETE FROM admin_sessions WHERE expires_at <= ?", [now]);
+      await this.onExpired();
+    } catch (err) {
+      // writes paused by a database switch: the sweep runs again with a later request
+      if (!isDbSwitchingError(err)) throw err;
+      this.lastPurge = last;
+    }
+  }
+
+  /** Forgets cached sessions (the database was switched: they are read again from the new one). */
+  clearCache(): void {
+    this.cache.clear();
   }
 }

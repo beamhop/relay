@@ -6,6 +6,7 @@ import { inviteCsp, invitePage } from "./invite-page";
 import { verifyNip98 } from "./nip98";
 import { ipKey } from "../util/cidr";
 import { hexPubkey } from "../util/pubkey";
+import { DB_SWITCHING_REASON, isDbSwitchingError } from "../util/db-switching";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -87,7 +88,13 @@ export function createHttp(ctx: RelayContext): Hono {
     const existing = await ctx.stores.users.get(auth.pubkey);
     if (existing?.status === "banned" || existing?.denied) return c.json({ ok: false, error: "pubkey is banned" }, 403, CORS);
     if (existing && ctx.users.isMember(auth.pubkey, existing)) return c.json({ ok: true, pubkey: auth.pubkey, alreadyMember: true }, 200, CORS);
-    const ok = await ctx.stores.invites.redeem(code, auth.pubkey);
+    let ok: boolean;
+    try {
+      ok = await ctx.stores.invites.redeem(code, auth.pubkey);
+    } catch (err) {
+      if (!isDbSwitchingError(err)) throw err;
+      return c.json({ ok: false, error: DB_SWITCHING_REASON }, 503, { ...CORS, "Retry-After": String(err.retryAfterSec) });
+    }
     if (!ok) return c.json({ ok: false, error: "invalid, expired or exhausted invite code" }, 400, CORS);
     ctx.users.invalidate(auth.pubkey);
     const user = await ctx.stores.users.get(auth.pubkey);

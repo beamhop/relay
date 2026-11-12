@@ -1,6 +1,7 @@
 import type { AdminRole, Permission, UserQuery, UserRecord } from "@beamhop/sdk";
 import type { ApiContext } from "../context";
-import { isZodError, zodMessage } from "../errors";
+import { DB_SWITCHING_MESSAGE, isZodError, zodMessage } from "../errors";
+import { isDbSwitchingError } from "../util/db-switching";
 import { isValidCidr } from "./ip";
 import { canonicalCidr } from "../util/ip";
 import { permissionsFor } from "../services/roles";
@@ -334,7 +335,19 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
     // NIP-86 clients are browser apps on other origins; auth is a header (NIP-98), never a cookie
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": CONTENT_TYPE, ...CORS } });
 
+  // a write refused while a database switch has writes paused (the replay record, a ban…): retryable, like the REST API
   return async function nip86(req: Request, env?: { ip?: unknown }): Promise<Response> {
+    try {
+      return await handle(req, env);
+    } catch (err) {
+      if (!isDbSwitchingError(err)) throw err;
+      const res = reply({ result: null, error: `error: ${DB_SWITCHING_MESSAGE}` }, 503);
+      res.headers.set("Retry-After", String(Math.max(1, Math.ceil(err.retryAfterSec))));
+      return res;
+    }
+  };
+
+  async function handle(req: Request, env?: { ip?: unknown }): Promise<Response> {
     const ip = typeof env?.ip === "string" && env.ip ? env.ip.replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i, "$1") : null;
     if (req.method !== "POST") return reply({ result: null, error: "method not allowed" }, 405);
     // stops reading as soon as the cap is exceeded (Content-Length may be absent with chunked bodies)
@@ -373,11 +386,12 @@ export function createNip86Handler(ctx: ApiContext): (req: Request, env?: { ip?:
     try {
       return reply({ result: await method.run(params, { pubkey: ev.pubkey, role, ip }) });
     } catch (err) {
+      if (isDbSwitchingError(err)) throw err;
       if (err instanceof RpcError) return reply({ result: null, error: err.message });
       // invalid settings values (e.g. a bad icon URL): the caller's mistake, answered like the settings API does
       if (isZodError(err)) return reply({ result: null, error: `invalid: ${zodMessage(err)}` });
       ctx.logger.error("nip86 method failed", { method: rpc.method, error: String(err) });
       return reply({ result: null, error: (err as Error).message || "internal error" });
     }
-  };
+  }
 }

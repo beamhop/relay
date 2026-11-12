@@ -3,6 +3,7 @@ import { chunk, placeholders } from "../db";
 import { badRequest, notFound } from "../errors";
 import type { ModerationService } from "./moderation";
 import type { ProfileService } from "./profiles";
+import { isDbSwitchingError, logUnlessSwitching } from "../util/db-switching";
 import type { Actor, UserService } from "./users";
 
 const REPORT_KIND = 1984;
@@ -171,7 +172,7 @@ export class ReportService {
         }
         await this.index(recent.filter((e) => !known.has(e.id)));
       })()
-        .catch((err) => this.deps.logger.warn("report index catch-up failed", { error: String(err) }))
+        .catch((err) => logUnlessSwitching(this.deps.logger, "warn", "report index catch-up failed", err))
         .finally(() => (this.catching = null));
     }
     return this.catching;
@@ -197,7 +198,11 @@ export class ReportService {
         after = ids[ids.length - 1];
       }
     })()
-      .catch((err) => this.deps.logger.warn("report index sweep failed", { error: String(err) }))
+      .catch((err) => {
+        // refused by a database switch: the next sweep may run right away
+        if (isDbSwitchingError(err)) this.lastSweep = 0;
+        logUnlessSwitching(this.deps.logger, "warn", "report index sweep failed", err);
+      })
       .finally(() => (this.sweeping = null));
     return this.sweeping;
   }

@@ -141,6 +141,10 @@ export class KeyedConcurrency {
 /** Ids remembered until their own expiry (e.g. single-use auth tokens). Bounded: oldest entries go first. */
 export class ExpiringSet {
   private items = new Map<string, number>();
+  /** Forgets every item. */
+  clear(): void {
+    this.items.clear();
+  }
   constructor(
     private readonly maxKeys = 100_000,
     private readonly now: () => number = Date.now,

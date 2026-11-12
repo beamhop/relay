@@ -1,6 +1,7 @@
 import { type EventStore, type Filter, type RetentionRule, nowSec, yieldToEventLoop } from "@beamhop/sdk";
 import type { RelayContext } from "../context";
 import { hexPubkey } from "../util/pubkey";
+import { isDbSwitchingError } from "../util/db-switching";
 
 /** candidate authors fetched per page (keyset by pubkey) */
 const PAGE = 200;
@@ -15,9 +16,15 @@ const GROUP_META = [39000, 39001, 39002, 39003];
 type CapMemo = Map<string, { stored: number; eventCount: number }>;
 const memos = new WeakMap<EventStore, Map<string, CapMemo>>();
 
+/** Drops the per-pubkey cap memos of `store` (its database was switched: the next run re-counts). */
+export function forgetRetentionMemos(store: EventStore): void {
+  memos.delete(store);
+}
+
 /** Applies settings.retention rules. Returns number of deleted events. `signal` (shutdown) stops it between rules. */
 export async function runRetention(ctx: RelayContext, signal?: AbortSignal): Promise<number> {
   let total = 0;
+  let switching: unknown;
   for (const rule of ctx.s().retention.rules) {
     if (signal?.aborted) break;
     if (!rule.enabled) continue;
@@ -29,6 +36,11 @@ export async function runRetention(ctx: RelayContext, signal?: AbortSignal): Pro
       if (rule.maxAgeDays && rule.maxAgeDays > 0) total += await purgeOlderThan(ctx, rule, exempt);
       if (rule.maxPerPubkey && rule.maxPerPubkey > 0) total += await capPerPubkey(ctx, rule, exempt, signal);
     } catch (err) {
+      // writes paused by a database switch: stop this run (what it removed is still announced), the caller retries soon
+      if (isDbSwitchingError(err)) {
+        switching = err;
+        break;
+      }
       ctx.logger.error("retention rule failed", { rule: rule.id, err: String(err) });
     }
   }
@@ -36,6 +48,7 @@ export async function runRetention(ctx: RelayContext, signal?: AbortSignal): Pro
     ctx.logger.info("retention removed events", { count: total });
     ctx.bus.emit("event.deleted", { ids: [], actor: "system:retention", reason: `retention removed ${total} events` });
   }
+  if (switching) throw switching;
   return total;
 }
 
