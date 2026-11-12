@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#7c3aed" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="/admin/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/admin/icons/icon-192.png" />
+    <title>beamhop admin</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("beamhop-theme") || "system";
+          var d = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          if (d) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+    <!-- Plugin UI bundles may import these bare specifiers; shims re-export window.__BEAMHOP_UI__ -->
+
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/admin/plugin-shims/react.js",
+          "react-dom": "/admin/plugin-shims/react-dom.js",
+          "react-dom/client": "/admin/plugin-shims/react-dom.js",
+          "react/jsx-runtime": "/admin/plugin-shims/jsx-runtime.js",
+          "@beamhop/ui": "/admin/plugin-shims/ui.js"
+        }
+      }
+    </script>
+    <script type="module" crossorigin src="/admin/assets/index-DzbzhGLW.js"></script>
+    <link rel="modulepreload" crossorigin href="/admin/assets/jsx-runtime-Wy9s6hX0.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/dist-BCcWsGse.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/createLucideIcon-BPLAG9Di.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/api-hPhcr7El.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/useRouter-DAYosDT2.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/link-BVFzc2ur.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/with-selector-C6R9iwYH.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/useSelector-CRp297Ln.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/useMatch-CjDvqShd.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/useNavigate-bLwf1E37.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/lazyRouteComponent-Cl32lupB.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/dist-CP2SBPqM.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/dist-fBo8Df0l.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/dist-Bjs9Turn.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/es2015-Cvok8fBl.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/dist-DzfaV1CE.js">
+    <link rel="modulepreload" crossorigin href="/admin/assets/dist-BZTs_UeG.js">
+    <link rel="stylesheet" crossorigin href="/admin/assets/index-BiiHeJgm.css">
+  <link rel="manifest" href="/admin/manifest.webmanifest"></head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

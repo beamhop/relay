@@ -1,0 +1,1 @@
+import{a as e,n as t}from"./jsx-runtime-Wy9s6hX0.js";var n=e(t(),1);function r(){let e=n.useRef(!1);return n.useCallback(async t=>{if(!e.current){e.current=!0;try{return await t()}finally{e.current=!1}}},[])}export{r as t};

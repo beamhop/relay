@@ -1,0 +1,1 @@
+import{W as e}from"./index-DzbzhGLW.js";var t=e;export{t as errorComponent};

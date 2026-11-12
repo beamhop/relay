@@ -1,0 +1,29 @@
+{
+  "name": "beamhop",
+  "version": "0.1.0",
+  "description": "Nostr relay + Blossom media server + PWA admin panel + plugins",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "beamhop": "./cli.js"
+  },
+  "main": "./cli.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "postgres": "^3.4.9"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.35.5"
+  },
+  "keywords": [
+    "nostr",
+    "relay",
+    "blossom",
+    "nip-01",
+    "nip-11",
+    "nip-86"
+  ]
+}
