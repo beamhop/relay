@@ -39,6 +39,13 @@ test.describe("content filter editor", () => {
     await expect(page.getByText(`#t: ${id}`)).toBeVisible();
   });
 
+  test("regression: a kind still being typed (no Enter) is included by a single Apply click", async ({ page }) => {
+    await page.goto("content");
+    await page.getByPlaceholder("1, 7, 30023…").fill("7");
+    await page.getByRole("button", { name: "Apply filter" }).click();
+    await expect.poll(() => urlFilters(page)).toEqual({ kinds: [7] });
+  });
+
   test("invalid builder input is refused and not added", async ({ page }) => {
     await page.goto("content");
     const kinds = page.getByPlaceholder("1, 7, 30023…");

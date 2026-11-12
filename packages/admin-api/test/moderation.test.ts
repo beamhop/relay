@@ -85,6 +85,34 @@ describe("IP rule changes", () => {
   });
 });
 
+describe("IP rule spellings", () => {
+  test("/32 and /128 rules are stored as the bare address, and either spelling removes them", async () => {
+    const h = await createHarness();
+    await h.asKey(h.owner, "/ip-rules", { method: "POST", body: { cidr: "198.51.100.9/32", action: "block" } });
+    await h.asKey(h.owner, "/ip-rules", { method: "POST", body: { cidr: "2001:DB8::1/128", action: "block" } });
+    expect((await h.stores.ipRules.list()).map((r) => r.cidr).sort()).toEqual(["198.51.100.9", "2001:db8::1"]);
+    expect(await (await rpc(h, h.owner, { method: "unblockip", params: ["198.51.100.9/32"] })).json()).toEqual({ result: true });
+    expect((await h.asKey(h.owner, `/ip-rules/${encodeURIComponent("2001:db8::1/128")}`, { method: "DELETE" })).status).toBe(200);
+    expect(await h.stores.ipRules.list()).toEqual([]);
+  });
+
+  test("host bits below the prefix are cleared", async () => {
+    const h = await createHarness();
+    await h.asKey(h.owner, "/ip-rules", { method: "POST", body: { cidr: "10.1.2.3/8", action: "block" } });
+    await h.asKey(h.owner, "/ip-rules", { method: "POST", body: { cidr: "2001:db8:abcd:1234::5/48", action: "block" } });
+    expect((await h.stores.ipRules.list()).map((r) => r.cidr).sort()).toEqual(["10.0.0.0/8", "2001:db8:abcd::/48"]);
+  });
+
+  test("a rule for an address that already has one replaces it, whatever the old spelling, and the audit says so", async () => {
+    const h = await createHarness();
+    // a rule stored before canonicalization dropped the full-width prefix
+    await h.stores.ipRules.add({ cidr: "203.0.113.7/32", action: "block", reason: "old" });
+    expect((await h.asKey(h.owner, "/ip-rules", { method: "POST", body: { cidr: "203.0.113.7", action: "allow", reason: "new" } })).status).toBe(201);
+    expect((await h.stores.ipRules.list()).map((r) => [r.cidr, r.action])).toEqual([["203.0.113.7", "allow"]]);
+    expect(h.audit.entries.find((e) => e.action === "ip.add")?.details).toMatchObject({ replaced: { cidr: "203.0.113.7/32", action: "block" } });
+  });
+});
+
 describe("users bulk", () => {
   test("delete-events emits event.deleted and follows the event-delete ranks", async () => {
     const h = await createHarness();

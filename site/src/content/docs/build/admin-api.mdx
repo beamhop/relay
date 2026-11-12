@@ -174,7 +174,7 @@ Paths are relative to `/admin/api`.
 | `GET /settings` · `PATCH /settings` | `settings.view` · `settings.edit` | Runtime settings; `PATCH` takes a deep partial. |
 | `GET /plugins` | `plugins.view` | |
 | `POST /plugins/:name/enable` · `/disable` | `plugins.manage` | See [Enabling and disabling](/relay/build/plugin-lifecycle/). |
-| `GET /plugins/:name/settings` · `PATCH` | `plugins.view` · `plugins.manage` | See [Settings](/relay/build/plugin-settings/). |
+| `GET /plugins/:name/settings` · `PATCH` | `plugins.view` · `plugins.manage` | `PATCH {values}` merges into the stored settings: top-level fields left out keep their values. See [Settings](/relay/build/plugin-settings/). |
 | `ANY /plugins/x/:name/*` | `plugins.use` | [Plugin admin routes](/relay/build/plugin-routes/#admin-routes). |
 | `GET /audit?actor&action&target&before&limit` | `audit.view` | Audit log; `before` is an entry id cursor. |
 

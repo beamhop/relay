@@ -43,6 +43,42 @@ test.describe("IP rules", () => {
     }
   });
 
+  test("regression: after adding an allow rule, the next rule starts as a block", async ({ page }) => {
+    const first = randIp();
+    const second = randIp();
+    created.push(first, second);
+    const dialog = await openAdd(page);
+    await dialog.getByLabel("IP or CIDR").fill(first);
+    await dialog.getByRole("radio", { name: "Allow" }).click();
+    await dialog.getByRole("button", { name: "Add rule" }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.getByRole("button", { name: "Add rule" }).click();
+    await expect(dialog.getByRole("radio", { name: "Block" })).toHaveAttribute("data-state", "on");
+    await dialog.getByLabel("IP or CIDR").fill(second);
+    await dialog.getByRole("button", { name: "Add rule" }).click();
+    await expect(dialog).toHaveCount(0);
+    const stored = (await apiOk<{ items: IpRule[] }>("GET", "/ip-rules")).items;
+    expect(stored.find((r) => r.cidr === second)?.action).toBe("block");
+  });
+
+  test("adding a rule for an address that already has one warns and asks before replacing it", async ({ page }) => {
+    const ip = await addRule(uid("keep"), "block");
+    const dialog = await openAdd(page);
+    await dialog.getByLabel("IP or CIDR").fill(`${ip}/32`);
+    await expect(dialog.getByText(`${ip} already has a block rule`)).toBeVisible();
+    await dialog.getByRole("radio", { name: "Allow" }).click();
+    await dialog.getByRole("button", { name: "Add rule" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText(`Replace the rule for ${ip}?`);
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    expect((await apiOk<{ items: IpRule[] }>("GET", "/ip-rules")).items.find((r) => r.cidr === ip)?.action).toBe("block");
+    await dialog.getByRole("button", { name: "Add rule" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Replace rule" }).click();
+    await expect(dialog).toHaveCount(0);
+    const rules = (await apiOk<{ items: IpRule[] }>("GET", "/ip-rules")).items.filter((r) => r.cidr === ip || r.cidr === `${ip}/32`);
+    expect(rules.map((r) => [r.cidr, r.action])).toEqual([[ip, "allow"]]);
+  });
+
   test("add a block rule with a reason", async ({ page }) => {
     const ip = randIp();
     const reason = uid("bot");

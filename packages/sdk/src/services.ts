@@ -219,6 +219,7 @@ export interface PluginManager {
   enable(name: string, actor: string): Promise<void>;
   disable(name: string, actor: string): Promise<void>;
   getSettings(name: string): Promise<Record<string, unknown>>;
+  /** Merges `values` into the stored settings (top-level fields left out keep their values), validates, saves; returns the result. */
   updateSettings(name: string, values: Record<string, unknown>, actor: string): Promise<Record<string, unknown>>;
   /** Hono app with each plugin's admin routes under /:pluginName/*, mounted at /admin/api/plugins/x by admin-api (auth applied). */
   adminRoutes: Hono;

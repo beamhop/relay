@@ -33,6 +33,22 @@ const isIpv6 = (s: string) => {
 };
 const IP_RE = { test: (s: string) => V4.test(s) || (s.includes(":") && isIpv6(s)) };
 
+/** A rule's address as the server stores it, close enough to spot that a new rule would replace an existing one. */
+function ruleKey(cidr: string): string {
+  const [ip, prefix] = cidr.trim().toLowerCase().split("/");
+  const v6 = ip.includes(":");
+  let addr = ip;
+  if (v6 && !ip.includes(".")) {
+    try {
+      addr = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+    } catch {
+      /* left as is */
+    }
+  }
+  const bits = prefix === undefined ? undefined : Number(prefix);
+  return bits === undefined || bits === (v6 ? 128 : 32) ? addr : `${addr}/${bits}`;
+}
+
 const BIG = [[1e18, "quintillion"], [1e15, "quadrillion"], [1e12, "trillion"], [1e9, "billion"], [1e6, "million"]] as const;
 const approx = (n: number) => {
   for (const [v, word] of BIG) if (n >= v) return `about ${(n / v).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${word}`;
@@ -106,18 +122,23 @@ function IpRulesPage() {
           ))}
         </Card>
       )}
-      <AddRule open={adding} onOpenChange={setAdding} />
+      <AddRule open={adding} onOpenChange={setAdding} rules={data ?? []} />
     </div>
   );
 }
 
-function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+function AddRule({ open, onOpenChange, rules }: { open: boolean; onOpenChange: (o: boolean) => void; rules: IpRule[] }) {
   const { add } = useIpRuleActions();
   const confirm = useConfirm();
   const [cidr, setCidr] = React.useState("");
   const [action, setAction] = React.useState<"block" | "allow">("block");
   const [reason, setReason] = React.useState("");
+  // every new rule starts as a block: carrying an earlier "allow" over would silently exempt the next address instead
+  React.useEffect(() => {
+    if (open) setAction("block");
+  }, [open]);
   const valid = IP_RE.test(cidr.trim());
+  const existing = valid ? rules.find((r) => ruleKey(r.cidr) === ruleKey(cidr)) : undefined;
   /** asked when the API refuses an allow rule wider than an IPv4 /16 or an IPv6 /48 */
   const confirmBroad = async (range: string) =>
     !!(await confirm({
@@ -143,11 +164,22 @@ function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bool
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
+    if (
+      existing &&
+      !(await confirm({
+        title: `Replace the rule for ${existing.cidr}?`,
+        destructive: existing.action !== action,
+        confirmText: "Replace rule",
+        description: `${existing.cidr} already has ${existing.action === "block" ? "a block" : "an allow"} rule${existing.reason ? ` (“${existing.reason}”)` : ""}. Adding this ${action} rule replaces it.`,
+      }))
+    )
+      return;
     const rule = { cidr: cidr.trim(), action, reason };
     // null: the broad-range warning was cancelled, keep the form as it is
     if (!(await tryMutate(add, { ...rule, confirmBroad: () => confirmBroad(rule.cidr) }))?.data) return;
     setCidr("");
     setReason("");
+    setAction("block");
     onOpenChange(false);
   };
   return (
@@ -166,6 +198,11 @@ function AddRule({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bool
           <Label htmlFor="ip-cidr">IP or CIDR</Label>
           <Input id="ip-cidr" value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="203.0.113.0/24 or 2001:db8::/32" aria-invalid={!!cidr && !valid} autoCapitalize="off" />
           {!!cidr.trim() && !valid && <p className="text-xs text-destructive">Enter a valid IPv4/IPv6 address or CIDR range.</p>}
+          {existing && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              {existing.cidr} already has {existing.action === "block" ? "a block" : "an allow"} rule. Adding this one replaces it.
+            </p>
+          )}
         </div>
         <div className="space-y-2">
           <Label>Action</Label>

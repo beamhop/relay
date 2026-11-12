@@ -85,6 +85,23 @@ Pre-production hardening. The full test report, open issues and recommended prod
 
 ### Fixed
 
+- IP rules: the Add rule dialog now starts every rule as a block. Before, after adding one allow rule the next rule was
+  also saved as allow, which exempts it from per-IP limits and overrides every block.
+- IP rules: adding a rule for an address that already has one now warns in the dialog and asks before replacing it.
+  The audit entry records the rule that was replaced.
+- IP rules: `1.2.3.4/32` and `2001:db8::1/128` are stored as the bare address, and host bits below a prefix are
+  cleared (`10.1.2.3/8` → `10.0.0.0/8`). Before, a block added in one spelling could not be lifted with the other: NIP-86
+  `unblockip` reported success while the block stayed, and the REST delete returned 404. Adding a rule also removes a
+  differently spelled older rule for the same address.
+- Plugin settings: `PATCH /admin/api/plugins/:name/settings` now merges into the stored settings. Before, every
+  top-level field left out of the request went back to its default.
+- Plugin pages opened by URL without the "use plugins" permission now say so, instead of showing a page whose
+  requests fail. The hello example plugin stops polling once its route answers 401, 403 or 404.
+- Command palette: typing a command's name (for example "dark theme") and pressing Enter runs it. Before, Enter ran
+  "Search users for …".
+- Content filter: Apply filter now includes a kind, author or tag value that is still being typed, and works on the
+  first click. Before, the first click could be lost.
+
 - Admin: Live → Connections showed nonsense connection durations (such as "-20739833d"); the connection start time is
   in milliseconds and is now read as such.
 - The landing page footer, CLI help and NIP-11 `software` field now point to the real repository,

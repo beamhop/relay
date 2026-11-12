@@ -90,6 +90,13 @@ describe("plugin manager", () => {
     expect(stores.auditEntries.some((e) => e.action === "plugin.settings")).toBe(false);
   });
 
+  test("a settings update is a patch: fields left out keep their stored values", async () => {
+    await pm.updateSettings("good", { word: "casino", limit: 7 }, "admin1");
+    expect(await pm.updateSettings("good", { word: "lottery" }, "admin1")).toEqual({ word: "lottery", limit: 7 });
+    expect(await pm.updateSettings("good", { limit: 5 }, "admin1")).toEqual({ word: "lottery", limit: 5 });
+    await pm.updateSettings("good", { word: "casino", limit: 3 }, "admin1");
+  });
+
   test("disable tears down and removes hooks/routes/jobs/listeners (hot)", async () => {
     await pm.disable("good", "admin1");
     expect(calls.teardown).toBe(1);

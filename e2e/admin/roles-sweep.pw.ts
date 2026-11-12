@@ -45,3 +45,23 @@ for (const role of ["viewer", "moderator", "admin"] as const) {
     }
   });
 }
+
+test("regression: a viewer opening a plugin page by URL is told why, and nothing polls the plugin's routes", async ({ browser, baseURL }) => {
+  const viewer = await makeAdmin("viewer");
+  const { context, page } = await freshPage(browser, baseURL!);
+  const pluginCalls: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/admin/api/plugins/hello/")) pluginCalls.push(r.url());
+  });
+  try {
+    await page.goto("login");
+    await signInWithKey(page, viewer.nsec);
+    await expect(page).not.toHaveURL(/\/login/);
+    await page.goto("p/hello/hello");
+    await expect(page.getByText("You can't use plugin pages")).toBeVisible();
+    await page.waitForTimeout(6000);
+    expect(pluginCalls).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});

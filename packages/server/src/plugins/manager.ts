@@ -615,7 +615,9 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
     async updateSettings(name, values, actor) {
       const e = must(name);
       if (!e.plugin) throw new PluginError(`plugin ${name} failed to load`, 409);
-      const parsed = parseSettings(e, values, true);
+      // a patch: top-level fields left out keep their stored values instead of falling back to defaults
+      const current = await loadSettings(e).catch(() => ({}) as Record<string, unknown>);
+      const parsed = parseSettings(e, { ...current, ...values }, true);
       await kv.set(KV_NS, `settings:${name}`, parsed);
       e.settingsValue = parsed;
       const failed = (err: unknown) => log.warn(`settings listener of ${name} failed`, { error: errMsg(err) });

@@ -94,12 +94,18 @@ export class ModerationService {
     return { user: await this.users.setStatus(pubkey, "active", actor), changed: true };
   }
 
-  /** Adds (or replaces) an IP rule; a block of a single address also disconnects it. */
-  async addIpRule(rule: Omit<IpRule, "createdAt">, actor: string): Promise<{ disconnected: number }> {
+  /**
+   * Adds (or replaces) an IP rule; a block of a single address also disconnects it. `replaced`: the rule it took the place
+   * of, in any spelling (rules stored before canonicalization covered `/32` and host bits may be spelled differently).
+   */
+  async addIpRule(rule: Omit<IpRule, "createdAt">, actor: string): Promise<{ disconnected: number; replaced?: IpRule }> {
+    const want = isValidCidr(rule.cidr) ? canonicalCidr(rule.cidr) : rule.cidr;
+    const same = (await this.deps.stores.ipRules.list()).filter((r) => r.cidr === rule.cidr || (isValidCidr(r.cidr) ? canonicalCidr(r.cidr) : r.cidr) === want);
+    for (const r of same) if (r.cidr !== rule.cidr) await this.deps.stores.ipRules.remove(r.cidr);
     await this.deps.stores.ipRules.add(rule);
     this.deps.bus.emit("ip.rules.changed", { actor });
     const disconnected = rule.action === "block" && !rule.cidr.includes("/") ? this.deps.relay.disconnect({ ip: rule.cidr }) : 0;
-    return { disconnected };
+    return same[0] ? { disconnected, replaced: same[0] } : { disconnected };
   }
 
   /** Removes an IP rule, given in any spelling of its address. False (and nothing emitted) when there was none. */

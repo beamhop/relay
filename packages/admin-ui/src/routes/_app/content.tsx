@@ -1,4 +1,5 @@
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { useInFlight } from "@/hooks/use-in-flight";
 import { usePagedItems, useSelection, useStableCallback } from "@/hooks/use-list-page";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
@@ -289,6 +290,8 @@ function ActiveFilterChips({ filters, onClear }: { filters: Filter[]; onClear: (
 function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Filter[]) => void }) {
   const [mode, setMode] = React.useState<"builder" | "json">(filters.length > 1 ? "json" : "builder");
   const [b, setB] = React.useState<Builder>(() => filterToBuilder(filters[0] ?? {}));
+  const bRef = React.useRef(b);
+  bRef.current = b;
   const [json, setJson] = React.useState(() => JSON.stringify(filters.length === 1 ? filters[0] : filters, null, 2));
   const [jsonErr, setJsonErr] = React.useState<string>();
   React.useEffect(() => {
@@ -301,7 +304,11 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (mode === "builder") return onApply([builderToFilter(b)]);
+    if (mode === "builder") {
+      // a value still being typed in a chips field is committed on blur: do that now, so Apply includes it
+      flushSync(() => (document.activeElement as HTMLElement | null)?.blur?.());
+      return onApply([builderToFilter(bRef.current)]);
+    }
     try {
       const v = JSON.parse(json || "{}");
       const arr = (Array.isArray(v) ? v : [v]) as Filter[];
@@ -437,7 +444,8 @@ function FilterEditor({ filters, onApply }: { filters: Filter[]; onApply: (f: Fi
         <Button type="button" variant="outline" onClick={() => { setB(EMPTY); setJson("{}"); onApply([{}]); }}>
           <RotateCcw /> Reset
         </Button>
-        <Button type="submit" className="flex-1">
+        {/* keeps focus in a chips field on press: its blur would add a chip and move this button out from under the click */}
+        <Button type="submit" className="flex-1" onMouseDown={(e) => e.preventDefault()}>
           Apply filter
         </Button>
       </div>

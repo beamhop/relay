@@ -104,8 +104,14 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
           </CommandGroup>
         )}
         <CommandSeparator />
+        <CommandGroup heading="Preferences">
+          <CommandItem value="light theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("light"))}><Sun /> Light theme</CommandItem>
+          <CommandItem value="dark theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("dark"))}><Moon /> Dark theme</CommandItem>
+          <CommandItem value="system theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("system"))}><Monitor /> System theme</CommandItem>
+          <CommandItem value="sign out logout" onSelect={() => run(doLogout)}><LogOut /> Sign out</CommandItem>
+        </CommandGroup>
         {!pubkey && !eventId && q.trim().length > 1 && can("users.view") && (
-          // forceMount + query-free values: always shown, but ranked below matching pages
+          // forceMount + query-free values: always shown, and last in the list, so Enter runs a matching page or command first
           <CommandGroup heading="Search" forceMount>
             <CommandItem forceMount value="zz-search-users" onSelect={() => run(() => navigate({ to: "/users", search: { search: q.trim() } }))}>
               <UserSearch /> Search users for “{q.trim()}”
@@ -117,12 +123,6 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
             )}
           </CommandGroup>
         )}
-        <CommandGroup heading="Preferences">
-          <CommandItem value="light theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("light"))}><Sun /> Light theme</CommandItem>
-          <CommandItem value="dark theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("dark"))}><Moon /> Dark theme</CommandItem>
-          <CommandItem value="system theme" keywords={["theme", "appearance"]} onSelect={() => run(() => setTheme("system"))}><Monitor /> System theme</CommandItem>
-          <CommandItem value="sign out logout" onSelect={() => run(doLogout)}><LogOut /> Sign out</CommandItem>
-        </CommandGroup>
       </CommandList>
     </CommandDialog>
   );

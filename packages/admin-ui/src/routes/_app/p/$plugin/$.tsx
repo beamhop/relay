@@ -1,10 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Puzzle } from "lucide-react";
+import { Lock, Puzzle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { PageSkeleton } from "@/components/page-skeleton";
 import { normalizePath, usePluginRegistry } from "@/plugins/registry";
+import { useCan, useMe } from "@/queries/auth";
 
 export const Route = createFileRoute("/_app/p/$plugin/$")({ component: PluginHostPage });
 
@@ -13,6 +14,19 @@ function PluginHostPage() {
   const reg = usePluginRegistry();
   const want = normalizePath(_splat ?? "");
   const page = reg.pages.find((p) => p.plugin === plugin && normalizePath(p.path) === want);
+  const can = useCan();
+  const me = useMe();
+
+  // plugin pages call the plugin's admin routes, which need plugins.use (the nav hides them without it)
+  if (me.data && !can("plugins.use")) {
+    return (
+      <EmptyState
+        icon={Lock}
+        title="You can't use plugin pages"
+        description={`Plugin pages need the “use plugins” permission, which the ${me.data.role} role doesn't have. Ask an owner or admin if you need it.`}
+      />
+    );
+  }
 
   if (!page) {
     if (!reg.loaded) return <PageSkeleton />;

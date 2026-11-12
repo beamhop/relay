@@ -106,3 +106,13 @@ test.describe("command palette lookups", () => {
     }
   });
 });
+
+test.describe("command palette commands", () => {
+  test("regression: typing a command's name and pressing Enter runs it, not a user search", async ({ page }) => {
+    await page.goto("./");
+    await (await openPalette(page)).fill("dark theme");
+    await page.keyboard.press("Enter");
+    await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+    await expect.poll(() => appHref(page)).not.toContain("/users");
+  });
+});

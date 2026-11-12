@@ -68,8 +68,14 @@ export function registerIpRoutes(app: AdminApp, ctx: ApiContext) {
         "broad_allow_rule",
       );
     }
-    const { disconnected } = await ctx.moderation.addIpRule(rule, principalOf(c).pubkey);
-    await ctx.audit(c, "ip.add", rule.cidr, { action: rule.action, reason: rule.reason, disconnected, ...(broad ? { confirmedBroad: true } : {}) });
+    const { disconnected, replaced } = await ctx.moderation.addIpRule(rule, principalOf(c).pubkey);
+    await ctx.audit(c, "ip.add", rule.cidr, {
+      action: rule.action,
+      reason: rule.reason,
+      disconnected,
+      ...(broad ? { confirmedBroad: true } : {}),
+      ...(replaced ? { replaced: { cidr: replaced.cidr, action: replaced.action, reason: replaced.reason } } : {}),
+    });
     const saved = (await ipRules.list()).find((r) => r.cidr === rule.cidr);
     return c.json(saved ?? { ...rule, createdAt: ctx.nowSec() }, 201);
   });

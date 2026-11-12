@@ -20,10 +20,16 @@ function useStats(api: Api) {
   const load = useCallback(async () => {
     const res = await api.fetch("/stats");
     if (res.ok) setStats(await res.json());
+    return res.status;
   }, []);
   useEffect(() => {
-    load();
-    const t = setInterval(load, 5000);
+    let t: ReturnType<typeof setInterval> | undefined;
+    const tick = async () => {
+      // 401/403/404: no access or the plugin is gone; asking again every 5 s won't change that
+      if ([401, 403, 404].includes(await load())) clearInterval(t);
+    };
+    tick();
+    t = setInterval(tick, 5000);
     return () => clearInterval(t);
   }, []);
   return { stats, load };
