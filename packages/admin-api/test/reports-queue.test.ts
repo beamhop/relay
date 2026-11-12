@@ -51,7 +51,7 @@ describe("report queue", () => {
     expect(await rpc(h, h.owner, { method: "allowevent", params: [spam.id] })).toEqual({ result: true });
     expect(h.audit.entries.find((e) => e.action === "event.allow")?.details).toMatchObject({ dismissedReports: 1 });
     expect((await list(h, "?status=open")).total).toBe(0);
-  });
+  }, 30_000); // seeds 5000 reports: about 2 s locally, over 5 s on CI runners
 
   test("filters, totals and paging run over the whole queue", async () => {
     const h = await createHarness();
