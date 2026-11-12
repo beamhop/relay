@@ -1,5 +1,5 @@
 import {
-  Activity, FileText, Flag, Image, Info, KeyRound, LayoutDashboard, Puzzle, ScrollText, Settings, Shield, ShieldBan, Ticket, Users, UsersRound,
+  Activity, Database, FileText, Flag, Image, Info, KeyRound, LayoutDashboard, Puzzle, ScrollText, Settings, Shield, ShieldBan, Ticket, Users, UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import type { Permission } from "@beamhop/sdk/admin-contract";
@@ -43,6 +43,7 @@ export const NAV: NavGroup[] = [
     label: "System",
     items: [
       { to: "/settings", label: "Settings", icon: Settings, perm: "settings.view", keywords: "config limits moderation" },
+      { to: "/database", label: "Database", icon: Database, perm: "settings.edit", keywords: "sqlite postgres switch storage migrate rollback" },
       { to: "/plugins", label: "Plugins", icon: Puzzle, perm: "plugins.view", keywords: "extensions" },
       { to: "/audit", label: "Audit log", icon: ScrollText, perm: "audit.view", keywords: "history actions" },
       { to: "/system", label: "System", icon: Info, keywords: "version runtime about" },

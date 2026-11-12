@@ -34,6 +34,7 @@ import { registerGroupRoutes } from "./routes/groups";
 import { registerPluginRoutes } from "./routes/plugins";
 import { registerAuditRoutes } from "./routes/audit";
 import { registerSystemRoutes } from "./routes/system";
+import { registerDatabaseRoutes } from "./routes/database";
 import { registerMetricsRoutes } from "./routes/metrics";
 import { registerStreamRoutes } from "./routes/stream";
 import { registerPushRoutes } from "./routes/push";
@@ -249,6 +250,7 @@ export async function createAdminApi(deps: AdminApiDeps, opts: AdminApiOptions =
     await ctx.bannedEvents.reload();
   }, "admin");
   registerSystemRoutes(app, ctx);
+  registerDatabaseRoutes(app, ctx, loginGuard);
   registerMetricsRoutes(app, ctx);
   const streams = registerStreamRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);

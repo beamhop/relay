@@ -8,6 +8,7 @@ import type { NostrEvent, Filter } from "./nostr";
 import type { AdminRole, AuditEntry, Invite, IpRule, UserRecord, UserStatus, RateLimitOverride } from "./stores";
 import type { RuntimeSettings, DeepPartial } from "./config";
 import type { BlobRecord, BlobStatus, ConnectionSummary, GeoPoint, GroupSummary, LiveSnapshot, PluginInfo } from "./services";
+import type { DatabaseStatus, DatabaseSwitchRequest } from "./db-switch";
 
 export interface ApiError { error: string; code?: string }
 export interface Paged<T> { items: T[]; total: number }
@@ -113,6 +114,27 @@ export interface SystemInfo {
   dbDialect: "sqlite" | "postgres"; nips: number[]; relayPubkey: string; publicUrl: string;
   blossomEnabled: boolean; geoipEnabled: boolean; otelEnabled: boolean; pushEnabled: boolean;
 }
+/**
+ * Database switching (SQLite ⇄ Postgres at runtime; types in db-switch.ts). Every route answers 501
+ * `db_switch_unavailable` when the server has no switcher.
+ * - GET /database → DatabaseStatusResponse (settings.edit)
+ * - POST /database/test {target} → DatabaseTestResult (owner)
+ * - POST /database/switch DatabaseSwitchBody → 202 DatabaseSwitchJobView (owner + fresh login, NIP-98 or `currentPassword`: 403 reauth_required)
+ * - GET /database/switch/:id → DatabaseSwitchJobView (settings.edit; poll it)
+ * - POST /database/switch/:id/cancel → {cancelled: boolean} (owner; only before writes pause)
+ * - DELETE /database/rollback/:id DatabaseRollbackDeleteBody → {ok: true} (owner + fresh login)
+ * A postgres target's `postgresUrl` may be "env": the URL from the environment / config (the prefill is redacted).
+ */
+export interface DatabaseStatusResponse extends DatabaseStatus {
+  /** suggested SQLite target: `beamhop.db` in the data directory, or a dated name when that one is taken */
+  defaultSqlitePath: string;
+  /** the caller may start a switch / delete rollback points (owner role) */
+  canSwitch: boolean;
+}
+export interface DatabaseSwitchBody extends DatabaseSwitchRequest { currentPassword?: string }
+export interface DatabaseRollbackDeleteBody { confirm: string; currentPassword?: string }
+export { WIPE_CONFIRM_PHRASE, DELETE_ROLLBACK_CONFIRM_PHRASE } from "./db-switch";
+export type { DatabaseStatus, DatabaseSwitchJobView, DatabaseSwitchPhase, DatabaseTarget, DatabaseTestResult, DatabaseSwitchRequest, TableProgress } from "./db-switch";
 /** GET /dashboard/snapshot → LiveSnapshot */
 export type DashboardSnapshot = LiveSnapshot;
 /** GET /metrics/series?name=&from=&to=&step= */
