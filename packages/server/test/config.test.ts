@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { nip19 } from "nostr-tools";
-import { loadConfig } from "../src/config";
+import type { DatabaseTarget } from "@beamhop/sdk";
+import { DATABASE_PINNED_WARNING, databaseEnvPinned, loadConfig } from "../src/config";
 
 const PK = "a".repeat(64);
 let dir: string;
@@ -100,5 +101,145 @@ describe("loadConfig", () => {
     expect(warnings[1]).toContain(`"server.trustProxies"`);
     expect(warnings[2]).toContain("BEAMHOP_PORTT");
     expect(loadConfig({ cwd: dir, env: {}, overrides: { blossom: { enabled: false } }, warn: () => {} }).warnings).toHaveLength(2);
+  });
+});
+
+describe("loadConfig: database state file", () => {
+  const PG = "postgres://u:p@pg:5432/beamhop";
+  const PG2 = "postgres://other@pg2/beamhop";
+  const writeState = (current: DatabaseTarget, path = join(dir, "data", "database.json")) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, current, rollbacks: [] }));
+  };
+  const writeConfig = (json: unknown, name = "beamhop.config.json") => writeFileSync(join(dir, name), JSON.stringify(json));
+  const quiet = { warn: () => {} };
+
+  test("databaseEnvPinned", () => {
+    expect(databaseEnvPinned({})).toBe(false);
+    expect(databaseEnvPinned({ BEAMHOP_DB_DRIVER: "  " })).toBe(false);
+    expect(databaseEnvPinned({ BEAMHOP_DB_DRIVER: "sqlite" })).toBe(true);
+    expect(databaseEnvPinned({ BEAMHOP_SQLITE_PATH: "/x.db" })).toBe(true);
+    expect(databaseEnvPinned({ BEAMHOP_DATABASE_URL: PG })).toBe(true);
+  });
+
+  test("precedence matrix: default < config < state < env < override", () => {
+    const d = loadConfig({ cwd: dir, env: {} });
+    expect(d.databaseSource).toBe("default");
+    expect(d.databaseState).toBeUndefined();
+    expect(d.config.database.stateFile).toBe(join(dir, "data/database.json"));
+
+    writeConfig({ database: { sqlitePath: "db/file.db" } });
+    const c = loadConfig({ cwd: dir, env: {} });
+    expect(c.databaseSource).toBe("config");
+    expect(c.config.database).toMatchObject({ driver: "sqlite", sqlitePath: join(dir, "db/file.db") });
+
+    writeState({ driver: "postgres", postgresUrl: PG });
+    const s = loadConfig({ cwd: dir, env: {} });
+    expect(s.databaseSource).toBe("state");
+    expect(s.databaseState?.current).toEqual({ driver: "postgres", postgresUrl: PG });
+    expect(s.config.database).toMatchObject({ driver: "postgres", postgresUrl: PG });
+    expect(s.warnings).toEqual([]);
+
+    const e = loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "sqlite" }, ...quiet });
+    expect(e.databaseSource).toBe("env");
+    expect(e.databaseState).toBeDefined();
+    expect(e.config.database).toMatchObject({ driver: "sqlite", sqlitePath: join(dir, "db/file.db") });
+
+    const o = loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "sqlite" }, overrides: { database: { driver: "postgres", postgresUrl: PG2 } }, ...quiet });
+    expect(o.databaseSource).toBe("override");
+    expect(o.config.database).toMatchObject({ driver: "postgres", postgresUrl: PG2 });
+  });
+
+  test("without a state file env / override sources are reported", () => {
+    expect(loadConfig({ cwd: dir, env: { BEAMHOP_SQLITE_PATH: "x.db" } }).databaseSource).toBe("env");
+    expect(loadConfig({ cwd: dir, env: {}, overrides: { database: { driver: "sqlite" } } }).databaseSource).toBe("override");
+    expect(loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "sqlite" } }).warnings).toEqual([]);
+  });
+
+  test("the state target replaces driver/sqlitePath/postgresUrl as a whole and keeps its absolute path", () => {
+    writeConfig({ database: { driver: "postgres", postgresUrl: PG, sqlitePath: "db/file.db" } });
+    writeState({ driver: "sqlite", sqlitePath: "/var/lib/beamhop/switched.db" });
+    const { config, databaseSource } = loadConfig({ cwd: dir, env: {} });
+    expect(databaseSource).toBe("state");
+    expect(config.database.driver).toBe("sqlite");
+    expect(config.database.sqlitePath).toBe("/var/lib/beamhop/switched.db");
+    expect(config.database.postgresUrl).toBeUndefined();
+
+    // a postgres state doesn't inherit the config file's sqlite path
+    writeState({ driver: "postgres", postgresUrl: PG2 });
+    const pg = loadConfig({ cwd: dir, env: {} }).config.database;
+    expect(pg).toMatchObject({ driver: "postgres", postgresUrl: PG2 });
+    expect(pg.sqlitePath).toBe(join(dir, "data/beamhop.db"));
+  });
+
+  test("env pins the database: BEAMHOP_DB_DRIVER, or a different BEAMHOP_DATABASE_URL, wins with a warning", () => {
+    writeState({ driver: "sqlite", sqlitePath: "/abs/state.db" });
+    const seen: string[] = [];
+    const driver = loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "postgres", BEAMHOP_DATABASE_URL: PG }, warn: (m) => seen.push(m) });
+    expect(driver.config.database).toMatchObject({ driver: "postgres", postgresUrl: PG });
+    expect(driver.warnings).toEqual([DATABASE_PINNED_WARNING]);
+    expect(seen).toEqual([DATABASE_PINNED_WARNING]);
+    expect(DATABASE_PINNED_WARNING).toBe("database pinned by environment; the database chosen in the admin panel (data/database.json) is ignored");
+
+    // a URL with a sqlite state → env wins (driver then comes from config/defaults, not the state file)
+    const url = loadConfig({ cwd: dir, env: { BEAMHOP_DATABASE_URL: PG }, ...quiet });
+    expect(url.databaseSource).toBe("env");
+    expect(url.warnings).toEqual([DATABASE_PINNED_WARNING]);
+    expect(url.config.database.sqlitePath).toBe(join(dir, "data/beamhop.db"));
+
+    // the same URL as the state file: no conflict
+    writeState({ driver: "postgres", postgresUrl: PG });
+    const same = loadConfig({ cwd: dir, env: { BEAMHOP_DATABASE_URL: PG }, ...quiet });
+    expect(same.databaseSource).toBe("state");
+    expect(same.warnings).toEqual([]);
+    const other = loadConfig({ cwd: dir, env: { BEAMHOP_DATABASE_URL: PG2 }, ...quiet });
+    expect(other.databaseSource).toBe("env");
+    expect(other.config.database.postgresUrl).toBe(PG2);
+
+    // BEAMHOP_SQLITE_PATH alone (set by the container image) doesn't override the state file
+    const path = loadConfig({ cwd: dir, env: { BEAMHOP_SQLITE_PATH: "/data/beamhop.db" }, ...quiet });
+    expect(path.databaseSource).toBe("state");
+    expect(path.config.database).toMatchObject({ driver: "postgres", postgresUrl: PG });
+    expect(path.warnings).toEqual([]);
+  });
+
+  test("CLI overrides of database fields pin the database too", () => {
+    writeState({ driver: "sqlite", sqlitePath: join(dir, "data/state.db") });
+    const drv = loadConfig({ cwd: dir, env: {}, overrides: { database: { driver: "sqlite" } }, ...quiet });
+    expect(drv.databaseSource).toBe("override");
+    expect(drv.warnings).toEqual([DATABASE_PINNED_WARNING]);
+    expect(drv.config.database.sqlitePath).toBe(join(dir, "data/beamhop.db"));
+
+    const path = loadConfig({ cwd: dir, env: {}, overrides: { database: { sqlitePath: "other.db" } }, ...quiet });
+    expect(path.databaseSource).toBe("override");
+    expect(path.config.database.sqlitePath).toBe(join(dir, "other.db"));
+
+    // the same path as the state file is not a conflict
+    const same = loadConfig({ cwd: dir, env: {}, overrides: { database: { sqlitePath: "data/state.db" } }, ...quiet });
+    expect(same.databaseSource).toBe("state");
+    expect(same.warnings).toEqual([]);
+  });
+
+  test("stateFile is resolved relative to the config file", () => {
+    mkdirSync(join(dir, "etc"));
+    writeConfig({ database: { stateFile: "state/db.json" } }, "etc/beamhop.json");
+    writeState({ driver: "postgres", postgresUrl: PG }, join(dir, "etc/state/db.json"));
+    const viaFile = loadConfig({ cwd: dir, env: {}, configPath: "etc/beamhop.json" });
+    expect(viaFile.config.database.stateFile).toBe(join(dir, "etc/state/db.json"));
+    expect(viaFile.databaseSource).toBe("state");
+
+    // default: ./data/database.json next to the config file
+    writeConfig({}, "etc/plain.json");
+    expect(loadConfig({ cwd: dir, env: {}, configPath: "etc/plain.json" }).config.database.stateFile).toBe(join(dir, "etc/data/database.json"));
+  });
+
+  test("a corrupt or invalid state file fails the boot with its path", () => {
+    const p = join(dir, "data", "database.json");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, "{");
+    expect(() => loadConfig({ cwd: dir, env: {} })).toThrow(p);
+    writeFileSync(p, JSON.stringify({ version: 1, current: { driver: "postgres" }, rollbacks: [] }));
+    expect(() => loadConfig({ cwd: dir, env: {} })).toThrow(p);
+    expect(() => loadConfig({ cwd: dir, env: {} })).toThrow(/postgresUrl/);
   });
 });
