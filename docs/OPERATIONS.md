@@ -168,9 +168,10 @@ no restart:
 4. The relay switches over and resumes writes. If the final copy runs over budget (15 s) or the check fails, writes
    resume on the old database and nothing changes.
 
-The choice is saved to `data/database.json` (`database.stateFile`, `0600`), which overrides the `database` section of
-the config file at the next start. `BEAMHOP_DB_DRIVER`, `BEAMHOP_SQLITE_PATH` and `BEAMHOP_DATABASE_URL` still take
-precedence: when one is set, the panel disables switching, because the next restart would undo it. The file holds the
+The choice is saved to `database.json` next to the SQLite file (`database.stateFile`, `0600`; `/data/database.json`
+in the container image), which overrides the `database` section of the config file at the next start.
+`BEAMHOP_DB_DRIVER` still takes precedence: when it is set, the panel disables switching, because the next restart
+would undo it. `BEAMHOP_SQLITE_PATH` and `BEAMHOP_DATABASE_URL` don't pin anything; the URL prefills the panel. The file holds the
 PostgreSQL URL including its password, so keep `data/` private.
 
 The old database is left untouched as a rollback point, marked with the date it was replaced, and listed in the panel

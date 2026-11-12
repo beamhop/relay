@@ -78,8 +78,8 @@ settings, admin accounts, Blossom metadata, groups, plugin data) while it keeps 
 seconds for the final changes, and switches over. Clients only see a short "try again" on writes. The old SQLite file
 is kept as a rollback point until you delete it in the panel. Switching back to SQLite works the same way.
 
-The choice is saved in `data/database.json` and used at the next start. If `BEAMHOP_DB_DRIVER` or
-`BEAMHOP_DATABASE_URL` is set in the environment, the panel can't switch, because those always win. Change them
+The choice is saved in `database.json` next to the SQLite file (`/data/database.json` in Docker) and used at the next
+start. If `BEAMHOP_DB_DRIVER` is set in the environment, the panel can't switch, because it always wins. Change it
 instead and use the offline copy below.
 
 ### Offline copy

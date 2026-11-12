@@ -41,8 +41,9 @@ Pre-production hardening. The full test report, open issues and recommended prod
   a rollback point until deleted in the panel. Owner only, with re-authentication. Single instance only. See
   [Switching databases](docs/OPERATIONS.md#switching-databases).
 - `beamhop db copy --to-driver sqlite|postgres --to <path|url> [--wipe]` copies a whole database offline.
-- `database.stateFile` (default `data/database.json`): the database chosen in the admin panel, which overrides the
-  config file at start. `BEAMHOP_DB_DRIVER` / `BEAMHOP_SQLITE_PATH` / `BEAMHOP_DATABASE_URL` still win.
+- `database.stateFile` (default: `database.json` next to the SQLite file): the database chosen in the admin panel,
+  which overrides the config file at start. `BEAMHOP_DB_DRIVER` still wins, and setting it disables switching.
+
 - Plugins: optional `onDatabaseSwapped()` hook, called after a runtime database switch.
 - `/health` reports `switching` (HTTP 200) while a database switch has writes paused.
 - Install: every push to `main` publishes the Node build to the `dist` branch, so `npx github:beamhop/relay#dist start`
@@ -66,6 +67,8 @@ Pre-production hardening. The full test report, open issues and recommended prod
 
 ### Changed
 
+- docker-compose no longer sets `BEAMHOP_DB_DRIVER` by default (it is still SQLite unless set), so the admin panel can
+  switch the database.
 - Admin: the event filter's quick-add chips no longer offer zaps (kind 9735).
 - Clients whose send buffer stays congested for 30 s are disconnected.
 - Repeated write/REQ failures (database down, disk full) are logged once per distinct error per 10 s, with a count of
