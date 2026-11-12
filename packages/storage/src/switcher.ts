@@ -282,7 +282,7 @@ export function createDatabaseSwitcher(deps: DatabaseSwitcherDeps): DatabaseSwit
 
   function blockedReason(others: DatabaseInstanceInfo[]): string | undefined {
     if (deps.envPinned)
-      return "The database is set by environment variables (BEAMHOP_DATABASE_DRIVER / BEAMHOP_DATABASE_URL). Remove them and restart to switch from the panel.";
+      return "The database driver is pinned by the BEAMHOP_DB_DRIVER environment variable. Remove it and restart to switch from the panel.";
     if (others.length)
       return `${others.length} other instance${others.length === 1 ? " is" : "s are"} running on this database. Switching only works with a single instance; scaled deployments switch through config and a restart.`;
     if (job && !TERMINAL.has(job.phase)) return "A database switch is already running.";

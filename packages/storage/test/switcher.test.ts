@@ -69,13 +69,20 @@ class FakeSwitchable implements SwitchableDb {
   get<T>(sql: string, p?: unknown[]) {
     return this.inner.get<T>(sql, p);
   }
+  /** like the real wrapper, writes made through it while paused are refused (the switcher must use raw dbs then) */
+  private gate() {
+    if (this.paused) throw new Error("write through the wrapper while paused");
+  }
   run(sql: string, p?: unknown[]) {
+    this.gate();
     return this.inner.run(sql, p);
   }
   exec(sql: string) {
+    this.gate();
     return this.inner.exec(sql);
   }
   tx<T>(fn: (db: Db) => Promise<T>) {
+    this.gate();
     return this.inner.tx(fn);
   }
   migrate() {
@@ -197,6 +204,8 @@ async function setup(o: {
     },
     instances: async () => o.instances ?? [{ id: "me", seenAt: 0, self: true }],
     audit: async (e) => {
+      // audit rows go through the wrapper: never while writes are paused
+      if (db.paused) throw new Error("audit while paused");
       audits.push(e);
     },
     onSwitched: (t) => switched.push(t),
@@ -271,7 +280,7 @@ describe("database switcher", () => {
     const s = await setup({ envPinned: true });
     await expect(s.sw.start({ target: PG_TARGET }, "owner")).rejects.toMatchObject({ code: "db_switch_refused" });
     expect(s.opened).toHaveLength(0);
-    expect((await s.sw.status()).blockedReason).toContain("environment variables");
+    expect((await s.sw.status()).blockedReason).toContain("BEAMHOP_DB_DRIVER");
   });
 
   test("another live instance: refused", async () => {
