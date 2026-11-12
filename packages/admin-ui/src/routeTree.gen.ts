@@ -16,6 +16,7 @@ import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as AppAdminsRouteImport } from './routes/_app/admins'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppContentRouteImport } from './routes/_app/content'
+import { Route as AppDatabaseRouteImport } from './routes/_app/database'
 import { Route as AppInvitesRouteImport } from './routes/_app/invites'
 import { Route as AppIpRulesRouteImport } from './routes/_app/ip-rules'
 import { Route as AppLiveRouteImport } from './routes/_app/live'
@@ -65,6 +66,11 @@ const AppAuditRoute = AppAuditRouteImport.update({
 const AppContentRoute = AppContentRouteImport.update({
   id: '/content',
   path: '/content',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDatabaseRoute = AppDatabaseRouteImport.update({
+  id: '/database',
+  path: '/database',
   getParentRoute: () => AppRoute,
 } as any)
 const AppInvitesRoute = AppInvitesRouteImport.update({
@@ -155,6 +161,7 @@ export interface FileRoutesByFullPath {
   '/admins': typeof AppAdminsRoute
   '/audit': typeof AppAuditRoute
   '/content': typeof AppContentRoute
+  '/database': typeof AppDatabaseRoute
   '/invites': typeof AppInvitesRoute
   '/ip-rules': typeof AppIpRulesRoute
   '/live': typeof AppLiveRoute
@@ -178,6 +185,7 @@ export interface FileRoutesByTo {
   '/admins': typeof AppAdminsRoute
   '/audit': typeof AppAuditRoute
   '/content': typeof AppContentRoute
+  '/database': typeof AppDatabaseRoute
   '/invites': typeof AppInvitesRoute
   '/ip-rules': typeof AppIpRulesRoute
   '/live': typeof AppLiveRoute
@@ -203,6 +211,7 @@ export interface FileRoutesById {
   '/_app/admins': typeof AppAdminsRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/content': typeof AppContentRoute
+  '/_app/database': typeof AppDatabaseRoute
   '/_app/invites': typeof AppInvitesRoute
   '/_app/ip-rules': typeof AppIpRulesRoute
   '/_app/live': typeof AppLiveRoute
@@ -230,6 +239,7 @@ export interface FileRouteTypes {
     | '/admins'
     | '/audit'
     | '/content'
+    | '/database'
     | '/invites'
     | '/ip-rules'
     | '/live'
@@ -253,6 +263,7 @@ export interface FileRouteTypes {
     | '/admins'
     | '/audit'
     | '/content'
+    | '/database'
     | '/invites'
     | '/ip-rules'
     | '/live'
@@ -277,6 +288,7 @@ export interface FileRouteTypes {
     | '/_app/admins'
     | '/_app/audit'
     | '/_app/content'
+    | '/_app/database'
     | '/_app/invites'
     | '/_app/ip-rules'
     | '/_app/live'
@@ -350,6 +362,13 @@ declare module '@tanstack/react-router' {
       path: '/content'
       fullPath: '/content'
       preLoaderRoute: typeof AppContentRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/database': {
+      id: '/_app/database'
+      path: '/database'
+      fullPath: '/database'
+      preLoaderRoute: typeof AppDatabaseRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/invites': {
@@ -486,6 +505,7 @@ interface AppRouteChildren {
   AppAdminsRoute: typeof AppAdminsRoute
   AppAuditRoute: typeof AppAuditRoute
   AppContentRoute: typeof AppContentRoute
+  AppDatabaseRoute: typeof AppDatabaseRoute
   AppInvitesRoute: typeof AppInvitesRoute
   AppIpRulesRoute: typeof AppIpRulesRoute
   AppLiveRoute: typeof AppLiveRoute
@@ -508,6 +528,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAdminsRoute: AppAdminsRoute,
   AppAuditRoute: AppAuditRoute,
   AppContentRoute: AppContentRoute,
+  AppDatabaseRoute: AppDatabaseRoute,
   AppInvitesRoute: AppInvitesRoute,
   AppIpRulesRoute: AppIpRulesRoute,
   AppLiveRoute: AppLiveRoute,
