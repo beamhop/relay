@@ -38,7 +38,7 @@ class FakeDb implements Db {
     return { changes: 1 };
   }
   async exec() {}
-  async tx<T>(fn: (db: Db) => Promise<T>) {
+  async tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
     return fn(this);
   }
   async migrate() {}
