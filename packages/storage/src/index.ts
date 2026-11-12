@@ -6,5 +6,5 @@ export { SqlEventStore, parseSearch, parseCoordinate, compareEvents } from "./ev
 export { SqlUserStore } from "./users";
 export { randomCode } from "./misc";
 export { SwappableDb, type SwappableDbOptions } from "./swappable";
-export { openDatabase, inspectDatabase, wipeDatabase, prepareSchema, DatabaseCopier, type TransferOptions, type DatabaseInspection, type VerifyReport } from "./transfer";
+export { openDatabase, inspectDatabase, wipeDatabase, prepareSchema, recordMigrations, DatabaseCopier, type TransferOptions, type DatabaseInspection, type VerifyReport } from "./transfer";
 export { createDatabaseSwitcher, type DatabaseSwitcherDeps } from "./switcher";
