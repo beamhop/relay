@@ -72,27 +72,33 @@ If PostgreSQL restarts, fails over or the network drops, beamhop keeps running: 
 
 ## Moving from SQLite to PostgreSQL
 
-`beamhop export` and `beamhop import` move **events** between any two databases. Users, roles, settings, admin accounts and media are not included, so plan to set those up again on the new database.
+The simplest way is from the admin panel, with no restart: **System → Database → Switch to PostgreSQL**. Paste the URL
+(it's prefilled when `BEAMHOP_DATABASE_URL` is set), test it, and start. beamhop copies everything (events, users,
+settings, admin accounts, Blossom metadata, groups, plugin data) while it keeps serving, pauses writes for a few
+seconds for the final changes, and switches over. Clients only see a short "try again" on writes. The old SQLite file
+is kept as a rollback point until you delete it in the panel. Switching back to SQLite works the same way.
+
+The choice is saved in `database.json` next to the SQLite file (`/data/database.json` in Docker) and used at the next
+start. If `BEAMHOP_DB_DRIVER` is set in the environment, the panel can't switch, because it always wins. Change it
+instead and use the offline copy below.
+
+### Offline copy
+
+With beamhop stopped, `beamhop db copy` copies the configured database into another one, whole:
 
 <Steps>
 
-1. Export from the SQLite relay:
+1. Copy into PostgreSQL (the target must be empty, or add `--wipe`):
 
    ```sh
-   beamhop export > events.jsonl
+   beamhop db copy --to-driver postgres --to postgres://…
    ```
 
-2. Import into PostgreSQL by pointing the same command at the new database:
-
-   ```sh
-   BEAMHOP_DB_DRIVER=postgres BEAMHOP_DATABASE_URL=postgres://… beamhop import < events.jsonl
-   ```
-
-   Events are checked as they're imported. `--skip-verify` skips signature checks if you trust the file.
-
-3. Switch beamhop's configuration to PostgreSQL and start it.
+2. Switch beamhop's configuration to PostgreSQL and start it.
 
 </Steps>
+
+`beamhop export` / `beamhop import` still move **events only** between any two relays.
 
 From a source checkout, use `bun run beamhop export` and so on. In Docker, see [running commands inside the container](/relay/deploy/docker/#running-commands-inside-the-container).
 

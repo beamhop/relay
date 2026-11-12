@@ -53,14 +53,7 @@ export async function createSettingsService(stores: Stores, bus: EventBus, logge
     await stores.kv.set(SETTINGS_NAMESPACE, SETTINGS_KEY, next);
     // persisted: everything that caches settings (word filters, limits, …) must follow now, whatever happens next
     current = next;
-    bus.emit("settings.changed", { settings: next, actor });
-    for (const fn of listeners) {
-      try {
-        fn(next);
-      } catch (err) {
-        log?.error("settings listener failed", { err: String(err) });
-      }
-    }
+    notify(next, actor);
     // best effort: a failing audit write must not turn an applied change into an error
     await stores.audit
       .record({
@@ -73,6 +66,27 @@ export async function createSettingsService(stores: Stores, bus: EventBus, logge
       .catch((err) => log?.error("recording settings update failed", { err: String(err), sections: changed }));
     return next;
   };
+
+  const notify = (next: RuntimeSettings, actor: string) => {
+    bus.emit("settings.changed", { settings: next, actor });
+    for (const fn of listeners) {
+      try {
+        fn(next);
+      } catch (err) {
+        log?.error("settings listener failed", { err: String(err) });
+      }
+    }
+  };
+
+  // after a database switch: the copy should hold the same settings, but the new database is authoritative now
+  stores.dbSwitch?.onSwapped(async () => {
+    const reloaded = await stores.kv.get<unknown>(SETTINGS_NAMESPACE, SETTINGS_KEY);
+    const { settings: next, dropped } = salvageSettings(reloaded ?? {});
+    if (dropped.length) log?.error("stored runtime settings had invalid fields after the database switch", { fields: dropped });
+    if (JSON.stringify(next) === JSON.stringify(current)) return;
+    current = next;
+    notify(next, "system");
+  }, "settings.reload");
 
   return {
     takeStartupAlert() {

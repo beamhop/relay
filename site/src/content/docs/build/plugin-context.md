@@ -18,6 +18,7 @@ interface BeamhopPlugin<S extends z.ZodType = z.ZodType> {
   migrations?: Migration[];
   ui?: string;                  // path to a prebuilt ESM bundle for the admin panel
   setup(ctx: PluginContext<z.infer<S>>): void | Promise<void>;
+  onDatabaseSwapped?(e: { from: "sqlite" | "postgres"; to: "sqlite" | "postgres" }): void | Promise<void>;
   teardown?(): void | Promise<void>;
 }
 ```
@@ -30,6 +31,7 @@ interface BeamhopPlugin<S extends z.ZodType = z.ZodType> {
 | `migrations` | See [Database migrations](/relay/build/plugin-migrations/). |
 | `ui` | Absolute, or relative to the plugin package root. See [Admin UI extensions](/relay/build/plugin-admin-ui/). |
 | `setup` | Runs when the plugin is enabled. Must finish within **30 s**, or the plugin is marked `error` and everything it registered is removed. |
+| `onDatabaseSwapped` | Runs after an owner switched the database at runtime, while writes are still paused. `ctx.db` already points at the new database: drop anything you cached from the old one. Given **10 s**; a failure is logged and doesn't stop the switch. |
 | `teardown` | Runs on disable and at shutdown. Given **5 s**. |
 
 If `setup()` throws, the plugin's status becomes `error`, the message is shown in the panel, and the server keeps
