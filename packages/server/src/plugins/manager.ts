@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
 import type {
+  DbSwappedEvent,
   BeamhopConfig,
   BeamhopPlugin,
   BlossomService,
@@ -19,7 +20,7 @@ import type {
   Stores,
   StopContext,
 } from "@beamhop/sdk";
-import { settleBy } from "@beamhop/sdk";
+import { isDbSwitchingError, settleBy } from "@beamhop/sdk";
 import { discoverPlugins, importSpecifier, type DiscoveredPlugin } from "./discovery";
 import { fileBody } from "../static";
 
@@ -40,8 +41,11 @@ export interface PluginManagerDeps {
   /** also import every beamhop-plugin-* package found in node_modules (default false; config plugins.autoDiscoverNpm) */
   autoDiscoverNpm?: boolean;
   cwd?: string;
-  /** lifecycle budgets in ms (defaults: import 30 s, setup 30 s, teardown 5 s — also the wait for running jobs) */
-  timeouts?: { importMs?: number; setupMs?: number; teardownMs?: number };
+  /**
+   * lifecycle budgets in ms (defaults: import 30 s, setup 30 s, teardown 5 s — also the wait for running jobs —, and
+   * onDatabaseSwapped 10 s)
+   */
+  timeouts?: { importMs?: number; setupMs?: number; teardownMs?: number; databaseSwappedMs?: number };
 }
 
 type SettingsListener = (s: Record<string, unknown>) => void | Promise<void>;
@@ -197,6 +201,28 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
   const importMs = deps.timeouts?.importMs ?? 30_000;
   const setupMs = deps.timeouts?.setupMs ?? 30_000;
   const teardownMs = deps.timeouts?.teardownMs ?? 5_000;
+  const databaseSwappedMs = deps.timeouts?.databaseSwappedMs ?? 10_000;
+
+  /**
+   * The database was switched at runtime (writes still paused): every running plugin's onDatabaseSwapped runs (all at
+   * once), each within its budget. A throw or timeout is logged; it never aborts the switch. (Settings held in
+   * memory stay: the new database carries the same values.)
+   */
+  async function databaseSwapped(ev: DbSwappedEvent): Promise<void> {
+    const running = [...entries.values()].filter((e) => e.status === "running" && e.plugin);
+    await Promise.all(
+      running.map(async (e) => {
+        const fn = e.plugin!.onDatabaseSwapped;
+        if (!fn) return;
+        try {
+          await bounded(Promise.resolve().then(() => fn.call(e.plugin, ev)), databaseSwappedMs, `onDatabaseSwapped of ${e.name}`);
+        } catch (err) {
+          log.warn(`onDatabaseSwapped of ${e.name} failed; the switch goes on`, { error: errMsg(err) });
+        }
+      }),
+    );
+  }
+  let offSwapped: (() => void) | undefined;
 
   /** Runs state transitions of one plugin one at a time. */
   const serialize = (e: Entry, fn: () => Promise<void>): Promise<void> => {
@@ -371,7 +397,9 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
                 try {
                   await fn();
                 } catch (err) {
-                  plog.error(`job ${jobName} failed`, { error: errMsg(err) });
+                  // a write refused during a runtime database switch: the job's next run does it
+                  if (isDbSwitchingError(err)) plog.debug(`job ${jobName} deferred: database switch in progress`);
+                  else plog.error(`job ${jobName} failed`, { error: errMsg(err) });
                 }
               })().finally(() => {
                 act.running.delete(run);
@@ -506,6 +534,7 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
 
     async start() {
       stopping = false;
+      offSwapped ??= deps.stores.dbSwitch?.onSwapped(databaseSwapped, "plugins");
       await loadAll();
       // one at a time, in discovery order (hook order between equal priorities follows it); each setup is bounded
       for (const e of entries.values()) {
@@ -542,6 +571,8 @@ export function createPluginManager(deps: PluginManagerDeps): ServerPluginManage
 
     async stop() {
       stopping = true;
+      offSwapped?.();
+      offSwapped = undefined;
       const all = [...entries.values()].reverse();
       for (const e of all) cancelPending(e, "server stopping");
       for (const e of all) if (e.status === "running" || e.activation) await serialize(e, () => deactivate(e));
