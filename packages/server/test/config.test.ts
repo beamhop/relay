@@ -118,8 +118,9 @@ describe("loadConfig: database state file", () => {
     expect(databaseEnvPinned({})).toBe(false);
     expect(databaseEnvPinned({ BEAMHOP_DB_DRIVER: "  " })).toBe(false);
     expect(databaseEnvPinned({ BEAMHOP_DB_DRIVER: "sqlite" })).toBe(true);
-    expect(databaseEnvPinned({ BEAMHOP_SQLITE_PATH: "/x.db" })).toBe(true);
-    expect(databaseEnvPinned({ BEAMHOP_DATABASE_URL: PG })).toBe(true);
+    // locations alone don't pin: the image sets BEAMHOP_SQLITE_PATH, the URL also prefills the panel
+    expect(databaseEnvPinned({ BEAMHOP_SQLITE_PATH: "/x.db" })).toBe(false);
+    expect(databaseEnvPinned({ BEAMHOP_DATABASE_URL: PG })).toBe(false);
   });
 
   test("precedence matrix: default < config < state < env < override", () => {
@@ -132,8 +133,10 @@ describe("loadConfig: database state file", () => {
     const c = loadConfig({ cwd: dir, env: {} });
     expect(c.databaseSource).toBe("config");
     expect(c.config.database).toMatchObject({ driver: "sqlite", sqlitePath: join(dir, "db/file.db") });
+    // the state file defaults to database.json next to the sqlite file
+    expect(c.config.database.stateFile).toBe(join(dir, "db/database.json"));
 
-    writeState({ driver: "postgres", postgresUrl: PG });
+    writeState({ driver: "postgres", postgresUrl: PG }, join(dir, "db/database.json"));
     const s = loadConfig({ cwd: dir, env: {} });
     expect(s.databaseSource).toBe("state");
     expect(s.databaseState?.current).toEqual({ driver: "postgres", postgresUrl: PG });
@@ -158,7 +161,7 @@ describe("loadConfig: database state file", () => {
 
   test("the state target replaces driver/sqlitePath/postgresUrl as a whole and keeps its absolute path", () => {
     writeConfig({ database: { driver: "postgres", postgresUrl: PG, sqlitePath: "db/file.db" } });
-    writeState({ driver: "sqlite", sqlitePath: "/var/lib/beamhop/switched.db" });
+    writeState({ driver: "sqlite", sqlitePath: "/var/lib/beamhop/switched.db" }, join(dir, "db/database.json"));
     const { config, databaseSource } = loadConfig({ cwd: dir, env: {} });
     expect(databaseSource).toBe("state");
     expect(config.database.driver).toBe("sqlite");
@@ -166,13 +169,13 @@ describe("loadConfig: database state file", () => {
     expect(config.database.postgresUrl).toBeUndefined();
 
     // a postgres state doesn't inherit the config file's sqlite path
-    writeState({ driver: "postgres", postgresUrl: PG2 });
+    writeState({ driver: "postgres", postgresUrl: PG2 }, join(dir, "db/database.json"));
     const pg = loadConfig({ cwd: dir, env: {} }).config.database;
     expect(pg).toMatchObject({ driver: "postgres", postgresUrl: PG2 });
     expect(pg.sqlitePath).toBe(join(dir, "data/beamhop.db"));
   });
 
-  test("env pins the database: BEAMHOP_DB_DRIVER, or a different BEAMHOP_DATABASE_URL, wins with a warning", () => {
+  test("env pins the database only through BEAMHOP_DB_DRIVER, which wins with a warning", () => {
     writeState({ driver: "sqlite", sqlitePath: "/abs/state.db" });
     const seen: string[] = [];
     const driver = loadConfig({ cwd: dir, env: { BEAMHOP_DB_DRIVER: "postgres", BEAMHOP_DATABASE_URL: PG }, warn: (m) => seen.push(m) });
@@ -181,23 +184,20 @@ describe("loadConfig: database state file", () => {
     expect(seen).toEqual([DATABASE_PINNED_WARNING]);
     expect(DATABASE_PINNED_WARNING).toBe("database pinned by environment; the database chosen in the admin panel (data/database.json) is ignored");
 
-    // a URL with a sqlite state → env wins (driver then comes from config/defaults, not the state file)
+    // a URL alone doesn't override the state file (compose always passes one; it's the panel's prefill)
     const url = loadConfig({ cwd: dir, env: { BEAMHOP_DATABASE_URL: PG }, ...quiet });
-    expect(url.databaseSource).toBe("env");
-    expect(url.warnings).toEqual([DATABASE_PINNED_WARNING]);
-    expect(url.config.database.sqlitePath).toBe(join(dir, "data/beamhop.db"));
+    expect(url.databaseSource).toBe("state");
+    expect(url.warnings).toEqual([]);
+    expect(url.config.database).toMatchObject({ driver: "sqlite", sqlitePath: "/abs/state.db" });
 
-    // the same URL as the state file: no conflict
     writeState({ driver: "postgres", postgresUrl: PG });
-    const same = loadConfig({ cwd: dir, env: { BEAMHOP_DATABASE_URL: PG }, ...quiet });
-    expect(same.databaseSource).toBe("state");
-    expect(same.warnings).toEqual([]);
     const other = loadConfig({ cwd: dir, env: { BEAMHOP_DATABASE_URL: PG2 }, ...quiet });
-    expect(other.databaseSource).toBe("env");
-    expect(other.config.database.postgresUrl).toBe(PG2);
+    expect(other.databaseSource).toBe("state");
+    expect(other.config.database.postgresUrl).toBe(PG);
 
     // BEAMHOP_SQLITE_PATH alone (set by the container image) doesn't override the state file
-    const path = loadConfig({ cwd: dir, env: { BEAMHOP_SQLITE_PATH: "/data/beamhop.db" }, ...quiet });
+    // (the state file is looked up next to it)
+    const path = loadConfig({ cwd: dir, env: { BEAMHOP_SQLITE_PATH: join(dir, "data/beamhop.db") }, ...quiet });
     expect(path.databaseSource).toBe("state");
     expect(path.config.database).toMatchObject({ driver: "postgres", postgresUrl: PG });
     expect(path.warnings).toEqual([]);

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { nip19 } from "nostr-tools";
 import { ConfigSchema, type BeamhopConfig, type DatabaseStateFile } from "@beamhop/sdk";
 import { deepMerge } from "@beamhop/sdk/util";
@@ -33,15 +33,21 @@ export interface LoadedConfig {
 
 export type DatabaseSource = "default" | "config" | "state" | "env" | "override";
 
-/** Default location of the database state file, relative to the config file (or the working directory). */
+/**
+ * Default location of the database state file when the SQLite path is in memory. Otherwise it defaults to
+ * `database.json` next to the SQLite file (so in the container image it lands on the /data volume).
+ */
 export const DEFAULT_DATABASE_STATE_FILE = "./data/database.json";
 
-const DB_ENV = ["BEAMHOP_DB_DRIVER", "BEAMHOP_SQLITE_PATH", "BEAMHOP_DATABASE_URL"] as const;
 const DB_KEYS = ["driver", "sqlitePath", "postgresUrl"] as const;
 
-/** true when env vars choose the database (BEAMHOP_DB_DRIVER / BEAMHOP_SQLITE_PATH / BEAMHOP_DATABASE_URL; blank = unset). */
+/**
+ * true when env pins the database driver (BEAMHOP_DB_DRIVER; blank = unset), which overrides the database chosen in the
+ * admin panel. BEAMHOP_SQLITE_PATH / BEAMHOP_DATABASE_URL alone only supply locations: the container image sets the
+ * former by default, and the latter also prefills the panel's PostgreSQL URL.
+ */
 export function databaseEnvPinned(env: Record<string, string | undefined> = process.env): boolean {
-  return DB_ENV.some((k) => (env[k] ?? "").trim() !== "");
+  return (env.BEAMHOP_DB_DRIVER ?? "").trim() !== "";
 }
 
 export const DATABASE_PINNED_WARNING =
@@ -320,7 +326,9 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
   const envDb = dbOf(envJson);
   const ovDb = dbOf(overrides);
   const stateFileSetting = ovDb.stateFile ?? fileDb.stateFile;
-  const stateFile = abs(typeof stateFileSetting === "string" && stateFileSetting.trim() ? stateFileSetting : DEFAULT_DATABASE_STATE_FILE);
+  const sqliteSetting = [ovDb.sqlitePath, envDb.sqlitePath, fileDb.sqlitePath].find((p): p is string => typeof p === "string" && p.trim() !== "") ?? "./data/beamhop.db";
+  const defaultStateFile = sqliteSetting === ":memory:" || sqliteSetting.startsWith("file:") ? DEFAULT_DATABASE_STATE_FILE : join(dirname(abs(sqliteSetting)), "database.json");
+  const stateFile = abs(typeof stateFileSetting === "string" && stateFileSetting.trim() ? stateFileSetting : defaultStateFile);
   const databaseState = readDatabaseState(stateFile);
   let databaseSource: DatabaseSource = DB_KEYS.some((k) => has(ovDb, k))
     ? "override"
@@ -334,8 +342,8 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     const urlDiffers = (u: unknown) => u !== undefined && (cur.driver !== "postgres" || u !== cur.postgresUrl);
     const pathDiffers = (p: unknown) =>
       p !== undefined && (cur.driver !== "sqlite" || typeof p !== "string" || abs(p) !== abs(cur.sqlitePath ?? ""));
-    // BEAMHOP_SQLITE_PATH alone doesn't pin: the container image sets it by default
-    const envPins = has(envDb, "driver") || urlDiffers(envDb.postgresUrl);
+    // only the driver pins: BEAMHOP_SQLITE_PATH is set by the container image, BEAMHOP_DATABASE_URL is also the panel's prefill
+    const envPins = has(envDb, "driver");
     const ovPins = has(ovDb, "driver") || urlDiffers(ovDb.postgresUrl) || pathDiffers(ovDb.sqlitePath);
     if (envPins || ovPins) {
       databaseSource = ovPins ? "override" : "env";

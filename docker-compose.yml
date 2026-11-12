@@ -47,7 +47,9 @@ services:
       # connects directly. Note: published ports reached over IPv6 without ip6tables arrive via docker-proxy
       # from the bridge gateway (a private address) — bind to 127.0.0.1 as above when trusting a proxy.
       BEAMHOP_TRUSTED_PROXIES: ${BEAMHOP_TRUSTED_PROXIES:-}
-      BEAMHOP_DB_DRIVER: ${BEAMHOP_DB_DRIVER:-sqlite}
+      # unset: SQLite, or whatever was chosen in the admin panel (System → Database). Setting it pins the driver and
+      # disables switching in the panel.
+      BEAMHOP_DB_DRIVER: ${BEAMHOP_DB_DRIVER:-}
       BEAMHOP_DATABASE_URL: ${BEAMHOP_DATABASE_URL:-postgres://beamhop:${POSTGRES_PASSWORD:-beamhop}@postgres:5432/beamhop}
       BEAMHOP_BLOSSOM_DRIVER: ${BEAMHOP_BLOSSOM_DRIVER:-fs}
       BEAMHOP_S3_ENDPOINT: ${BEAMHOP_S3_ENDPOINT:-http://minio:9000}
