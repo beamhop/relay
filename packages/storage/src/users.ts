@@ -312,6 +312,15 @@ export class SqlUserStore implements UserStore {
     return this.flushing;
   }
 
+  /**
+   * After a database switch. The store keeps no database-derived cache (buffered activity is pending writes, kept for
+   * the new database); a flush backoff left over from the old database is reset so activity is written promptly.
+   */
+  rebind(): void {
+    this.failures = 0;
+    this.retryAt = 0;
+  }
+
   /** Stops the flush timer and writes pending data. */
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);

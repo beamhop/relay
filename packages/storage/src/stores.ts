@@ -72,33 +72,52 @@ class ManagedDb implements Db {
 export async function createStores(config: BeamhopConfig, logger: Logger, opts: CreateStoresOptions = {}): Promise<StorageStores> {
   const log = logger.child("storage");
   const swappable = new SwappableDb(opts.db ?? (await createDb(config, { ...opts.sqlite, logger: log.child("db") })), { logger: log.child("swap") });
+  // everything goes through the wrapper: migrations get recorded (a new database is given the same schema) and the
+  // stores follow a database switch
   const raw: SwappableDb = swappable;
-  let fts = raw.dialect === "postgres";
   if (raw.dialect === "sqlite") {
     const available = await sqliteHasFts5(raw);
     if (!available) log.warn("sqlite build lacks FTS5; NIP-50 search falls back to LIKE matching");
     await raw.migrate(NAMESPACE, storageMigrations(available));
-    fts = available && (await sqliteFtsReady(raw));
-    if (available && !fts) log.warn(`migration ${FTS_MIGRATION_ID} not applied; search falls back to LIKE`);
+    if (available && !(await sqliteFtsReady(raw))) log.warn(`migration ${FTS_MIGRATION_ID} not applied; search falls back to LIKE`);
   } else {
     await raw.migrate(NAMESPACE, storageMigrations(true));
   }
 
   const users = new SqlUserStore(raw, log.child("users"), opts.users);
   // A fresh database has no planner stats until something runs ANALYZE; refresh them periodically
-  // (cheap when nothing changed) instead of only at startup/shutdown.
-  const optimizer =
-    raw.dialect === "sqlite"
-      ? setInterval(() => void raw.exec("PRAGMA optimize=0x10002").catch((err) => log.debug("PRAGMA optimize failed", { err: String(err) })), SQLITE_OPTIMIZE_INTERVAL_MS)
-      : undefined;
-  (optimizer as { unref?: () => void } | undefined)?.unref?.();
+  // (cheap when nothing changed) instead of only at startup/shutdown. sqlite only: follows the current dialect.
+  let optimizer: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+  const syncOptimizer = () => {
+    if (raw.dialect === "sqlite" && !closed) {
+      if (optimizer) return;
+      optimizer = setInterval(
+        () => void raw.exec("PRAGMA optimize=0x10002").catch((err) => log.debug("PRAGMA optimize failed", { err: String(err) })),
+        SQLITE_OPTIMIZE_INTERVAL_MS,
+      );
+      (optimizer as { unref?: () => void }).unref?.();
+    } else if (optimizer) {
+      clearInterval(optimizer);
+      optimizer = undefined;
+    }
+  };
+  syncOptimizer();
   const db = new ManagedDb(raw, async () => {
-    clearInterval(optimizer);
+    closed = true;
+    syncOptimizer();
     await users.close();
     if (raw.dialect === "sqlite") await raw.exec("PRAGMA optimize").catch(() => {});
   });
-  const events = new SqlEventStore(raw, log.child("events"), { fts });
+  const events = new SqlEventStore(raw, log.child("events"), { fts: false });
+  await events.rebind();
   await events.init();
+
+  // rebind hooks: buffered writes reach the old database before the final copy; dialect-dependent state follows
+  swappable.onBeforeFinalCopy(() => users.flush(), "storage.users.flush");
+  swappable.onSwapped(() => events.rebind(), "storage.events");
+  swappable.onSwapped(() => users.rebind(), "storage.users");
+  swappable.onSwapped(() => syncOptimizer(), "storage.optimizer");
 
   return {
     db,
